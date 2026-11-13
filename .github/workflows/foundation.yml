@@ -1,0 +1,61 @@
+name: Shipping foundation
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: shipping
+        ports:
+          - 127.0.0.1:55436:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7.4-alpine@sha256:7b1753b4c5ad8458906c272a8132b8c15f5557b000379eb115fb239706a384b7
+        ports:
+          - 127.0.0.1:56379:6379
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.13.7"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.3"
+      - run: uv sync --project apps/api --python 3.12 --locked
+      - run: uv run --project apps/api ruff check apps/api
+      - run: uv run --project apps/api pytest apps/api/tests -q
+        env:
+          TEST_DATABASE_URL: postgresql+psycopg://postgres@127.0.0.1:55436/shipping
+          TEST_REDIS_URL: redis://127.0.0.1:56379/0
+      - name: Install browser and check frontend
+        working-directory: apps/web
+        run: |
+          corepack pnpm install --frozen-lockfile
+          corepack pnpm lint
+          corepack pnpm exec playwright install --with-deps chromium
+      - name: Build Compose stack and test browser workflow
+        env:
+          SHIPPING_E2E_EMAIL: e2e@example.com
+        run: |
+          ./scripts/init-dev-env.sh
+          docker compose -f compose.dev.yml up -d --build --wait
+          export SHIPPING_E2E_PASSWORD="$(openssl rand -hex 24)"
+          echo "::add-mask::$SHIPPING_E2E_PASSWORD"
+          printf '%s\n%s\n' "$SHIPPING_E2E_PASSWORD" "$SHIPPING_E2E_PASSWORD" |
+            docker compose -f compose.dev.yml exec -T api python -m shipping_ai.core.cli create-staff "$SHIPPING_E2E_EMAIL"
+          (cd apps/web && corepack pnpm test:e2e)
+      - name: Compose status
+        if: always()
+        run: |
+          if test -f .env; then docker compose -f compose.dev.yml ps -a; fi

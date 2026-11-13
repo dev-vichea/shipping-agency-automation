@@ -1,0 +1,50 @@
+# Git
+.git
+.gitignore
+
+# Virtual environment & caches
+.venv
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Packaging & builds
+dist/
+build/
+*.spec
+build_mac.sh
+build_windows.bat
+
+# IDE and agent metadata
+.claude/
+.agents/
+.idea/
+.vscode/
+
+# Temporary / testing
+scratch/
+tests/
+
+
+# Keep private files and the new application out of the legacy build context
+.env
+.env.*
+apps/
+reference/
+examples/
+private/
+data/
+*.sqlite*
+*.pdf
+*.xls
+*.xlsx
+*.xlsm
+*.xlsb
+services/templates/

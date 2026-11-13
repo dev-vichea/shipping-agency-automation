@@ -1,0 +1,104 @@
+name: shipping-agency-dev
+
+x-api: &api
+  build:
+    context: ./apps/api
+  environment: &api-env
+    SHIPPING_ENVIRONMENT: development
+    SHIPPING_DATABASE_URL: postgresql+psycopg://shipping:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (random hex)}@postgres:5432/shipping
+    SHIPPING_REDIS_URL: redis://redis:6379/0
+    SHIPPING_WEB_ORIGIN: ${SHIPPING_WEB_ORIGIN:-http://localhost:3000}
+    SHIPPING_SESSION_SECURE: "false"
+    SHIPPING_STORAGE_DIR: /var/lib/shipping/documents
+    SHIPPING_OLLAMA_ENABLED: ${SHIPPING_OLLAMA_ENABLED:-false}
+    SHIPPING_OLLAMA_URL: ${SHIPPING_OLLAMA_URL:-http://host.docker.internal:11434}
+    SHIPPING_OLLAMA_MODEL: ${SHIPPING_OLLAMA_MODEL:-qwen3.5:4b-q4_K_M}
+    SHIPPING_OLLAMA_CONTEXT: ${SHIPPING_OLLAMA_CONTEXT:-4096}
+    SHIPPING_OLLAMA_MAX_CONCURRENCY: ${SHIPPING_OLLAMA_MAX_CONCURRENCY:-1}
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:3540c0362c809df084ffac0ae69fe794515f9de92692f02178bcdce0ef0302ac
+    environment:
+      POSTGRES_USER: shipping
+      POSTGRES_DB: shipping
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (random hex)}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shipping -d shipping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  redis:
+    image: redis:7.4-alpine@sha256:7b1753b4c5ad8458906c272a8132b8c15f5557b000379eb115fb239706a384b7
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  migrate:
+    <<: *api
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+  api:
+    <<: *api
+    ports:
+      - "127.0.0.1:${SHIPPING_API_PORT:-8001}:8000"
+    volumes:
+      - documents:/var/lib/shipping/documents
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      interval: 4s
+      timeout: 6s
+      retries: 20
+  worker:
+    <<: *api
+    command: ["celery", "-A", "shipping_ai.automation.tasks:celery", "worker", "--pool=solo", "--concurrency=1", "--loglevel=WARNING"]
+    volumes:
+      - documents:/var/lib/shipping/documents:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+  scheduler:
+    <<: *api
+    command: ["celery", "-A", "shipping_ai.automation.tasks:celery", "beat", "--schedule=/tmp/shipping-beat", "--loglevel=WARNING"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+  web:
+    build:
+      context: ./apps/web
+      args:
+        SHIPPING_INTERNAL_API_URL: http://api:8000
+    ports:
+      - "127.0.0.1:${SHIPPING_WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  postgres-data:
+  redis-data:
+  documents:
