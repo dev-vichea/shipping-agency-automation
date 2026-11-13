@@ -233,6 +233,8 @@ def archive_arrival(db: DB, user: User, arrival: Arrival, files: dict[str, Store
 
     previous = case.state
     case.state = "queued"
+    case.analysis_revision += 1
+    case.detected_reference = None
     case.review_reason = None
     db.add_all(
         [
@@ -253,6 +255,7 @@ def archive_arrival(db: DB, user: User, arrival: Arrival, files: dict[str, Store
     run = AutomationRun(
         event_key=f"receipt:{message_id}",
         stage="receipt",
+        input_revision=case.analysis_revision,
         message_id=message_id,
         intake_case_id=case.id,
     )

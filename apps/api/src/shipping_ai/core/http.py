@@ -16,7 +16,7 @@ class PrivateAPI:
             await self.app(scope, receive, send)
             return
 
-        upload = scope["path"] == "/api/v1/intakes/simulate"
+        upload = scope["path"] in {"/api/v1/intakes/simulate", "/api/v1/cdc/versions"}
         cfg = settings()
         limit = cfg.max_file_bytes * cfg.max_files + 128 * 1024 if upload else 64 * 1024
         consumed = 0

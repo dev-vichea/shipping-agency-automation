@@ -46,9 +46,9 @@ test("staff archives originals, verifies the worker and saves an import draft", 
     return [record.state, record.detected_reference, record.import_id];
   }).toEqual(["needs_review", null, null]);
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Needs review", { exact: true })).toBeVisible();
+  await expect(page.getByText("Needs review", { exact: true }).first()).toBeVisible();
 
-  await page.getByLabel("Company").fill("Synthetic Shipping Co");
+  await page.getByLabel("Company", { exact: true }).fill("Synthetic Shipping Co");
   await page.getByLabel("Invoice number").fill(invoice);
   await page.getByLabel("Supplier").fill("Synthetic Supplier");
   await page.getByRole("button", { name: "Save import draft" }).click();

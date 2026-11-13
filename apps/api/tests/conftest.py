@@ -35,7 +35,7 @@ def integration_database(tmp_path_factory):
         env.setenv("SHIPPING_WEB_ORIGIN", ORIGIN)
         env.setenv("SHIPPING_ENVIRONMENT", "test")
         env.setenv("SHIPPING_SESSION_SECURE", "false")
-        env.setenv("SHIPPING_MAX_FILE_BYTES", "2048")
+        env.setenv("SHIPPING_MAX_FILE_BYTES", "8192")
         env.setenv("SHIPPING_STORAGE_DIR", str(tmp_path_factory.mktemp("originals")))
         env.setenv("SHIPPING_OLLAMA_ENABLED", "false")
         from shipping_ai.core.config import settings

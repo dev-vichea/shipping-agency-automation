@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     max_files: int = Field(default=5, ge=1, le=5)
     ollama_enabled: bool = False
     ollama_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:11434")
-    ollama_model: str = "qwen3.5:4b-q4_K_M"
+    ollama_model: str = Field(default="qwen3.5:4b-q4_K_M", min_length=1, max_length=120)
     ollama_context: int = Field(default=4096, ge=1024, le=4096)
     ollama_max_concurrency: int = Field(default=1, ge=1, le=1)
 
@@ -33,6 +33,19 @@ class Settings(BaseSettings):
             raise ValueError("web_origin must contain only scheme, host and optional port")
         if self.environment == "production" and (not self.session_secure or url.scheme != "https"):
             raise ValueError("Production sessions require HTTPS and secure cookies")
+        if self.ollama_enabled:
+            endpoint = self.ollama_url
+            if (
+                endpoint.host not in {"localhost", "127.0.0.1", "[::1]", "host.docker.internal"}
+                or endpoint.username
+                or endpoint.password
+                or endpoint.query
+                or endpoint.fragment
+                or endpoint.path not in (None, "/")
+            ):
+                raise ValueError("Ollama generation requires a local or Docker host endpoint")
+            if self.ollama_model.endswith(("-cloud", ":cloud")):
+                raise ValueError("Ollama generation requires a locally installed model")
         return self
 
     @property

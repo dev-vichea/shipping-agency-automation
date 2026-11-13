@@ -145,12 +145,12 @@ def test_upload_bounds_and_session_revocation(staff):
 
     assert arrival(staff, body=b"<html>not a PDF").status_code == 415
     assert arrival(staff, name="fixture.xlsm").status_code == 415
-    assert arrival(staff, body=PDF + bytes(2048)).status_code == 413
-    assert staff.post(f"{API}/intakes/simulate", content=b"z" * (150 * 1024)).status_code == 413
+    assert arrival(staff, body=PDF + bytes(8192)).status_code == 413
+    assert staff.post(f"{API}/intakes/simulate", content=b"z" * (180 * 1024)).status_code == 413
 
     def chunks():
         yield b'--shipping-fixture\r\nContent-Disposition: form-data; name="files"; filename="fixture.pdf"\r\nContent-Type: application/pdf\r\n\r\n%PDF-'
-        yield b"a" * (150 * 1024)
+        yield b"a" * (180 * 1024)
         yield b"\r\n--shipping-fixture--\r\n"
 
     assert (
@@ -209,6 +209,7 @@ def test_worker_retries_and_respects_stale_lease(staff):
     with session_factory()() as db:
         run = db.get(AutomationRun, run_id)
         assert run.state == "succeeded" and run.trace_id == trace
+    drain.run()  # The successful receipt queues document analysis.
     assert staff.get(f"{API}/intakes/{data['case_id']}").json()["state"] == "needs_review"
 
     job = staff.post(f"{API}/automation/health-check")

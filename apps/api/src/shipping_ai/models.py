@@ -18,6 +18,7 @@ from sqlalchemy import (
     func,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .core.db import Base
@@ -56,6 +57,10 @@ class IntakeCase(Identified, Created, Base):
 
     state: Mapped[str] = mapped_column(String(24), server_default="queued")
     channel: Mapped[str] = mapped_column(String(24))
+    analysis_revision: Mapped[int] = mapped_column(Integer, server_default="0")
+    cdc_master_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("cdc_master_versions.id"), index=True
+    )
     detected_reference: Mapped[str | None] = mapped_column(String(160))
     review_reason: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
@@ -201,7 +206,7 @@ class ImportItem(Identified, Base):
 class AutomationRun(Identified, Created, Base):
     __tablename__ = "automation_runs"
     __table_args__ = (
-        CheckConstraint("stage IN ('receipt','health_check')", name="stage"),
+        CheckConstraint("stage IN ('receipt','health_check','analysis','ai')", name="stage"),
         CheckConstraint("state IN ('queued','running','succeeded','failed')", name="state"),
         CheckConstraint("attempt >= 0 AND retry_count >= 0", name="attempt"),
         Index("ix_automation_runs_recent", "created_at", "id"),
@@ -214,6 +219,7 @@ class AutomationRun(Identified, Created, Base):
     state: Mapped[str] = mapped_column(String(24), server_default="queued")
     intake_case_id: Mapped[UUID | None] = mapped_column(ForeignKey("intake_cases.id"), index=True)
     message_id: Mapped[UUID | None] = mapped_column(ForeignKey("incoming_messages.id"), index=True)
+    input_revision: Mapped[int | None] = mapped_column(Integer)
     trace_id: Mapped[UUID] = mapped_column(default=uuid4, unique=True)
     attempt: Mapped[int] = mapped_column(Integer, server_default="0")
     retry_count: Mapped[int] = mapped_column(Integer, server_default="0")
@@ -242,3 +248,65 @@ class ActivityEvent(Identified, Created, Base):
     event_type: Mapped[str] = mapped_column(String(48))
     before_state: Mapped[str | None] = mapped_column(String(24))
     after_state: Mapped[str | None] = mapped_column(String(24))
+
+
+class CdcMasterVersion(Identified, Created, Base):
+    __tablename__ = "cdc_master_versions"
+    __table_args__ = (
+        UniqueConstraint("company_key", "year", "approval_ref", "sha256", name="uq_cdc_version"),
+        CheckConstraint("year BETWEEN 2000 AND 2100", name="year"),
+    )
+
+    company: Mapped[str] = mapped_column(String(254))
+    company_key: Mapped[str] = mapped_column(String(254))
+    year: Mapped[int] = mapped_column(Integer)
+    approval_ref: Mapped[str] = mapped_column(String(160))
+    layout: Mapped[str] = mapped_column(String(40))
+    source_id: Mapped[UUID] = mapped_column(default=uuid4, unique=True)
+    original_filename: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    balance_as_of: Mapped[date | None] = mapped_column(Date)
+    verified_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    items: Mapped[list] = mapped_column(JSONB)
+
+
+class ReviewSnapshot(Identified, Created, Base):
+    __tablename__ = "review_snapshots"
+    __table_args__ = (
+        UniqueConstraint("intake_case_id", "revision", name="uq_case_review_revision"),
+        CheckConstraint("outcome IN ('PASS','WARNING','MISMATCH','NEEDS_REVIEW')", name="outcome"),
+        CheckConstraint(
+            "ai_state IN ('disabled','pending','ready','unavailable','invalid_output','not_needed')",
+            name="ai_state",
+        ),
+    )
+
+    intake_case_id: Mapped[UUID] = mapped_column(ForeignKey("intake_cases.id"))
+    revision: Mapped[int] = mapped_column(Integer)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("automation_runs.id"), unique=True)
+    cdc_master_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("cdc_master_versions.id"), index=True
+    )
+    rules_version: Mapped[str] = mapped_column(String(32))
+    outcome: Mapped[str] = mapped_column(String(24))
+    findings: Mapped[list] = mapped_column(JSONB)
+    candidates: Mapped[list] = mapped_column(JSONB)
+    ai_state: Mapped[str] = mapped_column(String(24))
+    ai_model: Mapped[str | None] = mapped_column(String(120))
+    ai_prompt_version: Mapped[str | None] = mapped_column(String(32))
+    ai_trace_id: Mapped[UUID | None] = mapped_column()
+    ai_suggestions: Mapped[list] = mapped_column(JSONB, default=list)
+
+
+class DocumentExtraction(Identified, Created, Base):
+    __tablename__ = "document_extractions"
+    __table_args__ = (
+        UniqueConstraint("snapshot_id", "document_id", "role", name="uq_snapshot_document_role"),
+    )
+
+    snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("review_snapshots.id"))
+    document_id: Mapped[UUID] = mapped_column(ForeignKey("documents.id"), index=True)
+    role: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24))
+    payload: Mapped[dict] = mapped_column(JSONB)

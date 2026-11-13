@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .ai.provider import ModelProvider, OllamaProvider, ProviderStatus
 from .automation.routes import router as automation_router
+from .cdc.routes import router as cdc_router
 from .core.auth import Staff
 from .core.auth import router as auth_router
 from .core.config import settings
@@ -15,6 +16,7 @@ from .core.http import PrivateAPI
 from .documents.routes import router as documents_router
 from .imports.routes import router as imports_router
 from .intakes.routes import router as intakes_router
+from .review.routes import router as review_router
 
 
 def create_app() -> FastAPI:
@@ -22,7 +24,7 @@ def create_app() -> FastAPI:
     dev = cfg.environment != "production"
     app = FastAPI(
         title="Shipping Agency Automation API",
-        version="0.1.0",
+        version="0.2.0",
         docs_url="/docs" if dev else None,
         redoc_url=None,
         openapi_url="/openapi.json" if dev else None,
@@ -35,6 +37,8 @@ def create_app() -> FastAPI:
         imports_router,
         documents_router,
         automation_router,
+        cdc_router,
+        review_router,
     ):
         api.include_router(router)
 
@@ -62,7 +66,7 @@ def create_app() -> FastAPI:
     def ready():
         try:
             with engine().connect() as connection:
-                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0001":
+                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0002":
                     return JSONResponse({"status": "unavailable"}, status_code=503)
             with Redis.from_url(str(cfg.redis_url), socket_timeout=2) as redis:
                 redis.ping()

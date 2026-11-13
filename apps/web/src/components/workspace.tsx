@@ -34,6 +34,11 @@ export function PageHeading({ title, description, action }: {
 
 export function Status({ value }: { value: string }) {
   const styles: Record<string, string> = {
+    PASS: "bg-teal-50 text-teal-800",
+    WARNING: "bg-amber-50 text-amber-900",
+    MISMATCH: "bg-rose-50 text-rose-800",
+    NEEDS_REVIEW: "bg-amber-50 text-amber-900",
+    uncertain: "bg-amber-50 text-amber-900",
     failed: "bg-rose-50 text-rose-800",
     needs_review: "bg-amber-50 text-amber-900",
     succeeded: "bg-teal-50 text-teal-800",

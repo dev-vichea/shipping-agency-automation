@@ -92,3 +92,88 @@ export type Provider = {
   context: number;
   max_concurrency: number;
 };
+
+export type Evidence = {
+  document_id: string;
+  sheet: string | null;
+  cell: string | null;
+  row: number | null;
+  page: number | null;
+  line: number | null;
+  raw: string | null;
+};
+
+export type ExtractedField = {
+  value: string | null;
+  unit: string | null;
+  currency: string | null;
+  status: "present" | "missing" | "uncertain";
+  evidence: Evidence[];
+};
+
+export type Extraction = {
+  document_id: string;
+  role: string;
+  status: string;
+  method: string;
+  sheet: string | null;
+  error: string | null;
+  fields: Record<string, ExtractedField>;
+  items: { row: number; fields: Record<string, ExtractedField> }[];
+  source_excerpt: Evidence[];
+};
+
+export type Finding = {
+  key: string;
+  group: string;
+  field: string;
+  outcome: "PASS" | "WARNING" | "MISMATCH" | "NEEDS_REVIEW";
+  explanation: string;
+  left: string | null;
+  right: string | null;
+  evidence: Evidence[];
+};
+
+export type MasterVersion = {
+  id: string;
+  source_id: string;
+  company: string;
+  year: number;
+  approval_ref: string;
+  layout: string;
+  original_filename: string;
+  balance_as_of: string | null;
+};
+
+export type ReviewAnalysis = {
+  revision: number;
+  analysis_revision: number | null;
+  state: "pending" | "available" | "failed";
+  run_id: string | null;
+  trace_id: string | null;
+  rules_version: string | null;
+  extracted_at: string | null;
+  outcome: Finding["outcome"] | null;
+  extractions: Extraction[];
+  findings: Finding[];
+  candidates: {
+    invoice_document_id: string;
+    invoice_row: number;
+    master_row: number;
+    description: string;
+    score: number;
+    evidence: Evidence;
+  }[];
+  selected_master: MasterVersion | null;
+  analyzed_master: MasterVersion | null;
+  ai_state: string | null;
+  ai_model: string | null;
+  ai_prompt_version: string | null;
+  ai_trace_id: string | null;
+  ai_suggestions: {
+    finding_key: string;
+    relationship: string;
+    explanation: string;
+    suggested_action: string;
+  }[];
+};

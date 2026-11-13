@@ -9,10 +9,17 @@ from sqlalchemy import and_, or_, select, text
 from shipping_ai.core.config import settings
 from shipping_ai.core.db import session_factory
 from shipping_ai.documents.storage import LocalStorage
-from shipping_ai.models import ActivityEvent, AutomationRun, Document, IntakeCase
+from shipping_ai.models import ActivityEvent, AutomationRun, Document, IntakeCase, ReviewSnapshot
+from shipping_ai.review.pipeline import (
+    ArchiveUnavailable,
+    advisory,
+    enqueue,
+    read_analysis,
+    save_analysis,
+)
 
 MAX_RETRIES = 3
-LEASE = timedelta(minutes=2)
+LEASE = timedelta(minutes=5)
 log = get_task_logger(__name__)
 celery = Celery("shipping_ai", broker=str(settings().redis_url))
 celery.conf.update(
@@ -40,6 +47,8 @@ class Claim:
     stage: str
     message_id: UUID | None
     trace_id: UUID
+    case_id: UUID | None
+    revision: int | None
     exhausted: bool
 
 
@@ -71,7 +80,16 @@ def claim() -> Claim | None:
         run.attempt += 1
         run.started_at = now
         run.lease_until = now + LEASE
-        return Claim(run.id, run.attempt, run.stage, run.message_id, run.trace_id, exhausted)
+        return Claim(
+            run.id,
+            run.attempt,
+            run.stage,
+            run.message_id,
+            run.trace_id,
+            run.intake_case_id,
+            run.input_revision,
+            exhausted,
+        )
 
 
 def verify_receipt(message_id: UUID | None) -> str | None:
@@ -93,46 +111,54 @@ def verify_receipt(message_id: UUID | None) -> str | None:
     return None
 
 
-def finish(job: Claim, error: str | None) -> None:
+def finish(job: Claim, error: str | None, result=None) -> None:
     now = datetime.now(UTC)
     with session_factory().begin() as db:
+        # Lock the case before its run, matching staff reprocess and version selection.
+        case = db.get(IntakeCase, job.case_id, with_for_update=True) if job.case_id else None
         run = db.get(AutomationRun, job.id, with_for_update=True)
         if not run or run.state != "running" or run.attempt != job.attempt:
-            return  # stale completion or delivery
+            return
+
+        current = case is not None and job.revision == case.analysis_revision
         run.error_code = error
         run.lease_until = None
-        if error and run.retry_count < MAX_RETRIES and not job.exhausted:
+        if error and (not case or current) and run.retry_count < MAX_RETRIES and not job.exhausted:
             run.retry_count += 1
             run.available_at = now + timedelta(seconds=5 * 2 ** (run.retry_count - 1))
             run.state = "queued"
+            if case and job.stage == "ai":
+                snapshot = db.scalar(
+                    select(ReviewSnapshot).filter_by(
+                        intake_case_id=case.id,
+                        revision=job.revision,
+                    )
+                )
+                if snapshot:
+                    snapshot.ai_state = result[0] if result else "unavailable"
             return
         run.ended_at = now
         run.state = "failed" if error else "succeeded"
 
-        case = (
-            db.get(IntakeCase, run.intake_case_id, with_for_update=True)
-            if run.intake_case_id
-            else None
-        )
         previous = case.state if case else None
-        if case:
-            db.flush()
-            states = set(
-                db.scalars(
-                    select(AutomationRun.state).where(AutomationRun.intake_case_id == case.id)
-                )
-            )
-            if states & {"queued", "running"}:
-                case.state = "queued"
-                case.review_reason = None
-            elif "failed" in states:
+        if current:
+            if error and job.stage != "ai":
                 case.state = "failed"
-                case.review_reason = "An attachment check failed. See Automation for details."
-            else:
-                case.state = "needs_review"
-                case.review_reason = (
-                    "Originals archived. Extraction and approval are not available yet."
+                case.review_reason = "Document processing failed. See Automation to retry."
+            elif job.stage == "receipt":
+                enqueue(db, case.id, case.analysis_revision)
+            elif job.stage == "analysis" and result is not None:
+                save_analysis(db, run, case, result)
+            elif job.stage == "ai":
+                snapshot = db.scalar(
+                    select(ReviewSnapshot).filter_by(
+                        intake_case_id=case.id,
+                        revision=job.revision,
+                    )
                 )
+                if snapshot:
+                    snapshot.ai_state, snapshot.ai_suggestions = result or ("unavailable", [])
+
         db.add(
             ActivityEvent(
                 actor_type="worker",
@@ -151,16 +177,25 @@ def drain() -> None:
     if not job:
         return
     error = None
+    result = None
     try:
         if job.exhausted:
             error = "lease_expired"
         elif job.stage == "receipt":
             error = verify_receipt(job.message_id)
+        elif job.stage == "analysis":
+            result = read_analysis(job.case_id, job.revision)
+        elif job.stage == "ai":
+            result = advisory(job.case_id, job.revision)
+            if result and result[0] != "ready":
+                error = f"ollama_{result[0]}"
         else:
             with session_factory()() as db:
                 db.execute(text("SELECT 1"))
+    except ArchiveUnavailable as exc:
+        error = str(exc)
     except Exception:
         error = "worker_dependency_error"
-    finish(job, error)
+    finish(job, error, result)
     if error:
         log.warning("automation trace=%s code=%s", job.trace_id, error)

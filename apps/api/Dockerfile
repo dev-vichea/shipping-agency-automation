@@ -3,12 +3,15 @@ FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb
 COPY --from=uv /uv /bin/uv
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PATH="/app/.venv/bin:$PATH" UV_LINK_MODE=copy
 WORKDIR /app
-COPY pyproject.toml uv.lock ./
+COPY apps/api/pyproject.toml apps/api/uv.lock ./
 RUN uv sync --locked --no-install-project --no-dev
-COPY src ./src
+COPY apps/api/src ./src
+COPY services/__init__.py services/extraction.py services/packing.py services/bill_extractor.py services/matching.py ./services/
 RUN uv sync --locked --no-dev --no-editable
-COPY alembic.ini ./
-COPY alembic ./alembic
+COPY apps/api/alembic.ini ./
+COPY apps/api/alembic ./alembic
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --system shipping && useradd --system --gid shipping shipping \
     && install -d -o shipping -g shipping -m 0700 /var/lib/shipping/documents \
     && touch /var/lib/shipping/documents/.volume \

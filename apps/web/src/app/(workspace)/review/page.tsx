@@ -1,17 +1,29 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PageHeading, Section } from "@/components/workspace";
+import { Empty, PageHeading, Pagination, Section, Status } from "@/components/workspace";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import type { CaseSummary } from "@/lib/contracts";
+import { pageSize, parseOffset, timestamp } from "@/lib/format";
+import { api } from "@/lib/server-api";
 
-export const metadata: Metadata = { title: "Review" };
+export const metadata: Metadata = { title: "Review Center" };
 
-export default function ReviewPage() {
+export default async function ReviewPage({ searchParams }: { searchParams: Promise<{ offset?: string | string[] }> }) {
+  const offset = parseOffset((await searchParams).offset);
+  const cases = await api<CaseSummary[]>(`/intakes?limit=${pageSize}&offset=${offset}`);
   return <>
-    <PageHeading title="Review" description="Open an intake from the Inbox to inspect source messages and download originals." />
-    <Section title="Review workspace">
-      <div className="space-y-4 p-5 text-sm">
-        <p className="text-muted-foreground">Extracted fields, comparison findings, and approval actions will appear here when those workflows are available.</p>
-        <Link className="font-medium text-primary hover:underline" href="/inbox">Open Inbox</Link>
-      </div>
+    <PageHeading title="Review Center" description="Inspect source documents, check discrepancies, and compare CDC candidates." />
+    <Section title="Intakes">
+      {cases.length ? <Table>
+        <TableHeader><TableRow><TableHead>Intake</TableHead><TableHead>Invoice reference</TableHead><TableHead>Status</TableHead><TableHead>Updated</TableHead></TableRow></TableHeader>
+        <TableBody>{cases.map((item) => <TableRow key={item.id}>
+          <TableCell><Link href={`/review/${item.id}`} className="font-medium text-primary hover:underline">{item.subject || "Untitled arrival"}</Link></TableCell>
+          <TableCell>{item.detected_reference ?? "Pending"}</TableCell>
+          <TableCell><Status value={item.state} /></TableCell>
+          <TableCell>{timestamp(item.updated_at)}</TableCell>
+        </TableRow>)}</TableBody>
+      </Table> : <Empty>{offset ? "No more intakes." : "No intakes to review yet."}</Empty>}
     </Section>
+    <Pagination path="/review" offset={offset} count={cases.length} />
   </>;
 }

@@ -1,21 +1,31 @@
 import Link from "next/link";
 import { DraftForm, IntakeForm, RefreshButton } from "@/components/forms";
-import { Originals, PageHeading, Section, Status } from "@/components/workspace";
-import type { CaseDetail } from "@/lib/contracts";
+import { PageHeading, Section, Status } from "@/components/workspace";
+import { ReviewActions } from "@/components/review-actions";
+import { ReviewEvidence } from "@/components/review-evidence";
+import type { CaseDetail, MasterVersion, ReviewAnalysis } from "@/lib/contracts";
 import { label, timestamp } from "@/lib/format";
 import { api } from "@/lib/server-api";
 
 export default async function ReviewDetail({ params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = await params;
-  const item = await api<CaseDetail>(`/intakes/${encodeURIComponent(caseId)}`);
+  const path = `/intakes/${encodeURIComponent(caseId)}`;
+  const [item, analysis, versions] = await Promise.all([
+    api<CaseDetail>(path), api<ReviewAnalysis>(`${path}/analysis`),
+    api<MasterVersion[]>("/cdc/versions?limit=100"),
+  ]);
   return <>
-    <Link className="text-sm font-medium text-primary hover:underline" href="/inbox">← Inbox</Link>
+    <Link className="text-sm font-medium text-primary hover:underline" href="/review">← Review Center</Link>
     <PageHeading title={item.subject || "Untitled arrival"} description={`Intake · ${label(item.channel)} · ${timestamp(item.created_at)}`} action={<RefreshButton />} />
     <div className="flex flex-wrap items-center gap-3 text-sm">
       <Status value={item.state} />
-      <span className="text-muted-foreground">{item.review_reason ?? (item.state === "queued" ? "Waiting for the archive check." : "")}</span>
+      <span className="text-muted-foreground">{item.review_reason ?? (item.state === "queued" ? "Waiting for document analysis." : "")}</span>
     </div>
-    <Section title="Original attachments"><Originals documents={item.documents} /></Section>
+    <Section title="Analysis controls">
+      <ReviewActions caseId={item.id} revision={analysis.revision} selected={analysis.selected_master ?? undefined}
+        versions={versions} pending={analysis.state === "pending" && !!analysis.run_id} />
+    </Section>
+    <ReviewEvidence analysis={analysis} documents={item.documents} />
     <Section title="Source messages">
       <div className="divide-y">
         {item.messages.map((message) => <details key={message.id} className="space-y-3 px-5 py-4">

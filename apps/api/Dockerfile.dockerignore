@@ -1,0 +1,17 @@
+**
+!apps/
+!apps/api/
+!apps/api/pyproject.toml
+!apps/api/uv.lock
+!apps/api/src/
+!apps/api/src/**
+!apps/api/alembic.ini
+!apps/api/alembic/
+!apps/api/alembic/**
+!services/
+!services/__init__.py
+!services/extraction.py
+!services/packing.py
+!services/bill_extractor.py
+!services/matching.py
+**/__pycache__/

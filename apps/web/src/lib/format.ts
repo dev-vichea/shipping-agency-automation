@@ -7,6 +7,19 @@ export function timestamp(value: string | null) {
 }
 
 const labels: Record<string, string> = {
+  PASS: "Pass",
+  WARNING: "Warning",
+  MISMATCH: "Mismatch",
+  NEEDS_REVIEW: "Needs review",
+  analysis: "Document analysis",
+  ai: "AI suggestions",
+  previous_analysis: "Previous analysis",
+  extracted: "Extracted",
+  partial: "Partial",
+  unsupported_layout: "Unsupported layout",
+  present: "Present",
+  missing: "Missing",
+  uncertain: "Uncertain",
   simulated: "Simulated",
   queued: "Queued",
   needs_review: "Needs review",

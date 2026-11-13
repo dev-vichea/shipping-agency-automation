@@ -7,7 +7,7 @@ from sqlalchemy import select
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.intakes.routes import Offset, PageSize
 from shipping_ai.intakes.schemas import ORM
-from shipping_ai.models import ActivityEvent, AutomationRun, IntakeCase
+from shipping_ai.models import ActivityEvent, AutomationRun, IntakeCase, ReviewSnapshot
 
 router = APIRouter(prefix="/automation", tags=["automation"])
 
@@ -64,9 +64,17 @@ def health_check(db: DB, user: Staff):
     dependencies=[Depends(browser_origin)],
 )
 def retry(run_id: UUID, db: DB, user: Staff):
-    run = db.get(AutomationRun, run_id, with_for_update=True)
+    original = db.get(AutomationRun, run_id)
+    case = (
+        db.get(IntakeCase, original.intake_case_id, with_for_update=True)
+        if original and original.intake_case_id
+        else None
+    )
+    run = db.get(AutomationRun, run_id, with_for_update=True, populate_existing=True)
     if not run:
         raise HTTPException(404, "Run not found")
+    if case and run.input_revision != case.analysis_revision:
+        raise HTTPException(409, "This run belongs to an older intake revision")
     if run.state == "queued":
         return run
     if run.state != "failed":
@@ -77,8 +85,13 @@ def retry(run_id: UUID, db: DB, user: Staff):
     run.available_at = datetime.now(UTC)
     run.ended_at = None
     run.started_at = None
-    if run.intake_case_id:
-        case = db.get(IntakeCase, run.intake_case_id, with_for_update=True)
+    if case and run.stage == "ai":
+        snapshot = db.scalar(
+            select(ReviewSnapshot).filter_by(intake_case_id=case.id, revision=run.input_revision)
+        )
+        if snapshot:
+            snapshot.ai_state = "pending"
+    elif case:
         case.state = "queued"
         case.review_reason = None
     db.add(

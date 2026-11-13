@@ -21,8 +21,8 @@ machine. Postgres and Redis have no published ports in this stack.
    can contain up to five 10 MiB files.
 2. Open the intake. Download the original or expand its name for SHA-256 and
    source IDs. A new attachment can explicitly revise one of the originals.
-   The worker checks the bytes and changes the case to **Needs review**; use
-   **Refresh** to see the latest state.
+   The worker verifies the archive and analyzes supported documents. Use
+   **Refresh** to see the latest findings and review state.
 3. Enter a company and invoice number and save an import draft. It appears in
    **Imports** with its source intake and originals. ETD and ETA remain pending.
 4. Open **Automation**, select **Run worker check**, then refresh. A completed
@@ -66,9 +66,10 @@ docker compose -f compose.dev.yml exec -T api python -c "import urllib.request; 
 Docker Desktop on this Mac could reach a loopback-only Ollama listener at
 `host.docker.internal:11434`. Verify on your machine before changing bind settings.
 For a host-run API, use `SHIPPING_OLLAMA_URL=http://127.0.0.1:11434`. Keep the
-listener private. Set `SHIPPING_OLLAMA_ENABLED=true` in `.env` and recreate the API
-(`docker compose -f compose.dev.yml up -d api`). Automation then shows whether the
-configured model is installed. Phase 1 sends no generation requests.
+listener private. Set `SHIPPING_OLLAMA_ENABLED=true` in `.env` and recreate the API and worker
+(`docker compose -f compose.dev.yml up -d api worker`). Automation then shows whether the
+configured model is installed. With the provider enabled, the worker requests
+structured advice after saving its deterministic findings.
 
 ## Tests
 
@@ -129,3 +130,38 @@ the type and archive format and never executes content. Staff should use trusted
 fixtures in development. Use the protected download route for originals;
 nothing is mounted as a public document directory. Intake and receipt jobs
 never create accepted records or alter the legacy SQLite database.
+
+## Phase 2 document review
+
+Archive a supplier workbook and, if available, a draft B/L PDF from the Inbox.
+Open the intake in **Review** and refresh after the worker finishes. A combined
+workbook can produce separate Invoice and Packing List extractions. Expand a
+source excerpt on the left or a field or row on the right. Findings show the
+compared values and link to the source sheet, cell, PDF page, or OCR line. The
+download links retrieve the archived original.
+
+To compare CDC limits, register the approved workbook under **Analysis
+controls** after checking its company, approval reference and year. Apply that
+exact version to the intake. A new analysis is queued and the previous results
+stay visible until the new revision is ready. Candidate similarity never
+confirms eligibility. Missing or undated balances, and balances older than 30
+days, appear as unknown. An uncached formula is never recalculated.
+
+The Phase 2 migration queues analysis for existing intakes and keeps their
+documents, source messages, receipt runs, and drafts. Run the same Compose
+command to upgrade. The worker runs the deterministic analysis first. With
+`SHIPPING_OLLAMA_ENABLED=true`, it then queues a separate advisory job using a
+locally installed model. Refresh the Review Center to see the advice. A failed
+advisory remains retryable in Automation while the findings stay available.
+
+The worker supports the existing supplier XLS/XLSX layouts and English or
+Simplified Chinese B/L OCR. Excel sources are displayed as text excerpts with
+cell evidence. PDF sources show page and line excerpts where available, and OCR
+text is marked uncertain. Unsupported layouts, grouped or split lines,
+unconfirmed units and currencies, and ambiguous document versions remain for
+staff review. Missing ETD/ETA is displayed without adding a blocking finding.
+
+Generated fictional supplier, B/L, and CDC test files are under
+`apps/api/tests/fixtures/`. The spreadsheet layouts reproduce the relevant
+legacy headers and merged cells. Use these files to run the Review Center
+example without agency records.

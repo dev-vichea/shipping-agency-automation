@@ -2,7 +2,8 @@ name: shipping-agency-dev
 
 x-api: &api
   build:
-    context: ./apps/api
+    context: .
+    dockerfile: apps/api/Dockerfile
   environment: &api-env
     SHIPPING_ENVIRONMENT: development
     SHIPPING_DATABASE_URL: postgresql+psycopg://shipping:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (random hex)}@postgres:5432/shipping

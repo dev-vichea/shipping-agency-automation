@@ -41,7 +41,7 @@ export default async function AutomationPage({ searchParams }: {
     <Pagination path="/automation" offset={offset} count={runs.length} />
     <Section title="Local AI provider">
       <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 text-sm">
-        <div><p className="font-medium">Ollama · {provider.model}</p><p className="mt-1 text-muted-foreground">Availability check only · {provider.context.toLocaleString("en-GB")} context · {provider.max_concurrency} concurrent request</p></div>
+        <div><p className="font-medium">Ollama · {provider.model}</p><p className="mt-1 text-muted-foreground">Local advisory model · {provider.context.toLocaleString("en-GB")} context · {provider.max_concurrency} concurrent request</p></div>
         <Status value={provider.state} />
       </div>
     </Section>
