@@ -2,7 +2,6 @@
 
 import io
 import re
-from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -19,9 +18,21 @@ from services.extraction import extract_shipping, rows_from_workbook
 from services.packing import extract_packing
 
 from shipping_ai.review.schemas import Evidence, Extraction, Item, Role
-from shipping_ai.review.values import UNIT_ALIASES, clean, currency, decimal, field, folded, unit
+from shipping_ai.review.values import (
+    UNIT_ALIASES,
+    clean,
+    currency,
+    decimal,
+    field,
+    folded,
+    unit,
+    year_first_date,
+)
 
+from .languages import LABELS as LOCAL_LABELS
+from .languages import ROW_FIELDS, column_map, reference_text, spellings
 from .pdf_extract import PDFLimit, extract_positioned_pdf
+from .text_representation import annotate_languages
 from .workbook_layout import TOTAL_TEXT, Region, regions, workbook_merges
 
 PDF_LOCK = Lock()
@@ -34,7 +45,7 @@ MAX_PAGES = 12
 MAX_OCR_PAGES = 3
 
 WEIGHT = re.compile(
-    r"(?<![a-z])(?:kilograms?|kgs?|kg|lbs?|tonnes?|g(?!\.)|t)(?![a-z])|公斤|千克|吨", re.I
+    r"(?<![a-z])(?:kilograms?|kgs?|kg|lbs?|tonnes?|g(?!\.)|t)(?![a-z])|公斤|千克|吨|噸|គីឡូក្រាម", re.I
 )
 IDENTIFIER = re.compile(r"\b[A-Z]{4}\s?[0-9]{6}[ -]?[0-9]\b", re.I)
 CONTAINER_VALUE_RE = re.compile(
@@ -84,20 +95,18 @@ META_LABELS = {
     "etd": re.compile(r"^(?:etd|estimated departure|预计离港)\s*[:：]?\s*$", re.I),
     "eta": re.compile(r"^(?:eta|estimated arrival|预计到港)\s*[:：]?\s*$", re.I),
 }
+for _key, _english in tuple(META_LABELS.items()):
+    _labels = LOCAL_LABELS.get(_key, ())
+    if _key == "destination":
+        _labels += LOCAL_LABELS["discharge"] + LOCAL_LABELS["delivery"]
+    if _key == "port":
+        _labels += LOCAL_LABELS["discharge"]
+    if _labels:
+        META_LABELS[_key] = re.compile(
+            rf"^(?:{spellings(*_labels)})(?=\s*[:：/（(]|\s*$)\s*[:：]?|{_english.pattern}",
+            re.I,
+        )
 TOTAL_FIELDS = ("packages", "gross_weight", "net_weight", "measurement")
-ROW_FIELDS = (
-    "description",
-    "english_description",
-    "hs_code",
-    "quantity",
-    "unit",
-    "unit_price",
-    "amount",
-    "packages",
-    "gross_weight",
-    "net_weight",
-    "measurement",
-)
 TOTAL_MARKER = TOTAL_TEXT
 ROLE_MARKERS = {
     "invoice": re.compile(r"\b(?:invoice|inv|commercial invoice|ci)\b|发票", re.I),
@@ -211,37 +220,6 @@ def row_evidence(doc: UUID, sheet: str, row: int, cells: list) -> Evidence:
     )
 
 
-def column_map(headers: list[str]) -> dict[str, int]:
-    tests: dict[str, Callable[[str], bool]] = {
-        "description": lambda h: (
-            bool(re.search(r"description|commodity|commodities|品名|货品名称|货名", h))
-            and not re.search(r"english|英文", h)
-        ),
-        "english_description": lambda h: bool(re.search(r"english|英文", h)),
-        "hs_code": lambda h: bool(re.search(r"h\.?s\.?[ -]*code|税号", h)),
-        "quantity": lambda h: bool(re.search(r"quantity|^qty\b|数量", h)),
-        "unit": lambda h: (
-            bool(re.search(r"^unit(?:\b|$)|单位|^uom\b", h))
-            and not re.search(r"price|value|单价|价格", h)
-        ),
-        "unit_price": lambda h: bool(re.search(r"unit\s*price|^price\b|单价|u\.price", h)),
-        "amount": lambda h: (
-            bool(re.search(r"subtotal|amount|total\s*(?:price|value)|总价|总值|金额", h))
-            and not re.search(r"unit\s*price|balance", h)
-        ),
-        "packages": lambda h: bool(re.search(r"^packages?\b|^cartons?\b|包数|件数", h)),
-        "gross_weight": lambda h: bool(re.search(r"gross\s*weight|\bg\.?w\b|毛重", h)),
-        "net_weight": lambda h: bool(re.search(r"net\s*weight|\bn\.?w\b|净重", h)),
-        "measurement": lambda h: bool(re.search(r"measurement|volume|means\s*m3|体积", h)),
-    }
-    return {
-        key: col
-        for key, matches in tests.items()
-        if (col := next((i for i, header in enumerate(headers) if matches(header)), None))
-        is not None
-    }
-
-
 def headers_for(rows: list[Row], before: int) -> tuple[dict[str, int], list[str], int]:
     # Two header tiers are common. Limit the search to rows before the first legacy item.
     best: tuple[dict[str, int], list[str], int] = ({}, [], 0)
@@ -301,7 +279,12 @@ def labelled(
             match = pattern.match(raw)
             if not match:
                 continue
-            tail = raw[match.end() :].lstrip(":： ")
+            tail = raw[match.end():].lstrip(":：/(（ \n\t")
+            for _ in range(2):
+                duplicate = pattern.match(tail)
+                if not duplicate:
+                    break
+                tail = tail[duplicate.end():].lstrip(":：/)） \n\t")
             if tail and not is_any_meta_label(tail) and accept(tail):
                 return tail, cell_evidence(doc, sheet, number, col, value)
             # 1. Search horizontally in current row
@@ -349,12 +332,8 @@ def date_text(value: object) -> str | None:
     if isinstance(value, date):
         return value.isoformat()
     text = clean(value)
-    match = re.fullmatch(r"(20\d{2})[-./](\d{1,2})[-./](\d{1,2})(?:\s+00:00:00)?", text)
-    if match:
-        try:
-            return date(*map(int, match.groups())).isoformat()
-        except ValueError:
-            pass
+    if standard := year_first_date(text):
+        return standard
     try:
         serial = float(text)
         if 35000 <= serial <= 55000:
@@ -366,7 +345,7 @@ def date_text(value: object) -> str | None:
 
 def reference_value(raw):
     text = str(int(raw)) if isinstance(raw, float) and raw.is_integer() else clean(raw)
-    return bool(re.fullmatch(r"(?=.*\d)[A-Z0-9][A-Z0-9/+.-]{1,79}", text, re.I))
+    return reference_text(text)
 
 
 def place_value(raw):
@@ -376,9 +355,8 @@ def place_value(raw):
 
 
 def party_value(raw):
-    return bool(re.search(r"\w{2,}", clean(raw))) and clean(raw) not in {
-        "卖给", "賣給", "买方", "收货人",
-    }
+    text = clean(raw)
+    return sum(c.isalpha() for c in text) >= 2 and not is_any_meta_label(text)
 
 
 def metadata(doc: UUID, sheet: str, rows: list[Row], legacy: dict, role: Role) -> dict:
@@ -601,7 +579,7 @@ def package_unit(text):
         return "CTN"
     if re.search(r"(?<!\w)rolls?(?!\w)", text):
         return "ROLL"
-    if re.search(r"(?<!\w)(?:packages?|pkgs?)(?!\w)|件数|包数", text):
+    if re.search(r"(?<!\w)(?:packages?|pkgs?)(?!\w)|件数|件數|包数|包數|កញ្ចប់", text):
         return "PKG"
     return None
 
@@ -1076,7 +1054,7 @@ def extract_pdf_legacy(data: bytes, name: str, doc: UUID, classification: str):
     )
 
 
-def extract(data: bytes, name: str, doc: UUID, classification: str) -> list[Extraction]:
+def _extract(data: bytes, name: str, doc: UUID, classification: str) -> list[Extraction]:
     suffix = Path(name).suffix.lower()
     try:
         if suffix == ".pdf":
@@ -1133,3 +1111,7 @@ def extract(data: bytes, name: str, doc: UUID, classification: str) -> list[Extr
             error=error,
         )
     ]
+
+
+def extract(data: bytes, name: str, doc: UUID, classification: str) -> list[Extraction]:
+    return [annotate_languages(item) for item in _extract(data, name, doc, classification)]

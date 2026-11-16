@@ -13,6 +13,8 @@ from openpyxl.utils.cell import range_boundaries
 
 from shipping_ai.review.values import clean, folded
 
+from .languages import TITLES, TOTAL, localized, spellings, title_variants
+
 TITLE = {
     "invoice": r"(?:commercial\s+)?invoice|i\s*n\s*v\s*o\s*i\s*c\s*e|商业发票",
     "packing_list": r"packing\s*list|装箱单|清单",
@@ -23,8 +25,17 @@ SHEET_TITLE = {
     "packing_list": r"pack(?:ing(?:\s*list)?)?|pl\.?|装箱单",
     "draft_bl": r"(?:(?:truck|air|sea)\s+)?way\s*bill|(?:draft )?bill of lading",
 }
+TITLE = {
+    role: localized(pattern, *TITLES["bill_of_lading" if role == "draft_bl" else role])
+    for role, pattern in TITLE.items()
+}
+SHEET_TITLE = {
+    role: localized(pattern, *TITLES["bill_of_lading" if role == "draft_bl" else role])
+    for role, pattern in SHEET_TITLE.items()
+}
+_TOTAL = spellings(*TOTAL)
 TOTAL_TEXT = re.compile(
-    r"^(?:(?:grand\s+)?total|ttl\.?|合计|总计|總計|合計)(?:\s*[:：]?\s*(?:total|合计|总计|總計|合計))?\s*[:：]?\s*$",
+    rf"^(?:(?:grand\s+)?total|ttl\.?|{_TOTAL})(?:\s*[:：]?\s*(?:total|{_TOTAL}))?\s*[:：]?\s*$",
     re.I,
 )
 
@@ -40,9 +51,9 @@ class Region:
 
 
 def title(value):
-    text = folded(clean(value))
-    text = re.split(r"\s*[(（]", text, maxsplit=1)[0].strip(" :：")
-    return next((key for key, pattern in TITLE.items() if re.fullmatch(pattern, text)), None)
+    variants = [folded(part) for part in title_variants(clean(value))]
+    matching = {key for key, pattern in TITLE.items() if any(re.fullmatch(pattern, part) for part in variants)}
+    return matching.pop() if len(matching) == 1 else None
 
 
 def sheet_title(name):

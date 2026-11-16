@@ -34,7 +34,7 @@ jobs:
           node-version: "24.22.3"
       - run: uv sync --project apps/api --python 3.12 --locked
       - run: uv run --project apps/api ruff check apps/api
-      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim
+      - run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng tesseract-ocr-chi-sim tesseract-ocr-chi-tra tesseract-ocr-khm
       - run: uv run --project apps/api pytest apps/api/tests -q
         env:
           TEST_DATABASE_URL: postgresql+psycopg://postgres@127.0.0.1:55436/shipping

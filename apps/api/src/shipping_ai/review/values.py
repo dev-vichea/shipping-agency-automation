@@ -1,5 +1,6 @@
 import re
 import unicodedata
+from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from .schemas import Evidence, ExtractedField
@@ -12,6 +13,14 @@ UNIT_ALIASES = {
     "piece": "PCS",
     "pieces": "PCS",
     "件": "PCS",
+    "ដុំ": "PCS",
+    "គ្រឿង": "UNIT",
+    "ប្រអប់": "CTN",
+    "កញ្ចប់": "PKG",
+    "គីឡូក្រាម": "KG",
+    "ម៉ែត្រ": "M",
+    "噸": "T",
+    "臺": "UNIT",
     "set": "SET",
     "sets": "SET",
     "套": "SET",
@@ -88,6 +97,12 @@ def identity(value: str | None) -> str:
     return "".join(c for c in folded(value) if c.isalnum())
 
 
+def source_identity(value: str | None) -> str:
+    # Khmer vowels and signs are significant. Preserve combining marks when
+    # comparing printed text without changing legacy persisted lookup keys.
+    return "".join(c for c in folded(value) if c.isalnum() or unicodedata.category(c).startswith("M"))
+
+
 def decimal(value: object) -> Decimal | None:
     text = unicodedata.normalize("NFKC", clean(value))
     if len(text) > 35 or not NUMBER.fullmatch(text):
@@ -96,6 +111,17 @@ def decimal(value: object) -> Decimal | None:
         result = Decimal(text.replace(",", ""))
         return result if result.is_finite() else None
     except InvalidOperation:
+        return None
+
+
+def year_first_date(value: str) -> str | None:
+    text = unicodedata.normalize("NFKC", value)
+    match = re.fullmatch(r"(\d{4})\s*(?:[-./]|年)\s*(\d{1,2})\s*(?:[-./]|月)\s*(\d{1,2})(?:日|\s+00:00:00)?", text)
+    if not match:
+        return None
+    try:
+        return date(*map(int, match.groups())).isoformat()
+    except ValueError:
         return None
 
 

@@ -122,6 +122,15 @@ export type ExtractedField = {
   status: "present" | "missing" | "uncertain";
   evidence: Evidence[];
   review_reason?: string | null;
+  original_text?: string | null;
+  source_languages?: string[];
+  english?: {
+    value: string | null;
+    status: "source" | "verified_company_alias" | "pending" | "proposed" | "ambiguous"
+      | "unavailable" | "unsupported" | "limit_reached" | "staff_verified";
+    evidence: Evidence[];
+    reason?: string | null;
+  } | null;
   alternatives?: { value: string; unit: string | null; currency: string | null; evidence: Evidence[] }[];
 };
 
@@ -136,6 +145,8 @@ export type Extraction = {
   items: { row: number; fields: Record<string, ExtractedField> }[];
   source_excerpt: Evidence[];
   sections?: Extraction[];
+  source_languages?: string[];
+  record_language?: "en";
 };
 
 export type Finding = {
@@ -190,6 +201,7 @@ export type ReviewAnalysis = {
   }[];
   selected_master: MasterVersion | null;
   analyzed_master: MasterVersion | null;
+  comparison_master?: MasterVersion | null;
   ai_state: string | null;
   ai_model: string | null;
   ai_prompt_version: string | null;
@@ -231,6 +243,16 @@ export type ReviewCorrection = {
   currency: string | null;
   note: string;
 };
+export type CdcItemName = {
+  invoice_document_id: string;
+  invoice_row: number;
+  packing_document_id: string;
+  packing_row: number;
+  master_row: number;
+  description: string;
+  evidence: Evidence[];
+};
+
 export type StaffReview = {
   id: string;
   actor_id: string;
@@ -242,6 +264,7 @@ export type StaffReview = {
   resolutions: { key: string; note: string }[];
   mappings: { invoice_row: number; master_row: number }[];
   verify_cdc_mappings: boolean;
+  cdc_names?: CdcItemName[];
   blockers: string[];
   permit_pending: string | null;
   request_correction: string | null;
@@ -274,6 +297,7 @@ export type WorkspaceList = { active_id: string | null; workspaces: Workspace[] 
 export type StaffMember = { id: string; email: string; role: Workspace["role"] };
 export type Company = {
   id: string; name: string; aliases: string[]; identifier: string | null;
+  verified_english_name?: string | null;
   contact_name: string | null; contact_email: string | null; created_at: string;
 };
 export type CompanyDetail = Company & { staff: Pick<StaffMember, "id" | "email">[] };

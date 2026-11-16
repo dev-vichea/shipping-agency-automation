@@ -21,6 +21,7 @@ __pycache__/
 *.xls
 *.xlsx
 !apps/api/tests/fixtures/cdc-approval.xlsx
+!apps/api/tests/fixtures/multilingual/*.xls
 *.xlsm
 *.xlsb
 /examples/

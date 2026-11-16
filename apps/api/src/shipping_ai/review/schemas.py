@@ -33,6 +33,20 @@ class FieldCandidate(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
 
 
+class EnglishText(BaseModel):
+    value: str | None = None
+    status: Literal[
+        "source", "verified_company_alias", "pending", "proposed", "ambiguous",
+        "unavailable", "unsupported", "limit_reached", "staff_verified",
+    ]
+    evidence: list[Evidence] = Field(default_factory=list)
+    reason: str | None = None
+    model: str | None = None
+    model_digest: str | None = None
+    prompt_version: str | None = None
+    company_id: UUID | None = None
+
+
 class ExtractedField(BaseModel):
     value: str | None = None
     unit: str | None = None
@@ -41,6 +55,9 @@ class ExtractedField(BaseModel):
     evidence: list[Evidence] = Field(default_factory=list)
     alternatives: list[FieldCandidate] = Field(default_factory=list)
     review_reason: str | None = None
+    original_text: str | None = None
+    source_languages: list[str] = Field(default_factory=list)
+    english: EnglishText | None = None
 
 
 class Item(BaseModel):
@@ -59,6 +76,8 @@ class Extraction(BaseModel):
     items: list[Item] = Field(default_factory=list)
     source_excerpt: list[Evidence] = Field(default_factory=list)
     document_kind: str | None = None
+    source_languages: list[str] = Field(default_factory=list)
+    record_language: Literal["en"] = "en"
     sections: list["Extraction"] = Field(default_factory=list)
     recovery: list[dict[str, str | int | None]] = Field(default_factory=list)
 
@@ -141,6 +160,7 @@ class ReviewView(BaseModel):
     candidates: list[Candidate] = Field(default_factory=list)
     selected_master: MasterView | None = None
     analyzed_master: MasterView | None = None
+    comparison_master: MasterView | None = None
     ai_state: (
         Literal["disabled", "pending", "ready", "unavailable", "invalid_output", "not_needed"]
         | None

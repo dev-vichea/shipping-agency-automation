@@ -264,16 +264,24 @@ def approve(case_id: UUID, request: Decision, db: DB, user: Staff):
     originals = {item.row: item for item in raw_invoice.items}
     for line_no, item in enumerate(invoice.items, start=1):
         fields = item.fields
+        original = originals[item.row].fields["description"]
+        evidence = next(iter(original.evidence), None)
+        locator = f"{invoice.sheet or 'Invoice'} · row {item.row}"
+        if evidence and evidence.page:
+            locator = f"PDF page {evidence.page} · item {item.row}"
+        description = (
+            arguments[2][line_no - 1]["english_provided"] if arguments
+            else usable(fields.get("english_description")) or usable(fields["description"])
+        )
         db.add(
             ImportItem(
                 import_id=record.id,
                 intake_case_id=case.id,
                 line_no=line_no,
                 source_document_id=invoice.document_id,
-                source_locator=f"{invoice.sheet or 'Invoice'} · row {item.row}"[:255],
-                raw_description=originals[item.row].fields["description"].value or "",
-                normalized_description=usable(fields.get("english_description"))
-                or usable(fields["description"]),
+                source_locator=locator[:255],
+                raw_description=original.original_text or original.value or "",
+                normalized_description=description,
                 quantity=usable(fields["quantity"]),
                 unit=usable(fields["unit"]),
                 currency=fields["amount"].currency,

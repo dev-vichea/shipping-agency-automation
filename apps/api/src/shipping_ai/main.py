@@ -78,7 +78,7 @@ def create_app() -> FastAPI:
     def ready():
         try:
             with engine().connect() as connection:
-                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0009":
+                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0010":
                     return JSONResponse({"status": "unavailable"}, status_code=503)
             with Redis.from_url(str(cfg.redis_url), socket_timeout=2) as redis:
                 redis.ping()

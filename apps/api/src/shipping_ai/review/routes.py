@@ -1,16 +1,21 @@
+from datetime import date
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
+from shipping_ai.ai.translation import overlay
+from shipping_ai.cdc.master import description_suggestions, matches_master_company
 from shipping_ai.cdc.routes import view
-from shipping_ai.core.access import master_access, visible_case
+from shipping_ai.core.access import access, company_access, master_access, visible_case
 from shipping_ai.core.auth import DB, Staff, browser_origin
+from shipping_ai.documents.text_representation import field_groups
 from shipping_ai.models import (
     ActivityEvent,
     AutomationRun,
     CdcMasterVersion,
+    Company,
     DocumentExtraction,
     ReviewSnapshot,
 )
@@ -18,6 +23,7 @@ from shipping_ai.models import (
 from .compare import line_comparisons
 from .pipeline import enqueue
 from .schemas import Extraction, Finding, ReviewView
+from .values import usable
 
 router = APIRouter(prefix="/intakes", tags=["document review"])
 
@@ -48,6 +54,25 @@ def queued_run(db, case):
             AutomationRun.stage == "analysis",
         )
     )
+
+
+def english_comparison_master(db, case, invoice):
+    """Allow a read-only English name comparison across language copies of one approval."""
+    if not case.company_id or not (printed_date := usable(invoice.fields.get("invoice_date"))):
+        return None
+    try:
+        year = date.fromisoformat(printed_date).year
+    except ValueError:
+        return None
+    versions = db.execute(
+        select(CdcMasterVersion.id, CdcMasterVersion.approval_ref, CdcMasterVersion.layout)
+        .where(CdcMasterVersion.company_id == case.company_id, CdcMasterVersion.year == year, master_access(db))
+        .limit(21)
+    ).all()
+    english = [version.id for version in versions if version.layout in {"english_application", "english_cut_stock"}]
+    if len(versions) < 21 and len({version.approval_ref for version in versions}) == len(english) == 1:
+        return db.get(CdcMasterVersion, english[0])
+    return None
 
 
 @router.get("/{case_id}/analysis", response_model=ReviewView)
@@ -90,6 +115,37 @@ def review(case_id: UUID, db: DB, _user: Staff):
     ).all()
     documents = [Extraction.model_validate(item.payload) for item in extractions]
     findings = [Finding.model_validate(item) for item in snapshot.findings]
+    overlay(documents, snapshot.translations, ai_state=snapshot.ai_state)
+    if not access(db).admin:
+        visible = set(db.scalars(select(Company.id).where(company_access(db))))
+        for document in documents:
+            for fields in field_groups(document):
+                for candidate in fields.values():
+                    if candidate.english and candidate.english.company_id and candidate.english.company_id not in visible:
+                        candidate.english = None
+    candidates = snapshot.candidates
+    invoices = [document for document in documents if document.role == "invoice"]
+    invoice = invoices[0] if len(invoices) == 1 and invoices[0].error != "multiple_workbook_sections" else None
+    comparison_master = None
+    # Translation can arrive after analysis. Re-rank names for review without
+    # changing the saved findings, eligibility checks, or staff mappings.
+    if analyzed_master:
+        visible_master = db.scalar(
+            select(CdcMasterVersion.id).where(
+                CdcMasterVersion.id == analyzed_master.id, master_access(db)
+            )
+        )
+        if visible_master:
+            assigned_master = case.company_id and case.company_id == analyzed_master.company_id
+            translated = (snapshot.translations or {}).get("state") == "ready"
+            if invoice and (assigned_master or (translated and matches_master_company(invoice, analyzed_master))):
+                candidates = description_suggestions(invoice, analyzed_master)
+        else:
+            analyzed_master, candidates = None, []
+    elif invoice and not master and snapshot.revision == case.analysis_revision:
+        comparison_master = english_comparison_master(db, case, invoice)
+        if comparison_master:
+            candidates = description_suggestions(invoice, comparison_master)
     return {
         **output,
         "state": "available" if snapshot.revision == case.analysis_revision else output["state"],
@@ -101,8 +157,9 @@ def review(case_id: UUID, db: DB, _user: Staff):
         "extractions": documents,
         "findings": findings,
         "line_items": line_comparisons(documents, findings),
-        "candidates": snapshot.candidates,
+        "candidates": candidates,
         "analyzed_master": view(analyzed_master),
+        "comparison_master": view(comparison_master),
         "ai_state": snapshot.ai_state,
         "ai_model": snapshot.ai_model,
         "ai_prompt_version": snapshot.ai_prompt_version,

@@ -18,6 +18,7 @@ from shipping_ai.review.values import (
     field,
     folded,
     identity,
+    source_identity,
     unit,
     usable,
 )
@@ -255,6 +256,55 @@ def parse_master_with_headers(data: bytes, name: str, source: UUID):
     return master, header_rows
 
 
+def ranked_descriptions(item, rows, *, proposed=False):
+    labels = descriptions(item)
+    field = item.fields.get("description")
+    translation = field.english if field else None
+    if proposed and translation and translation.status == "proposed" and translation.value:
+        labels.add(translation.value)
+    return sorted(
+        (
+            (max((candidate_score(label, row.description.value) for label in labels), default=0), row)
+            for row in rows
+        ),
+        key=lambda pair: (-pair[0], pair[1].row),
+    )
+
+
+def candidates_for(invoice, item, ranked):
+    return [
+        Candidate(
+            invoice_document_id=invoice.document_id,
+            invoice_row=item.row,
+            master_row=row.row,
+            description=row.description.value,
+            score=score,
+            evidence=row.description.evidence[0],
+        )
+        for score, row in ranked[:3]
+        if score >= 40 and usable(row.description) and row.description.evidence
+    ]
+
+
+def description_suggestions(invoice, master):
+    """Search the chosen CDC workbook using English proposals as search text only."""
+    rows = [MasterItem.model_validate(item) for item in master.items]
+    return [
+        candidate
+        for item in invoice.items
+        for candidate in candidates_for(invoice, item, ranked_descriptions(item, rows, proposed=True))
+    ]
+
+
+def matches_master_company(invoice, master):
+    consignee = usable(invoice.fields.get("consignee")) if invoice else None
+    return bool(
+        consignee
+        and company_key(consignee) == master.company_key
+        and source_identity(consignee) == source_identity(master.company)
+    )
+
+
 def check_cdc(invoice: Extraction | None, master, today: date | None = None):
     group = "cdc"
     if master is None:
@@ -267,7 +317,7 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
             )
         ], []
     company = invoice.fields.get("consignee") if invoice else None
-    if not usable(company) or company_key(company.value) != master.company_key:
+    if not matches_master_company(invoice, master):
         return [
             finding(
                 group,
@@ -302,32 +352,8 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
     )
 
     for item in invoice.items:
-        labels = descriptions(item)
-        ranked = sorted(
-            (
-                (
-                    max(
-                        (candidate_score(label, row.description.value) for label in labels),
-                        default=0,
-                    ),
-                    row,
-                )
-                for row in rows
-            ),
-            key=lambda pair: (-pair[0], pair[1].row),
-        )
-        for score, row in ranked[:3]:
-            if score >= 40:
-                candidates.append(
-                    Candidate(
-                        invoice_document_id=invoice.document_id,
-                        invoice_row=item.row,
-                        master_row=row.row,
-                        description=row.description.value,
-                        score=score,
-                        evidence=row.description.evidence[0],
-                    )
-                )
+        ranked = ranked_descriptions(item, rows)
+        candidates.extend(candidates_for(invoice, item, ranked))
 
         a = item.fields
         prefix = f"cdc.row.{item.row}"

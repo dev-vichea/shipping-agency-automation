@@ -87,12 +87,13 @@ def view(record: ImportRecord, name: str) -> ImportSummary:
 
 def resolve_company(db, name, case):
     identity = " ".join(name.split()).lower()
+    def matching_names(company):
+        aliases = [*company.aliases, company.verified_english_name]
+        return {company.identity_key, *(" ".join(alias.split()).lower() for alias in aliases if alias)}
+
     if case.company_id:
         company = visible_company(db, case.company_id)
-        if identity not in {
-            company.identity_key,
-            *(" ".join(alias.split()).lower() for alias in company.aliases),
-        }:
+        if identity not in matching_names(company):
             raise HTTPException(
                 422, "The consignee must match the assigned company name or an alias"
             )
@@ -101,8 +102,7 @@ def resolve_company(db, name, case):
     matches = [
         company
         for company in db.scalars(select(Company).where(company_access(db)))
-        if identity
-        in {company.identity_key, *(" ".join(alias.split()).lower() for alias in company.aliases)}
+        if identity in matching_names(company)
     ]
     if len(matches) > 1:
         raise HTTPException(409, "Assign the intake to the correct company before approving it")

@@ -14,7 +14,7 @@ import { write } from "@/lib/client-api";
 import type { CaseDetail, Evidence, ExtractedField, ReviewAnalysis, ReviewCorrection, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { label, location, timestamp } from "@/lib/format";
 
-type Target = Pick<ReviewCorrection, "document_id" | "role" | "row" | "name"> & { source: ExtractedField };
+type Target = Pick<ReviewCorrection, "document_id" | "role" | "row" | "name"> & { source: ExtractedField; description?: ExtractedField };
 const fieldKey = ({ document_id, role, row, name }: Omit<Target, "source">) => [document_id, role, row, name].join(":");
 const fieldName = (name: string) => label(name).replace(/^./, (letter) => letter.toUpperCase());
 
@@ -44,11 +44,17 @@ export function StaffReviewForm({ item, analysis, workflow, onInspect }: {
     return [[null, doc.fields] as const, ...doc.items.map((item) => [item.row, item.fields] as const)]
       .flatMap(([row, fields]) => Object.entries(fields).map(([name, source]) => ({
         document_id: doc.document_id, role, row, name, source,
+        description: name === "english_description" ? fields.description : undefined,
       })));
   });
   const target = targets.find((entry) => fieldKey(entry) === targetKey);
+  const proposal = target?.description?.english;
+  const targetEvidence = target?.source.evidence[0] ?? target?.description?.evidence[0];
   const existing = corrections.find((entry) => fieldKey(entry) === targetKey);
-  const candidates = saved?.candidates ?? analysis.candidates;
+  const candidates = [...new Map(
+    [...(saved?.candidates ?? []), ...(analysis.analyzed_master ? analysis.candidates : [])]
+      .map((entry) => [`${entry.invoice_document_id}:${entry.invoice_row}:${entry.master_row}`, entry]),
+  ).values()];
   const candidateRows = [...new Set(candidates.map((candidate) => candidate.invoice_row))];
   const reviewable = (saved?.findings ?? analysis.findings).filter((finding) =>
     finding.outcome === "NEEDS_REVIEW" && (finding.group === "transport" ||
@@ -112,11 +118,14 @@ export function StaffReviewForm({ item, analysis, workflow, onInspect }: {
         </NativeSelect>
         {target && <form method="post" key={targetKey} className="grid gap-3 rounded-control border p-3 sm:grid-cols-2" onSubmit={addCorrection}>
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-control border-l-2 border-tertiary bg-intelligence-fill px-3 py-2 sm:col-span-2">
-            <div className="min-w-0"><p className="panel-label text-intelligence">Extracted value</p><p className="break-words text-body-md">{target.source.value ?? "Missing"}</p></div>
-            {target.source.evidence[0] && <Button type="button" size="xs" variant="outline" onClick={() => onInspect(target.source.evidence[0])}>
-              {location(target.source.evidence[0])}<ArrowUpRight aria-hidden />
+            <div className="min-w-0"><p className="panel-label text-intelligence">Extracted value</p><p className="break-words text-body-md">{target.source.value ?? target.description?.original_text ?? target.description?.value ?? "Missing"}</p></div>
+            {targetEvidence && <Button type="button" size="xs" variant="outline" onClick={() => onInspect(targetEvidence)}>
+              {location(targetEvidence)}<ArrowUpRight aria-hidden />
             </Button>}
           </div>
+          {proposal?.status === "proposed" && <p className="text-body-sm text-muted-foreground sm:col-span-2">
+            English proposal · {proposal.value}
+          </p>}
           <label className="grid gap-1.5 text-label-md">Reviewed value<Input name="value" required maxLength={350} defaultValue={existing?.value ?? target.source.value ?? ""} /></label>
           <label className="grid gap-1.5 text-label-md">Correction reason<Input name="note" required maxLength={1000} defaultValue={existing?.note} /></label>
           {["packages", "gross_weight", "net_weight"].includes(target.name) &&

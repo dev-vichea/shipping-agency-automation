@@ -1,4 +1,4 @@
-import type { Evidence } from "./contracts";
+import type { Evidence, ExtractedField } from "./contracts";
 
 const time = new Intl.DateTimeFormat("en-GB", {
   dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Phnom_Penh",
@@ -31,7 +31,7 @@ const documentFields: Record<string, string> = {
   amount: "Amount",
   currency: "Currency",
   hs_code: "HS Code",
-  english_description: "Goods Description",
+  english_description: "English Description",
   description: "Goods Description",
   unit_price: "Unit Price",
   etd: "ETD",
@@ -44,6 +44,32 @@ export function documentFieldLabel(key: string) {
 
 export function sourceValue(field?: { value: string | null; unit: string | null; currency: string | null }) {
   return field?.value ? [field.value, field.currency, field.unit].filter(Boolean).join(" ") : "—";
+}
+
+export function intakeField(field?: ExtractedField) {
+  const english = field?.english;
+  const source = sourceValue(field);
+  if (english?.value && ["source", "staff_verified", "verified_company_alias", "proposed"].includes(english.status)) {
+    return {
+      value: [english.value, field?.currency, field?.unit].filter(Boolean).join(" "),
+      evidence: english.evidence[0] ?? field?.evidence[0],
+      original: english.value !== field?.value ? source : undefined,
+      label: english.status === "proposed" ? "English proposal"
+        : english.status === "verified_company_alias" ? "Verified English alias" : undefined,
+    };
+  }
+  if (english && source !== "—") {
+    return {
+      value: english.status === "pending" ? "English translation pending" : "English needs review",
+      evidence: field?.evidence[0], original: source, label: undefined,
+    };
+  }
+  return { value: source, evidence: field?.evidence[0], original: undefined, label: undefined };
+}
+
+export function invoiceReference(value?: string | null) {
+  const trimmed = value?.trim();
+  return trimmed && /\p{Nd}/u.test(trimmed) ? trimmed : null;
 }
 
 const labels: Record<string, string> = {

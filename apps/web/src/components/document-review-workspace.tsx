@@ -9,7 +9,7 @@ import { DocumentCanvas, type DocumentSourceOption } from "@/components/document
 import { ConnectorLine } from "@/components/connector-line";
 import { IntakeStudioPanel, type InspectedField } from "@/components/intake-studio-panel";
 import { StaffReviewForm } from "@/components/staff-review";
-import { ReprocessDocumentsButton } from "@/components/review-actions";
+import { ReprocessDocumentsButton, ReviewActions } from "@/components/review-actions";
 import { AdvisoryPanel, Findings, sourceKey } from "@/components/review-evidence";
 import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,7 @@ import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import type { CaseActivity, CaseDetail, Company, Evidence, Finding, MasterVersion, ReviewAnalysis, ReviewWorkflow } from "@/lib/contracts";
-import { documentFieldLabel, label, sourceValue, timestamp } from "@/lib/format";
+import { documentFieldLabel, intakeField, invoiceReference, label, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 const documentTabs = ["B/L", "Invoice", "Packing list"] as const;
@@ -34,7 +34,7 @@ function tabToRole(tab: DocumentTab): "draft_bl" | "invoice" | "packing_list" {
 const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
 const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
-export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share }: {
+export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
   item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
 }) {
   const [chosenDocTab, setActiveDocTab] = useState<DocumentTab>();
@@ -47,7 +47,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const focusEvidenceOnClose = useRef(false);
   const source = useRef<HTMLDivElement>(null);
   const workspaceGridRef = useRef<HTMLDivElement>(null);
-  const master = analysis.analyzed_master;
+  const processing = analysis.state === "pending" || analysis.ai_state === "pending";
+  const reference = invoiceReference(item.detected_reference);
+  const master = analysis.analyzed_master ?? analysis.comparison_master;
   const sources = [
     ...item.documents.map((document) => ({
       id: document.id, name: document.original_filename, fileType: document.mime === "application/pdf" ? "PDF" : "Excel",
@@ -78,7 +80,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     ?? options.find((option) => option.key.endsWith(`:${activeRole}`))
     ?? options.find((option) => option.id === fallbackSource)
     ?? (!chosenDocTab ? options[0] : undefined);
-  const activeDocument = extractionSources.find((doc, index) => doc.role === activeRole && excerpts[index].key === current?.key);
+  const activeDocument = extractionSources.find((doc, index) => doc.role === activeRole && excerpts[index].key === current?.key)
+    ?? extractionSources.find((doc) => doc.role === activeRole);
   const file = sources.find((entry) => entry.id === current?.id);
   const selectedEvidence = selection?.document_id === file?.id ? selection : undefined;
   const tally: Record<Finding["outcome"], number> = { PASS: 0, WARNING: 0, MISMATCH: 0, NEEDS_REVIEW: 0 };
@@ -177,7 +180,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           <div className="flex min-w-0 items-center gap-1.5 text-label-md text-muted-foreground">
             <Link href="/inbox" className="shrink-0 hover:text-primary">Inbox</Link>
             <ChevronRight size={13} aria-hidden className="shrink-0" />
-            <span className="truncate font-mono text-code-tabular text-primary">{item.detected_reference ?? "Reference pending"}</span>
+            <span className="truncate font-mono text-code-tabular text-primary">{reference ?? "Reference pending"}</span>
             <ChevronRight size={13} aria-hidden className="shrink-0" />
             <span className="shrink-0">Document review</span>
           </div>
@@ -197,7 +200,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         </div>
         <div className="flex flex-wrap items-start justify-between gap-3 px-3 py-2.5">
           <div className="min-w-0">
-            <h1 className="break-words text-headline-lg">{item.detected_reference ?? item.subject ?? "Intake case"}</h1>
+            <h1 className="break-words text-headline-lg">{reference ?? "Intake case"}</h1>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-body-sm text-muted-foreground">
               <span>{item.company ?? "Unassigned"} · {label(item.channel)} · <time dateTime={item.created_at} className="font-mono text-code-tabular">{timestamp(item.created_at)}</time></span>
               <Status value={item.state} />
@@ -209,14 +212,19 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         </div>
         {!item.company_id && !item.import_id && !["approved", "rejected"].includes(item.state) && <AssignCompanyForm companies={companies} caseId={item.id} revision={analysis.revision} />}
         {metadata.length > 0 && <dl className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-4 xl:grid-cols-8">
-          {metadata.map(({ key, title, field }) => <div key={key} className="min-w-0 bg-background px-3 py-2">
-            <dt className="panel-label">{title}</dt>
-            <dd className={cn("mt-0.5 min-w-0 truncate text-label-md", ["bl_no", "container", "seal"].includes(key) && "font-mono text-code-tabular")} title={field.value ?? undefined}>
-              {field.evidence[0] ? <button type="button" className="data-link block max-w-full cursor-pointer truncate text-left"
-                onClick={() => inspect(field.evidence[0], { id: `field:${key}`, name: title, value: sourceValue(field), uncertain: field.status === "uncertain" })}>{field.value}</button> : field.value}
-              {field.status === "uncertain" && <span className="block text-warning">Uncertain</span>}
-            </dd>
-          </div>)}
+          {metadata.map(({ key, title, field }) => {
+            const text = intakeField(field);
+            const cite = text.evidence;
+            return <div key={key} className="min-w-0 bg-background px-3 py-2">
+              <dt className="panel-label">{title}</dt>
+              <dd className={cn("mt-0.5 min-w-0 truncate text-label-md", ["bl_no", "container", "seal"].includes(key) && "font-mono text-code-tabular")} title={text.value}>
+                {cite ? <button type="button" className="data-link block max-w-full cursor-pointer truncate text-left"
+                  onClick={() => inspect(cite, { id: `field:${key}`, name: title, value: sourceValue(field), uncertain: field.status === "uncertain" || text.label === "English proposal" })}>{text.value}</button> : text.value}
+                {text.label && <span className="block text-muted-foreground">{text.label}</span>}
+                {field.status === "uncertain" && <span className="block text-warning">Uncertain</span>}
+              </dd>
+            </div>;
+          })}
         </dl>}
       </header>
 
@@ -272,6 +280,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             <IntakeStudioPanel
               item={item}
               analysis={analysis}
+              intakeReference={reference}
+              cdcNames={stale ? [] : workflow.review?.cdc_names ?? []}
+              cdcControls={activeRole === "invoice" && ["needs_review", "ready_for_approval"].includes(item.state) &&
+                <details>
+                  <summary className="cursor-pointer text-primary">Select CDC Master List</summary>
+                  <ReviewActions caseId={item.id} revision={analysis.revision}
+                    selected={analysis.selected_master ?? master ?? undefined} versions={versions}
+                    companyId={item.company_id ?? undefined} canRegister={admin} pending={processing} showReprocess={false} />
+                </details>}
               document={activeDocument}
               activeEvidence={selectedEvidence}
               activeField={activeFieldInfo}

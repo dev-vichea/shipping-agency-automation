@@ -4,8 +4,10 @@ from decimal import Decimal
 
 from services.matching import candidate_score, normalize, translate
 
+from shipping_ai.documents.languages import languages
+
 from .schemas import Extraction, Finding, Item, LineComparison
-from .values import convert, decimal, display, field, identity, usable
+from .values import convert, decimal, display, field, source_identity, usable
 
 WEIGHT_TOLERANCE = Decimal("0.05")  # kilograms
 QUANTITY_TOLERANCE = Decimal("0.000001")
@@ -60,6 +62,13 @@ def compare(group, name, left, right, *, required=False, suffix=""):
             return result("WARNING", "Only one document supplies this value.")
         return None
 
+    if name in {"shipper", "supplier", "consignee", "notify_party"} and (
+        left.english and right.english
+        and left.english.status == right.english.status == "verified_company_alias"
+        and left.english.company_id and left.english.company_id == right.english.company_id
+    ):
+        return result("PASS", "Both printed names match the same verified company.")
+
     if name == "unit":
         if left.value == right.value:
             return result("PASS", "Units agree.")
@@ -102,7 +111,8 @@ def compare(group, name, left, right, *, required=False, suffix=""):
             else result("MISMATCH", "Source values differ beyond the comparison tolerance.")
         )
 
-    same = identity(left.value) == identity(right.value) and bool(identity(left.value))
+    source = source_identity(left.value)
+    same = bool(source) and source == source_identity(right.value)
     if same:
         return result("PASS", "Source values agree after normalization.")
     if name in {
@@ -191,9 +201,8 @@ def invoice_packing(invoice: Extraction, packing: Extraction) -> list[Finding]:
         left_source = usable(a.get("description")) or ""
         right_source = usable(b.get("description")) or ""
         conflicting_source = (
-            re.search(r"[\u3400-\u9fff]", left_source)
-            and re.search(r"[\u3400-\u9fff]", right_source)
-            and identity(left_source) != identity(right_source)
+            set(languages(left_source)) & set(languages(right_source)) & {"km", "zh"}
+            and source_identity(left_source) != source_identity(right_source)
         )
         if descriptions(left) & descriptions(right) and not conflicting_source:
             result.append(
@@ -497,6 +506,13 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
     if invoice:
         for item in invoice.items:
             values = item.fields
+            quantity = values["quantity"]
+            if quantity.review_reason == "ocr_quantity_conflicts_with_printed_amount":
+                result.append(finding(
+                    "extraction", "quantity", "NEEDS_REVIEW",
+                    "The OCR quantity conflicts with the printed price and amount. Check the original quantity.",
+                    quantity, key=f"extraction.conflict.quantity.{invoice.document_id}.{item.row}",
+                ))
             for key in ("unit_price", "amount"):
                 value = values[key]
                 if value.value is not None and value.currency is None:

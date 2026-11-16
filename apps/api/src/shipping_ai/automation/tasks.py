@@ -155,6 +155,8 @@ def finish(job: Claim, error: str | None, result=None) -> None:
                 )
                 if snapshot:
                     snapshot.ai_state = result[0] if result else "unavailable"
+                    if result and result[2] is not None:
+                        snapshot.translations = result[2]
             return
         run.ended_at = now
         run.state = "failed" if error else "succeeded"
@@ -176,7 +178,9 @@ def finish(job: Claim, error: str | None, result=None) -> None:
                     )
                 )
                 if snapshot:
-                    snapshot.ai_state, snapshot.ai_suggestions = result or ("unavailable", [])
+                    snapshot.ai_state, snapshot.ai_suggestions = result[:2] if result else ("unavailable", [])
+                    if result and result[2] is not None:
+                        snapshot.translations = result[2]
 
         db.add(
             ActivityEvent(

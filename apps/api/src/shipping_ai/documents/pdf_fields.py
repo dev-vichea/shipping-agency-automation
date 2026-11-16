@@ -8,8 +8,11 @@ from datetime import date, datetime
 import pymupdf
 
 from shipping_ai.review.schemas import ExtractedField, FieldCandidate
-from shipping_ai.review.values import decimal, field, identity
+from shipping_ai.review.values import decimal, field, source_identity, year_first_date
 
+from .languages import LABELS as LOCAL_LABELS
+from .languages import SEPARATORS, languages, localized, reference_text, spellings, title_variants
+from .languages import TITLES as LOCAL_TITLES
 from .pdf_layout import Layout, Line
 
 TITLES = (
@@ -27,6 +30,7 @@ TITLES = (
     ("waybill", r"(?:truck |air |sea )?way\s*bill(?: of lading)?"),
     ("bill_of_lading", r"(?:draft |original |copy |ocean |house )?bill of lading|提单"),
 )
+TITLES = tuple((key, localized(pattern, *LOCAL_TITLES.get(key, ()))) for key, pattern in TITLES)
 BILLS = {"bill_of_lading", "bill_confirmation", "waybill"}
 LABELS = {
     "bl_no": r"(?:truck )?(?:bill of lading|b\s*/?\s*l|way\s*bill|t\s*/?\s*b)[ .]*(?:no\.?|number)|提单号码?",
@@ -65,6 +69,18 @@ LABELS = {
     r"number of original bills|marks and (?:nos\.?|numbers)|export references|"
     r"pre carriage by|loading pier\s*/\s*terminal|运输条款|运输条件|唛头",
 }
+LABELS["contract_no"] = r"contract\s*(?:no\.?|number)"
+LABELS["destination_port"] += r"|destination"
+LOCAL_KEYS = {
+    "cargo_summary": "description",
+    "destination_port": "destination",
+    "count_unit": "unit",
+}
+LOCAL_PATTERNS = {
+    key: re.compile(rf"^(?:{spellings(*values)})")
+    for key in LABELS
+    if (values := LOCAL_LABELS.get(LOCAL_KEYS.get(key, key), ()))
+}
 PATTERNS = [
     (
         key,
@@ -78,7 +94,7 @@ PATTERNS = [
 NUM = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 UNITS = {
     "packages": (
-        r"packages?(?:\s*\(s\))?|pkgs?\.?|ctns?|cartons?|rolls?|boxes|件|箱",
+        r"packages?(?:\s*\(s\))?|pkgs?\.?|ctns?|cartons?|rolls?|boxes|件|箱|កញ្ចប់|ប្រអប់",
         {
             "PKG": "PKG",
             "CTN": "CTN",
@@ -87,10 +103,12 @@ UNITS = {
             "BOXES": "BOX",
             "件": "PKG",
             "箱": "CTN",
+            "កញ្ចប់": "PKG",
+            "ប្រអប់": "CTN",
         },
     ),
     "gross_weight": (
-        r"kg(?:s)?|kilograms?|lbs?|tonnes?|公斤|千克|吨",
+        r"kg(?:s)?|kilograms?|lbs?|tonnes?|公斤|千克|吨|噸|គីឡូក្រាម",
         {
             "KG": "KG",
             "KILOGRAM": "KG",
@@ -99,10 +117,12 @@ UNITS = {
             "公斤": "KG",
             "千克": "KG",
             "吨": "T",
+            "噸": "T",
+            "គីឡូក្រាម": "KG",
         },
     ),
     "net_weight": (
-        r"kg(?:s)?|kilograms?|lbs?|tonnes?|公斤|千克|吨",
+        r"kg(?:s)?|kilograms?|lbs?|tonnes?|公斤|千克|吨|噸|គីឡូក្រាម",
         {
             "KG": "KG",
             "KILOGRAM": "KG",
@@ -111,6 +131,8 @@ UNITS = {
             "公斤": "KG",
             "千克": "KG",
             "吨": "T",
+            "噸": "T",
+            "គីឡូក្រាម": "KG",
         },
     ),
     "measurement": (r"cbm|m³|m3", {"CBM": "CBM", "M3": "CBM", "M³": "CBM"}),
@@ -119,7 +141,7 @@ PARTIES = {"shipper", "consignee", "notify_party", "supplier", "billed_to", "car
 ROUTES = {"origin", "discharge", "delivery", "destination_port", "receipt"}
 DATES = {"issue_date", "invoice_date", "on_board_date", "eta", "etd"}
 CORP = re.compile(
-    r"(?:\bco(?:mpany)?|\bcorp(?:oration)?|\bltd|\blimited|\binc|\bllc|\bpte|\bgmbh|\bsarl|公司)[., )]*$",
+    r"(?:\bco(?:mpany)?|\bcorp(?:oration)?|\bltd|\blimited|\binc|\bllc|\bpte|\bgmbh|\bsarl|公司|ក្រុមហ៊ុន|លីមីតធីត)[., )]*$",
     re.I,
 )
 ADDRESS = re.compile(
@@ -148,9 +170,12 @@ def title_role(layout):
         for line in layout.lines:
             if line.box.y0 > layout.page.rect.height * 0.43:
                 continue
-            raw = line.text.strip(" |:*.")
             # A reference such as BILL OF LADING NO is not a primary title.
-            if re.fullmatch(pattern, raw, re.I):
+            if any(
+                re.fullmatch(pattern, value, re.I)
+                or SEPARATORS.sub("", value) in LOCAL_TITLES.get(key, ())
+                for value in title_variants(line.text) if value
+            ):
                 return key
     return None
 
@@ -160,11 +185,22 @@ def anchors(layout):
     for line in layout.lines:
         text = line.text
         start = len(text) - len(text.lstrip(" |*\"'"))
+        # Map a compact multilingual label back to its original token offsets.
+        chars = [(idx, char) for idx, char in enumerate(text[start:], start) if not SEPARATORS.fullmatch(char)]
+        compact = "".join(char for _, char in chars)
+        matches = []
         for key, pattern in PATTERNS:
-            match = pattern.match(text, start) if start == 0 else pattern.match(text[start:])
-            if not match:
-                continue
-            end = match.end() + start
+            match = pattern.match(text[start:])
+            local = LOCAL_PATTERNS.get(key)
+            local_match = local.match(compact) if local else None
+            end = max(
+                start + match.end() if match else 0,
+                chars[local_match.end() - 1][0] + 1 if local_match else 0,
+            )
+            if end:
+                matches.append((end, key))
+        if matches:
+            end, key = max(matches, key=lambda candidate: candidate[0])
             header = Line(
                 tuple(
                     w
@@ -178,9 +214,8 @@ def anchors(layout):
                 and not tail
                 and re.fullmatch(r"packages?|pkgs?\.?|ctns?", text.strip(" |:"), re.I)
             ):
-                break  # A unit printed under a number is not a second heading.
+                continue  # A unit printed under a number is not a second heading.
             output.append(Anchor(key, header, line.tail(len(text) - len(tail)), tail))
-            break
     return output
 
 
@@ -205,6 +240,8 @@ def numeric(key, text, default=None):
 
 
 def typed_date(text):
+    if standard := year_first_date(text.strip()):
+        return standard
     match = re.search(
         r"\b(?:20\d\d[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[-/ ](?:[A-Za-z]{3,9}|\d{1,2})[-/ ]20\d\d)\b",
         text,
@@ -273,7 +310,7 @@ def geometry(anchor, labels, layout):
     )
 
 
-def value_lines(anchor, labels, layout):
+def value_lines(anchor, labels, layout, *, row_pair=False):
     box = anchor.line.box
     area = geometry(anchor, labels, layout)
     below = layout.region(area, split=True)
@@ -302,10 +339,33 @@ def value_lines(anchor, labels, layout):
         line
         for line in layout.lines
         if line.box.x0 >= box.x1 + 2
-        and line.box.x0 - box.x1 <= min(125, layout.page.rect.width * 0.22)
+        and line.box.x0 - box.x1 <= (layout.page.rect.width * 0.42 if row_pair else min(125, layout.page.rect.width * 0.22))
         and abs(line.box.y0 - box.y0) <= max(box.height, line.box.height) * 0.55
         and not any(line.box.intersects(other.line.box) for other in labels if other != anchor)
     ]
+    if row_pair and right:
+        row_boundary = next(
+            (a for a in labels if a != anchor and abs(a.line.box.y0 - box.y0) <= box.height * .5
+             and box.x1 <= a.line.box.x0 <= right[0].box.x0),
+            None,
+        )
+        if not row_boundary:
+            first = right[0]
+            continuations = []
+            if anchor.key in PARTIES:
+                lower = min(
+                    (a.line.box.y0 for a in labels
+                     if a != anchor and a.line.box.y0 > first.box.y1 + 1
+                     and a.line.box.x0 <= first.box.x0),
+                    default=first.box.y1 + layout.height * 3,
+                )
+                continuations = [
+                    line for line in layout.lines
+                    if first.box.y0 + layout.height * .5 < line.box.y0 < lower
+                    and abs(line.box.x0 - first.box.x0) <= layout.height
+                    and line.box.x1 <= first.box.x1 + layout.height * 8
+                ]
+            return [first, *continuations[:3]]
     if anchor.key in UNITS:
         return below or right[:1]
     if anchor.key in PARTIES:
@@ -324,6 +384,7 @@ def contiguous_text(lines, *, party, height):
             or IGNORE_BLOCK.match(text)
             or (party and ADDRESS.search(text))
             or any(pattern.match(text) for _, pattern in PATTERNS)
+            or any(pattern.match(SEPARATORS.sub("", text)) for pattern in LOCAL_PATTERNS.values())
         ):
             if result:
                 break
@@ -367,7 +428,7 @@ class Observations:
             for rank, value in ranked:
                 numeric_value = decimal(value.value) if key in UNITS else None
                 canonical = (
-                    numeric_value if numeric_value is not None else identity(value.value),
+                    numeric_value if numeric_value is not None else source_identity(value.value),
                     value.unit,
                     value.currency,
                 )
@@ -420,7 +481,7 @@ def numeric_anchor(observations, layout, labels, anchor, lines, doc, rank):
         raw = line.text.strip(" |:*")
         if idx == 0 and anchor.tail.tokens and line == anchor.tail:
             raw = anchor.extra
-        if re.fullmatch(pattern, raw, re.I):
+        if re.fullmatch(pattern, raw, re.I) or SEPARATORS.sub("", raw) in LOCAL_TITLES.get(key, ()):
             units, dimension_line = normalized_unit(key, raw), line
             continue
         # A labeled row can carry two explicit dimensions in one table cell.
@@ -477,7 +538,7 @@ def trim_line(line, value):
         return line
     for end in range(1, len(line.tokens) + 1):
         first = Line(line.tokens[:end])
-        if identity(first.text).startswith(identity(value)):
+        if source_identity(first.text).startswith(source_identity(value)):
             return first
     return line
 
@@ -493,7 +554,10 @@ def collect_fields(layout: Layout, doc, obs: Observations, kind, *, rank=90):
             continue  # Delivery contacts further down are distinct from header parties.
         used.add(key)
         obs.authority.add(key)
-        lines = value_lines(anchor, labels, layout)
+        lines = value_lines(
+            anchor, labels, layout,
+            row_pair=kind in {"invoice", "packing_list"} and key not in UNITS and key != "cargo_summary",
+        )
         if key in UNITS:
             numeric_anchor(obs, layout, labels, anchor, lines, doc, rank)
             continue
@@ -539,8 +603,8 @@ def collect_fields(layout: Layout, doc, obs: Observations, kind, *, rank=90):
                 continue
             if key in DATES:
                 value = typed_date(raw)
-            elif key in {"bl_no", "invoice_no", "booking_no", "seal", "voyage"}:
-                value = raw if REF.fullmatch(raw) else None
+            elif key in {"bl_no", "invoice_no", "contract_no", "booking_no", "seal", "voyage"}:
+                value = raw if REF.fullmatch(raw) or (key != "seal" and reference_text(raw)) else None
             elif key == "container":
                 value = re.sub(r"[ -]", "", raw) if CONTAINER.fullmatch(raw) else None
             elif key == "container_type":
@@ -549,7 +613,10 @@ def collect_fields(layout: Layout, doc, obs: Observations, kind, *, rank=90):
                 value = (
                     raw
                     if len(raw) <= 72
-                    and sum(c.isalpha() for c in raw) >= 3
+                    and (
+                        sum(c.isalpha() for c in raw) >= 3
+                        or (sum(c.isalpha() for c in raw) >= 2 and languages(raw) == ["zh"])
+                    )
                     and not any(pattern.match(raw) for _, pattern in PATTERNS)
                     else None
                 )

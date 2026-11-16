@@ -239,6 +239,10 @@ corepack pnpm test:e2e
 Use `SHIPPING_E2E_URL` if testing on a different web origin. CI runs the
 new backend and browser checks with synthetic data and no live integrations.
 
+## Multilingual document intake
+
+See [multilingual document processing](multilingual-document-processing.md) for OCR language packs, optional Qwen translation, staff review, and regression measurements.
+
 ## Local trust boundary
 
 All active staff have access to this one internal workspace. Phase 1 does not

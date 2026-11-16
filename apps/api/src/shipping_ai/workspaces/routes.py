@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
@@ -18,6 +18,7 @@ from shipping_ai.core.access import (
 )
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.core.config import settings
+from shipping_ai.documents.languages import languages
 from shipping_ai.intakes.schemas import ORM, Key, Label
 from shipping_ai.models import (
     AutomationRun,
@@ -41,13 +42,21 @@ class MemberInput(BaseModel):
     email: EmailStr
     role: Literal["admin", "operator"] = "operator"
 
-
 class CompanyInput(BaseModel):
     name: Label
+    verified_english_name: Label | None = None
     aliases: list[Label] = Field(default_factory=list, max_length=30)
     identifier: Key | None = None
     contact_name: Label | None = None
     contact_email: EmailStr | None = None
+
+
+    @field_validator("verified_english_name")
+    @classmethod
+    def valid_english_alias(cls, value):
+        if value is not None and languages(value) != ["en"]:
+            raise ValueError("Enter the verified English company name")
+        return value
 
 
 class CompanyView(CompanyInput, ORM):
@@ -206,7 +215,7 @@ def company_detail(company_id: UUID, db: DB, _user: Staff):
 def edit_company(company_id: UUID, payload: CompanyInput, db: DB, _user: Staff):
     require_workspace(db, admin=True)
     company = visible_company(db, company_id)
-    for name, value in payload.model_dump().items():
+    for name, value in payload.model_dump(exclude_unset=True).items():
         setattr(company, name, value)
     company.identity_key = identity_key(payload.name)
     commit_unique(db, "A company with that name already exists")

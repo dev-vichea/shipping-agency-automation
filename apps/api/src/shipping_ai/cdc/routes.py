@@ -7,12 +7,11 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from services.extraction import extract_cdc, rows_from_workbook
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
-
-from services.extraction import extract_cdc, rows_from_workbook
 
 from shipping_ai.core.access import master_access, require_workspace, visible_company
 from shipping_ai.core.auth import DB, Staff, browser_origin

@@ -299,7 +299,7 @@ export function CargoMatrix({ analysis, onInspect, onHover, activeEvidence }: {
   const rows = allLines.filter((line) => filter === "all" || line.outcome !== "PASS").map((line) => {
     const inv = invoice.get(line.invoice_row ?? 0);
     const pkg = packing.get(line.packing_row ?? 0);
-    const description = inv?.english_description?.value ? inv.english_description : inv?.description ?? pkg?.description;
+    const description = inv?.english_description?.status === "present" ? inv.english_description : inv?.description ?? pkg?.description;
     const hsCode = inv?.hs_code?.value ?? pkg?.hs_code?.value;
     const title = [hsCode, description?.value ?? "Missing description"].filter(Boolean).join(" · ");
     const numbers = [inv?.quantity, pkg?.quantity, inv?.unit_price, inv?.amount];

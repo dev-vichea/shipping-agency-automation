@@ -177,6 +177,7 @@ class Company(Identified, Created, Base):
         ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
     )
     identity_key: Mapped[str] = mapped_column(String(254))
+    verified_english_name: Mapped[str | None] = mapped_column(String(254))
     aliases: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
     identifier: Mapped[str | None] = mapped_column(String(160))
     contact_name: Mapped[str | None] = mapped_column(String(254))
@@ -363,6 +364,7 @@ class ReviewSnapshot(Identified, Created, Base):
     ai_prompt_version: Mapped[str | None] = mapped_column(String(32))
     ai_trace_id: Mapped[UUID | None] = mapped_column()
     ai_suggestions: Mapped[list] = mapped_column(JSONB, default=list)
+    translations: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class DocumentExtraction(Identified, Created, Base):

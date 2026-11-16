@@ -6,7 +6,7 @@ from io import BytesIO
 from openpyxl import load_workbook
 from services.permit_exporter import export_permit_draft
 
-from shipping_ai.cdc.master import BALANCE_MAX_AGE, company_key
+from shipping_ai.cdc.master import BALANCE_MAX_AGE, matches_master_company
 from shipping_ai.review.compare import compare, item_pairs
 from shipping_ai.review.schemas import MasterItem
 from shipping_ai.review.values import convert, decimal, usable
@@ -18,7 +18,7 @@ def prepare(invoice, packing, master, mappings):
     if (
         not master
         or not master.approval_ref
-        or master.company_key != company_key(usable(invoice.fields.get("consignee")))
+        or not matches_master_company(invoice, master)
     ):
         return None, "Select a verified CDC workbook for the invoice consignee."
     if (
@@ -39,7 +39,7 @@ def prepare(invoice, packing, master, mappings):
     invoice_lines, packing_lines, selections, linked = [], [], [], []
     for i, line in enumerate(invoice.items):
         cdc = rows.get(lines.get(line.row))
-        if not cdc:
+        if not cdc or not usable(cdc.description):
             return None, f"Select and verify the CDC item for invoice row {line.row}."
         f = line.fields
         quantity = decimal(usable(f["quantity"]))
@@ -60,7 +60,7 @@ def prepare(invoice, packing, master, mappings):
             return None, f"Invoice row {line.row} has an unresolved CDC price check."
         quantity_totals[cdc.row] += quantity
         value_totals[cdc.row] += amount
-        description = usable(f.get("english_description")) or usable(f["description"])
+        description = usable(cdc.description)
         invoice_lines.append(
             {
                 "english_provided": description,

@@ -29,8 +29,8 @@ export function ReprocessDocumentsButton({ caseId, revision }: { caseId: string;
   </>;
 }
 
-export function ReviewActions({ caseId, revision, selected, versions, pending, canRegister, companyId }: {
-  canRegister?: boolean; companyId?: string; caseId: string; revision: number; selected?: MasterVersion; versions: MasterVersion[]; pending: boolean;
+export function ReviewActions({ caseId, revision, selected, versions, pending, canRegister, companyId, showReprocess = true }: {
+  canRegister?: boolean; showReprocess?: boolean; companyId?: string; caseId: string; revision: number; selected?: MasterVersion; versions: MasterVersion[]; pending: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -72,9 +72,9 @@ export function ReviewActions({ caseId, revision, selected, versions, pending, c
         </NativeSelect>
       </div>
       <Button type="submit" variant="outline" disabled={busy}>Apply version</Button>
-      <Button type="button" variant="outline" disabled={busy || pending} onClick={() =>
+      {showReprocess && <Button type="button" variant="outline" disabled={busy || pending} onClick={() =>
         void submit(() => write(`/intakes/${caseId}/process`, {expected_revision: revision}))
-      }>Reprocess documents</Button>
+      }>Reprocess documents</Button>}
     </form>
     {selected && <p className="text-body-sm text-muted-foreground">Balance date: {selected.balance_as_of ?? "Unknown"} ·{" "}
       <a className="font-medium text-primary hover:underline" href={`/api/v1/cdc/versions/${selected.id}/download`}>Download selected workbook</a>

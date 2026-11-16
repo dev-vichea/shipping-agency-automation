@@ -8,7 +8,7 @@ from uuid import UUID
 import pymupdf
 
 from shipping_ai.review.schemas import Evidence
-from shipping_ai.review.values import clean, identity
+from shipping_ai.review.values import clean, source_identity
 
 
 @dataclass(frozen=True)
@@ -214,17 +214,17 @@ class Layout:
 
     def locate(self, value):
         """Resolve a flat parser value only when its complete normalized text can be located."""
-        expected = identity(value)
+        expected = source_identity(value)
         if not expected:
             return []
         for line in self.lines:
             for i, word in enumerate(line.tokens):
-                fragment = identity(word.text)
+                fragment = source_identity(word.text)
                 if not fragment or fragment[0] != expected[0]:
                     continue
                 for j in range(i + 1, min(len(line.tokens), i + 28) + 1):
                     span = Line(line.tokens[i:j])
-                    actual = identity(span.text)
+                    actual = source_identity(span.text)
                     if actual == expected:
                         return [span]
                     if not expected.startswith(actual):

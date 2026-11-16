@@ -10,11 +10,12 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 from sqlalchemy import select
 
 from shipping_ai.cdc.master import check_cdc
+from shipping_ai.documents.languages import languages, token_signature
 from shipping_ai.intakes.schemas import SafeText
 from shipping_ai.models import CdcMasterVersion, DocumentExtraction, ReviewSnapshot, StaffReview
 from shipping_ai.permits.drafts import prepare
 from shipping_ai.review.compare import AMOUNT_TOLERANCE, review_documents
-from shipping_ai.review.schemas import Extraction
+from shipping_ai.review.schemas import EnglishText, Extraction, MasterItem
 from shipping_ai.review.values import clean, currency, decimal, field, unit, usable
 
 Note = Annotated[
@@ -111,7 +112,8 @@ def apply_corrections(docs, corrections):
     index = {(doc.document_id, doc.role): doc for doc in docs}
     seen = set()
     changes = []
-    for edit in corrections:
+    # Validate English against any source correction submitted in the same review.
+    for edit in sorted(corrections, key=lambda entry: entry.name == "english_description"):
         key = (edit.document_id, edit.role, edit.row, edit.name)
         doc = index.get(key[:2])
         row = next((item for item in doc.items if item.row == edit.row), None) if doc else None
@@ -144,9 +146,17 @@ def apply_corrections(docs, corrections):
             value = unit(value)
         if not value:
             raise HTTPException(422, "A correction must supply a value")
+        if edit.name == "english_description" and row:
+            source = values["description"]
+            if languages(value) != ["en"] or token_signature(value)[1] != token_signature(source.value or "")[1]:
+                raise HTTPException(422, "Enter an English description preserving the source numbers.")
         if edit.name == "invoice_no" and len(value) > 160:
             raise HTTPException(422, "Invoice reference is too long")
         values[edit.name] = field(value, *original.evidence, unit=dimension, currency=code)
+        if edit.name == "english_description" and row:
+            source.english = EnglishText(
+                value=value, status="staff_verified", evidence=source.evidence,
+            )
         changes.append(
             {
                 "edit": edit.model_dump(mode="json"),
@@ -189,6 +199,11 @@ def blockers_for(docs, resolutions):
                 blockers.append(
                     f"Invoice row {item.row} requires a description, positive quantity and unit."
                 )
+            if (
+                set(languages(usable(f["description"]))) & {"km", "zh", "und"}
+                and not usable(f.get("english_description"))
+            ):
+                blockers.append(f"Invoice row {item.row} requires a verified English goods description.")
             if (
                 price is None
                 or amount is None
@@ -276,11 +291,28 @@ def review_payload(db, snapshot, docs, request):
         blockers.insert(
             0, "A staff correction was requested. Save a new review after resolving it."
         )
-    permit_pending = None
+    permit_pending, cdc_names = None, []
     if not blockers:
-        _, permit_pending = prepare(
-            invoice, roles["packing_list"], master, request.model_dump()["mappings"]
-        )
+        packing = roles["packing_list"]
+        arguments, permit_pending = prepare(invoice, packing, master, request.model_dump()["mappings"])
+        if arguments:
+            rows = {item["row"]: MasterItem.model_validate(item) for item in master.items}
+            mappings = {entry.invoice_row: entry.master_row for entry in request.mappings}
+            cdc_names = [
+                {
+                    "invoice_document_id": str(invoice.document_id),
+                    "invoice_row": item.row,
+                    "packing_document_id": str(packing.document_id),
+                    "packing_row": packing_line["row"],
+                    "master_row": mappings[item.row],
+                    "description": line["english_provided"],
+                    "evidence": [
+                        cite.model_dump(mode="json")
+                        for cite in rows[mappings[item.row]].description.evidence
+                    ],
+                }
+                for item, line, packing_line in zip(invoice.items, arguments[2], arguments[4], strict=True)
+            ]
     payload = {
         **request.model_dump(mode="json", exclude={"expected_review_id"}),
         "analysis_id": str(snapshot.id),
@@ -294,5 +326,6 @@ def review_payload(db, snapshot, docs, request):
         "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
         "blockers": blockers,
         "permit_pending": permit_pending,
+        "cdc_names": cdc_names,
     }
     return payload

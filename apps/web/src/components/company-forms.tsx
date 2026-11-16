@@ -21,6 +21,7 @@ export function CompanyForm({ company }: { company?: Company }) {
     void submit(async () => {
       const result = await write<Company>(company ? `/companies/${company.id}` : "/companies", {
         name: data.get("name"),
+        verified_english_name: data.get("verified_english_name") || null,
         identifier: data.get("identifier") || null,
         contact_name: data.get("contact_name") || null,
         contact_email: data.get("contact_email") || null,
@@ -37,6 +38,7 @@ export function CompanyForm({ company }: { company?: Company }) {
 
   return <form className="space-y-4" onSubmit={handle}>
     <Field label="Company name"><Input name="name" maxLength={254} required defaultValue={company?.name} /></Field>
+    <Field label="Verified English name"><Input name="verified_english_name" maxLength={254} defaultValue={company?.verified_english_name ?? ""} /></Field>
     <Field label="Company identifier"><Input name="identifier" maxLength={160} defaultValue={company?.identifier ?? ""} /></Field>
     <Field label="Aliases (one per line)"><textarea name="aliases" rows={4} className="rounded-control border p-2" defaultValue={company?.aliases.join("\n")} /></Field>
     <Field label="Contact name"><Input name="contact_name" maxLength={254} defaultValue={company?.contact_name ?? ""} /></Field>
