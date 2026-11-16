@@ -111,6 +111,7 @@ export type Evidence = {
   page: number | null;
   line: number | null;
   raw: string | null;
+  bbox?: [number, number, number, number] | null;
 };
 
 export type ExtractedField = {

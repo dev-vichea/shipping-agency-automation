@@ -9,6 +9,7 @@ import { DocumentCanvas, type DocumentSourceOption } from "@/components/document
 import { ConnectorLine } from "@/components/connector-line";
 import { IntakeStudioPanel, type InspectedField } from "@/components/intake-studio-panel";
 import { StaffReviewForm } from "@/components/staff-review";
+import { ReprocessDocumentsButton } from "@/components/review-actions";
 import { AdvisoryPanel, Findings, sourceKey } from "@/components/review-evidence";
 import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
@@ -176,6 +177,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           </div>
           <div className="flex flex-wrap gap-2">
             <RefreshButton />
+            {["needs_review", "ready_for_approval", "failed"].includes(item.state) && (
+              <ReprocessDocumentsButton caseId={item.id} revision={analysis.revision} />
+            )}
             {share}
             <SheetTrigger asChild>
               <Button variant="outline" size="sm" type="button" className="border-intelligence-border bg-intelligence-fill text-intelligence hover:bg-intelligence-border">

@@ -14,8 +14,10 @@ from sqlalchemy import func, select
 from shipping_ai.ai.provider import InvalidAdvisory, OllamaProvider, review_context
 from shipping_ai.cdc.master import check_cdc, company_key, parse_master
 from shipping_ai.core.config import Settings
+from shipping_ai.documents.bill_scan import ScanLine, read_fields
 from shipping_ai.documents.extract import extract
 from shipping_ai.review.compare import line_comparisons, overall, review_documents
+from shipping_ai.review.schemas import Evidence
 
 API = "/api/v1"
 
@@ -45,6 +47,74 @@ def test_extract_and_compare_sanitized_supplier_and_bill():
         for f in findings
         if f.group == "transport"
     )
+
+
+def test_scan_locates_values_in_their_printed_columns():
+    with pymupdf.open() as pdf:
+        page = pdf.new_page()
+        for x, y, text in (
+            (45, 45, "BILL OF LADING"),
+            (415, 60, "BILL OF LADING NUMBER"),
+            (415, 79, "BLR1234567"),
+            (45, 100, "SHIPPER"),
+            (45, 118, "Sample Trading Limited"),
+            (45, 143, "CONSIGNEE"),
+            (45, 162, "Sample Import Company"),
+            (45, 232, "PORT OF LOADING"),
+            (264, 232, "PORT OF DISCHARGE"),
+            (45, 250, "Harbor Alpha"),
+            (264, 250, "Harbor Beta"),
+            (305, 330, "GROSS WEIGHT"),
+            (450, 330, "TARE"),
+            (305, 348, "KGS"),
+            (450, 348, "KGS"),
+            (305, 363, "5,480.25"),
+            (450, 363, "3200"),
+            (45, 362, "55 PACKAGES"),
+        ):
+            page.insert_text((x, y), text, fontsize=10)
+        pix = page.get_pixmap(dpi=150, colorspace=pymupdf.csGRAY)
+        with pymupdf.open() as scan:
+            scan.new_page(width=page.rect.width, height=page.rect.height).insert_image(
+                page.rect, pixmap=pix
+            )
+            data = scan.tobytes()
+
+    [bill] = extract(data, "scanned.pdf", uuid4(), "other")
+    assert bill.role == "draft_bl" and bill.method == "tesseract"
+    assert bill.status == "partial"
+    for key, value in (
+        ("bl_no", "BLR1234567"),
+        ("origin", "Harbor Alpha"),
+        ("destination", "Harbor Beta"),
+        ("gross_weight", "5480.25"),
+        ("packages", "55"),
+    ):
+        extracted = bill.fields[key]
+        assert extracted.value == value and extracted.status == "uncertain"
+        [citation] = extracted.evidence
+        assert citation.page == 1 and all(0 < coordinate < 1 for coordinate in citation.bbox)
+    assert bill.fields["gross_weight"].unit == "KG"
+    assert bill.fields.get("net_weight") is None
+
+
+def test_scan_joins_fragments_of_a_printed_label():
+    doc = uuid4()
+    lines = [
+        ScanLine(pymupdf.Rect(*box), value, Evidence(document_id=doc, page=1, line=index), [], 90)
+        for index, (box, value) in enumerate(
+            (
+                ((200, 32, 241, 40), "BILL OF LA"),
+                ((242, 33, 294, 40), "DING NUMBER"),
+                ((400, 48, 460, 57), "EXPORT1234"),
+                ((220, 49, 270, 57), "BLR1234567"),
+            ),
+            1,
+        )
+    ]
+    fields = read_fields(lines)
+    assert fields["bl_no"].value == "BLR1234567"
+    assert fields["bl_no"].evidence == [lines[-1].evidence]
 
 
 def test_merged_layout_and_missing_formula_value():

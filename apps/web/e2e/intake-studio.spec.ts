@@ -52,7 +52,7 @@ test("intake review shows detected fields and links goods to their source", asyn
     }).toBeLessThan(2);
   }
 
-  await expect(tabs.getByRole("button", { name: "B/L", exact: true })).toHaveAttribute("aria-pressed", "true");
+  await expect(tabs.getByRole("button", { name: /^B\/L(?:\s|$)/ })).toHaveAttribute("aria-pressed", "true");
   await expect(details.getByRole("button", { name: "B/L Number DEMOBL0001" })).toBeVisible();
   await expect(details.getByText("Vessel", { exact: true })).toHaveCount(0);
   await page.getByRole("region", { name: "Goods", exact: true })
@@ -89,10 +89,19 @@ test("intake review shows detected fields and links goods to their source", asyn
     await route.fulfill({ response, json: { ...(await response.json()), box: null } });
   }, { times: 1 });
   await details.getByRole("button", { name: /^Shipper/ }).click();
+  await expect(source.getByRole("button", { name: "Raw Excerpt", exact: true })).toBeVisible();
+  await expect(target).toHaveCount(0);
+  await source.getByRole("button", { name: "Raw Excerpt", exact: true }).click();
   await expect(target).toContainText("Shipper");
   await expectConnectorAtTarget();
+  await billNumber.click();
+  await expect(target).toContainText("DEMOBL0001");
+  await expectConnectorAtTarget();
+  await source.getByRole("button", { name: "Document Canvas", exact: true }).click();
+  await expect(source.getByRole("img", { name: "Source citation bounding box" })).toBeVisible();
+  await expectConnectorAtTarget();
 
-  await tabs.getByRole("button", { name: "Invoice", exact: true }).click();
+  await tabs.getByRole("button", { name: /^Invoice(?:\s|$)/ }).click();
   await expect(connector).toBeHidden();
   await expect(details.getByText("Invoice Number", { exact: true })).toBeVisible();
   await expect(details.getByText("B/L Number", { exact: true })).toHaveCount(0);
@@ -103,7 +112,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(source.locator('td[data-connector-target="true"]')).toHaveText("12");
   await expectConnectorAtTarget();
 
-  await tabs.getByRole("button", { name: "Packing list", exact: true }).click();
+  await tabs.getByRole("button", { name: /^Packing list(?:\s|$)/ }).click();
   const packedItem = goods.getByRole("row").filter({ hasText: "Woven label" });
   await packedItem.getByRole("button", { name: "10 PCS", exact: true }).click();
   await expect(source.getByLabel("Worksheet")).toHaveValue("PackingList");

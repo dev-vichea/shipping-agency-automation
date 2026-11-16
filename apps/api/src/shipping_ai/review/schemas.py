@@ -16,6 +16,7 @@ class Evidence(BaseModel):
     page: int | None = None
     line: int | None = None
     raw: str | None = None
+    bbox: tuple[float, float, float, float] | None = None
 
 
 class ExtractedField(BaseModel):

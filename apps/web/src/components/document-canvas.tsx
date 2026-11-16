@@ -14,7 +14,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { sourceKey } from "@/components/review-evidence";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -89,7 +89,7 @@ export function DocumentCanvas({
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
   const [page, setPage] = useState(evidence?.page ?? 1);
-  const [viewMode, setViewMode] = useState<"document" | "excerpt">();
+  const [viewMode, setViewMode] = useState<"document" | "excerpt">("document");
   const [isExpanded, setIsExpanded] = useState(false);
   const previewPageSize = 25;
   const currentOption = options.find((opt) => opt.key === currentKey);
@@ -113,7 +113,6 @@ export function DocumentCanvas({
   const [previousEvidence, setPreviousEvidence] = useState(evidence);
   if (evidence !== previousEvidence) {
     setPreviousEvidence(evidence);
-    if (evidence) setViewMode(undefined);
     if (evidence?.page && isPdf) {
       setPage(evidence.page);
     }
@@ -125,7 +124,7 @@ export function DocumentCanvas({
     }
   }
 
-  const selection = page === evidence?.page ? evidence.line : null;
+  const selection = page === evidence?.page && !evidence.bbox ? evidence.line : null;
   const pdfPageUrl = file && isPdf ? `/api/v1/documents/${file.id}/pages/${page}?rotation=${rotation}` : "";
   const pdfInfoUrl = selection ? `${pdfPageUrl}&line=${selection}` : pdfPageUrl;
   const currentPdf = pdfResponse?.url === pdfInfoUrl ? pdfResponse : undefined;
@@ -194,25 +193,36 @@ export function DocumentCanvas({
   const pdfImageUrl = file && isPdf ? `/api/v1/documents/${file.id}/pages/${page}/image?rotation=${rotation}` : null;
   const hasPdfError = pdfError || (pdfImageUrl ? brokenPdfImage === pdfImageUrl : false);
   const pdfLoading = isPdf && !pdfInfo && !hasPdfError;
-  const box = currentPdf?.info?.box;
+  const citedBox = page === evidence?.page ? evidence.bbox : undefined;
+  const box = useMemo(() => {
+    if (!citedBox) return currentPdf?.info?.box;
+    const [x, y, width, height] = citedBox;
+    switch (rotation) {
+      case 90: return [1 - y - height, x, height, width];
+      case 180: return [1 - x - width, 1 - y - height, width, height];
+      case 270: return [y, 1 - x - width, height, width];
+      default: return citedBox;
+    }
+  }, [citedBox, currentPdf?.info?.box, rotation]);
   const totalPages = isPdf ? pdfInfo?.pages ?? 1 : worksheet?.total ?? 1;
   const citationKey = evidence && sourceKey(evidence);
   const excerptLines = currentOption?.lines ?? [];
-  const showExcerpt = viewMode === "excerpt" || (viewMode === undefined && isPdf && Boolean(
-    evidence?.raw && (!evidence.page || (evidence.page === page && currentPdf && (!box || hasPdfError))),
-  ));
+  const showExcerpt = viewMode === "excerpt";
+  const locationUnavailable = isPdf && !showExcerpt && evidence && !box
+    && (!evidence.page || (page === evidence.page && currentPdf));
   const excerptMatch = showExcerpt && evidence ? (
     excerptLines.find((line) => sourceKey(line) === citationKey)
     ?? excerptLines.find((line) => line.sheet && line.sheet === evidence.sheet && line.row === evidence.row)
   ) : undefined;
-  const lines = showExcerpt && evidence?.raw && !excerptMatch
-    ? [...excerptLines, evidence] : excerptLines;
+  const lines = showExcerpt && evidence?.raw
+    ? excerptMatch ? excerptLines.map((line) => line === excerptMatch ? evidence : line) : [...excerptLines, evidence]
+    : excerptLines;
 
   useEffect(() => {
     const viewport = canvasRef.current;
     const target = viewport?.querySelector<HTMLElement>("[data-connector-target]");
     if (viewport && target) revealCitation(target, viewport);
-  }, [evidence, box, worksheet, showExcerpt, zoom, isExpanded, hasPdfError]);
+  }, [evidence, box, pdfInfo, worksheet, showExcerpt, zoom, isExpanded, hasPdfError]);
 
   return (
     <div
@@ -281,6 +291,10 @@ export function DocumentCanvas({
           </Button>
         </div>
       </div>
+
+      {locationUnavailable && <p role="status" className="border-b bg-card px-3 py-2 text-xs text-muted-foreground">
+        PDF highlight unavailable for this field. Its source text is in Raw Excerpt.
+      </p>}
 
       {/* THE CANVAS VIEWPORT CONTAINER */}
       <div className="relative flex-1 w-full h-full min-h-0 overflow-hidden">
@@ -399,7 +413,7 @@ export function DocumentCanvas({
             {lines.length ? (
               <ol className="divide-y divide-border/60">
                 {lines.map((line, idx) => {
-                  const isTarget = line === (excerptMatch ?? evidence);
+                  const isTarget = line === evidence || line === excerptMatch;
                   return (
                     <li
                       key={idx}
@@ -460,17 +474,16 @@ export function DocumentCanvas({
                 {box && (
                   <div
                     data-connector-target="true"
-                    className="absolute rounded-xs border-2 border-primary bg-primary/20 shadow-lg ring-2 ring-primary/40 ring-offset-1 pointer-events-none"
+                    className="pointer-events-none absolute"
                     style={{
-                      left: `${box[0] * 100}%`,
-                      top: `${box[1] * 100}%`,
-                      width: `${box[2] * 100}%`,
-                      height: `${box[3] * 100}%`,
+                      left: `max(0px, calc(${box[0] * 100}% - 4px))`,
+                      top: `max(0px, calc(${box[1] * 100}% - 3px))`,
+                      right: `max(0px, calc(${(1 - box[0] - box[2]) * 100}% - 4px))`,
+                      bottom: `max(0px, calc(${(1 - box[1] - box[3]) * 100}% - 3px))`,
                     }}
                   >
-                    {/* Anchor Pin Node */}
                     <span role="img" aria-label="Source citation bounding box"
-                      className="absolute -left-1.5 top-1/2 -translate-y-1/2 size-2.5 rounded-full bg-primary ring-2 ring-white dark:ring-slate-900" />
+                      className="absolute inset-0 rounded-xs border-2 border-primary bg-primary/20" />
 
                     <div
                       className={cn(

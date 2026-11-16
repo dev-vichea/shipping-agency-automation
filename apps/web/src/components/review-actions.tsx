@@ -1,13 +1,33 @@
 "use client";
 
 import { NativeSelect } from "@/components/ui/native-select";
-import { useState, type FormEvent } from "react";
+import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RegisterMasterDialog } from "@/components/register-master-dialog";
 import { write } from "@/lib/client-api";
 import type { MasterVersion } from "@/lib/contracts";
+
+export function ReprocessDocumentsButton({ caseId, revision }: { caseId: string; revision: number }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState("");
+  return <>
+    <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() =>
+      startTransition(async () => {
+        setError("");
+        try {
+          await write(`/intakes/${caseId}/process`, { expected_revision: revision });
+          router.refresh();
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "Could not reprocess the documents.");
+        }
+      })
+    }>{pending ? "Queueing…" : "Reprocess documents"}</Button>
+    {error && <span role="alert" className="field-error">{error}</span>}
+  </>;
+}
 
 export function ReviewActions({ caseId, revision, selected, versions, pending, canRegister, companyId }: {
   canRegister?: boolean; companyId?: string; caseId: string; revision: number; selected?: MasterVersion; versions: MasterVersion[]; pending: boolean;

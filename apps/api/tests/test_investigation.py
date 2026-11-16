@@ -135,14 +135,15 @@ def test_rechecks_bad_initial_ocr_with_two_real_ocr_passes(staff, monkeypatch):
     from shipping_ai.automation.tasks import drain
     from shipping_ai.documents import extract as adapter
 
-    original_extract = adapter.extract_bill
+    original_scan = adapter.scan_bill
 
-    # Inject the initial recognition error at the legacy adapter boundary only.
-    def legacy_ocr(data, name):
-        result = original_extract(data, name)
-        assert result["ocr_used"]
-        result["raw_text"] = result["raw_text"].replace("531", "513")
-        return result
+    # Inject a recognition error in the initial extraction only.
+    def initial_ocr(pdf, document_id):
+        fields, excerpts, is_bill = original_scan(pdf, document_id)
+        packages = fields["packages"]
+        assert packages.value == "531"
+        packages.value = "513"
+        return fields, excerpts, is_bill
 
     calls = []
 
@@ -150,7 +151,7 @@ def test_rechecks_bad_initial_ocr_with_two_real_ocr_passes(staff, monkeypatch):
         calls.append(context)
         return {"tool": context["available"][0]["tool"]}
 
-    monkeypatch.setattr(adapter, "extract_bill", legacy_ocr)
+    monkeypatch.setattr(adapter, "scan_bill", initial_ocr)
     monkeypatch.setattr(OllamaProvider, "choose_tool", choose)
     monkeypatch.setattr(
         OllamaProvider,

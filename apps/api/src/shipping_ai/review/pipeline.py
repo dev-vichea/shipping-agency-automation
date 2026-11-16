@@ -36,7 +36,7 @@ from .compare import finding, overall, review_documents
 from .schemas import Candidate, Extraction, Finding
 from .values import usable
 
-RULES_VERSION = "2.2"
+RULES_VERSION = "2.3"
 MAX_ACTIVE_DOCUMENTS = 12
 ANALYSIS_BUDGET_SECONDS = 180
 

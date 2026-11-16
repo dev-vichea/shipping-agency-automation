@@ -100,7 +100,10 @@ class OllamaProvider:
                         "For transport, container, seal, voyage or route findings, choose different or unclear and compare_source. "
                         "For CDC findings, use check_master_version or check_balance. "
                         "Use not_applicable only when no sensible action applies. Do not invent "
-                        "numbers, names, facts, approvals or CDC eligibility. Suggest only manual "
+                        "numbers, names, facts, approvals or CDC eligibility. For a source marked "
+                        "scanned, ask staff to check the indicated PDF location. For port, weight, "
+                        "and identifier findings, ask staff to compare the printed label and value "
+                        "in the same field or column. Suggest only manual "
                         "checks using the supplied action enum. Return only JSON."
                     ),
                     "prompt": prompt,
@@ -178,7 +181,7 @@ class OllamaProvider:
             raise InvalidAdvisory() from None
 
 
-PROMPT_VERSION = "review-2.1"
+PROMPT_VERSION = "review-2.2"
 
 
 class Suggestion(BaseModel):
@@ -227,6 +230,8 @@ def review_context(findings):
             "outcome": item.outcome,
             "issue": item.explanation[:160],
         }
+        if any(source.bbox for source in item.evidence):
+            entry["source_kind"] = "scanned"
         if item.group in {"invoice_packing", "cdc"} and item.field == "description":
             for key, value in (("description_a", item.left), ("description_b", item.right)):
                 if value:

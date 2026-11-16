@@ -20,6 +20,8 @@ from services.packing import extract_packing
 from shipping_ai.review.schemas import Evidence, Extraction, Item, Role
 from shipping_ai.review.values import UNIT_ALIASES, clean, currency, decimal, field, folded, unit
 
+from .bill_scan import scan_bill
+
 PDF_LOCK = Lock()
 
 MAX_ROWS = 5000
@@ -54,9 +56,9 @@ META_LABELS = {
         r"^(?:consignee|to\s*:\s*messers|ship to|sold to|收货人)\s*[:：]?\s*$", re.I
     ),
     "notify_party": re.compile(r"^(?:notify party|通知方)\s*[:：]?\s*$", re.I),
-    "origin": re.compile(r"^(?:from|port of loading|起运港|装船口岸)\s*[:：]?\s*$", re.I),
+    "origin": re.compile(r"^(?:from|port of loading|起运港|起运地|装船口岸)\s*[:：]?\s*$", re.I),
     "destination": re.compile(
-        r"^(?:destination|port of discharge|目的港|目的地)\s*[:：]?\s*$", re.I
+        r"^(?:to|destination|port of discharge|目的港|目的地)\s*[:：]?\s*$", re.I
     ),
     "container": re.compile(r"^(?:container(?:\s*(?:no\.?|number))?|集装箱号)\s*[:：]?\s*$", re.I),
     "seal": re.compile(r"^(?:seal(?:\s*(?:no\.?|number))?|封条号)\s*[:：]?\s*$", re.I),
@@ -220,6 +222,12 @@ def headers_for(rows: list[Row], before: int) -> tuple[dict[str, int], list[str]
 
 
 def is_any_meta_label(text: str) -> bool:
+    # Bilingual routing labels can share one cell with a newline or slash.
+    parts = [value.strip() for value in re.split(r"[\n/]", text) if value.strip()]
+    if len(parts) > 1 and all(
+        any(pattern.fullmatch(part) for pattern in META_LABELS.values()) for part in parts
+    ):
+        return True
     for p in META_LABELS.values():
         if p.match(text):
             return True
@@ -254,7 +262,9 @@ def labelled(
                         if is_any_meta_label(val) or val.lower() in ("from", "to"):
                             continue
                         if pattern in (META_LABELS["invoice_no"], META_LABELS["bl_no"]):
-                            if re.search(r"\b(?:co\.?,?\s*ltd|inc|corporation|corp|llc|limited)\b", val, re.I):
+                            if re.search(
+                                r"\b(?:co\.?,?\s*ltd|inc|corporation|corp|llc|limited)\b", val, re.I
+                            ):
                                 continue
                         return val, cell_evidence(
                             doc, sheet, next_number, below_col, next_cells[below_col]
@@ -700,8 +710,30 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
         ):
             raise ProcessingLimit("pdf_limit")
         lines = [item.model_copy(update={"document_id": doc}) for item in bill_lines(pdf)]
-        if sum(len(line.raw or "") for line in lines) < 50 and pdf.page_count > MAX_OCR_PAGES:
-            raise ProcessingLimit("ocr_page_limit")
+        if sum(len(line.raw or "") for line in lines) < 50:
+            if pdf.page_count > MAX_OCR_PAGES:
+                raise ProcessingLimit("ocr_page_limit")
+            fields, excerpts, is_bill = scan_bill(pdf, doc)
+            role: Role = (
+                "draft_bl" if is_bill or not excerpts or classification == "draft_bl" else "other"
+            )
+            return Extraction(
+                document_id=doc,
+                role=role,
+                status="failed"
+                if not excerpts
+                else "partial"
+                if role == "draft_bl"
+                else "unsupported_layout",
+                method="tesseract",
+                error="unreadable_pdf"
+                if not excerpts
+                else "unrecognized_pdf"
+                if role == "other"
+                else None,
+                fields=fields if role == "draft_bl" else {},
+                source_excerpt=excerpts,
+            )
 
     raw = extract_bill(data, name)
     text = clean(raw.get("raw_text"))
@@ -877,9 +909,7 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
         )
     )
     fields["shipping_mode"] = (
-        field(mode_val, evidence, uncertain=used_ocr)
-        if evidence and mode_val
-        else field(None)
+        field(mode_val, evidence, uncertain=used_ocr) if evidence and mode_val else field(None)
     )
     cargo = [(clean(value)[:140], locate(value)) for value in raw.get("descriptions", [])[:5]]
     cargo = [(value, evidence) for value, evidence in cargo if value and evidence]

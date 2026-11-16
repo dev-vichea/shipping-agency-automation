@@ -1,16 +1,15 @@
 """Read a single scoped, checksum-verified B/L and locate package count evidence."""
 
-import csv
 import re
 import subprocess
 from collections import defaultdict
 from contextlib import contextmanager
 from hashlib import sha256
-from io import StringIO
 from time import monotonic
 
 import pymupdf
 
+from shipping_ai.documents.ocr import ocr_words
 from shipping_ai.documents.storage import LocalStorage
 
 from .schemas import Observation, Reason, StepResult
@@ -110,37 +109,12 @@ def summarize(observations):
 def ocr_page(page, clip, *, scale, segmentation, deadline):
     if monotonic() >= deadline:
         raise EvidenceUnavailable("time_limit")
-    pix = page.get_pixmap(
-        matrix=pymupdf.Matrix(scale, scale),
-        clip=clip,
-        colorspace=pymupdf.csGRAY,
-        alpha=False,
-    )
-    remaining = deadline - monotonic()
-    if remaining <= 0:
-        raise EvidenceUnavailable("time_limit")
     try:
-        result = subprocess.run(
-            ["tesseract", "stdin", "stdout", "-l", "eng+chi_sim", "--psm", str(segmentation), "tsv"],
-            input=pix.tobytes("png"),
-            capture_output=True,
-            check=True,
-            timeout=min(OCR_TIMEOUT, remaining),
-        )
+        return ocr_words(page, clip, scale=scale, segmentation=segmentation, deadline=deadline)
     except subprocess.TimeoutExpired:
         raise EvidenceUnavailable("ocr_timeout") from None
     except (OSError, subprocess.CalledProcessError):
         raise EvidenceUnavailable("ocr_unavailable") from None
-    lines = defaultdict(list)
-    for row in csv.DictReader(StringIO(result.stdout.decode(errors="replace")), delimiter="\t"):
-        if row["level"] != "5" or not row["text"].strip():
-            continue
-        x, y = int(row["left"]) + pix.x, int(row["top"]) + pix.y
-        width, height = int(row["width"]), int(row["height"])
-        rect = pymupdf.Rect(x / scale, y / scale, (x + width) / scale, (y + height) / scale)
-        key = row["block_num"], row["par_num"], row["line_num"]
-        lines[key].append((rect, row["text"].strip(), float(row["conf"])))
-    return lines
 
 
 def ocr_scan(pdf, deadline):
