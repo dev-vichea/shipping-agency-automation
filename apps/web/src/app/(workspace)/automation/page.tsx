@@ -1,49 +1,61 @@
+import { NativeSelect } from "@/components/ui/native-select";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AutomationAction, RefreshButton } from "@/components/forms";
-import { Empty, PageHeading, Pagination, Section, Status } from "@/components/workspace";
+import { ArrowRight } from "lucide-react";
+import { AutomationAction } from "@/components/forms";
+import { LiveRefresh } from "@/components/live-refresh";
+import { Button } from "@/components/ui/button";
+import { Empty, PageHeading, Section, Status } from "@/components/workspace";
+import { ListPagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import type { Provider, Run } from "@/lib/contracts";
-import { label, pageSize, parseOffset, timestamp } from "@/lib/format";
-import { api } from "@/lib/server-api";
+import type { Run } from "@/lib/contracts";
+import { label, timestamp } from "@/lib/format";
+import { pageSize, pageWindow, parseOffset } from "@/lib/pagination";
+import { api, workspaceList } from "@/lib/server-api";
+import { companyParam, scopedPath } from "@/lib/scope";
 
-export const metadata: Metadata = { title: "Automation" };
+export const metadata: Metadata = { title: "Automation runs" };
 
 export default async function AutomationPage({ searchParams }: {
-  searchParams: Promise<{ offset?: string | string[] }>;
+  searchParams: Promise<{ offset?: string | string[]; company_id?: string; state?: string }>;
 }) {
-  const offset = parseOffset((await searchParams).offset);
-  const [runs, provider] = await Promise.all([
-    api<Run[]>(`/automation/runs?limit=${pageSize}&offset=${offset}`),
-    api<Provider>("/automation/provider"),
+  const params = await searchParams;
+  const offset = parseOffset(params.offset);
+  const companyId = companyParam(params.company_id);
+  const states = ["queued", "running", "succeeded", "failed"];
+  const filter = params.state && states.includes(params.state) ? params.state : "";
+  const query = filter ? `&state=${filter}` : "";
+  const [results, workspace] = await Promise.all([
+    api<Run[]>(scopedPath(`/automation/runs?limit=${pageSize + 1}&offset=${offset}${query}`, companyId)),
+    workspaceList(),
   ]);
-  return <>
-    <PageHeading title="Automation" description="Check the background worker, inspect archived arrivals, and retry failed runs."
-      action={<div className="flex flex-wrap gap-2"><RefreshButton /><AutomationAction path="/automation/health-check">Run worker check</AutomationAction></div>} />
-    <Section title="Background runs">
-      {runs.length ? <Table>
-        <TableHeader><TableRow><TableHead>Job</TableHead><TableHead>Status</TableHead><TableHead>Retries</TableHead><TableHead>Started</TableHead><TableHead>Finished</TableHead><TableHead>Result</TableHead></TableRow></TableHeader>
+  const { items: runs, hasNext } = pageWindow(results);
+  const admin = workspace.workspaces.some(({ id, role }) => id === workspace.active_id && role === "admin");
+  return <div className="space-y-4">
+    <LiveRefresh active={!!workspace.active_id} interval={5000} />
+    <PageHeading title="Automation runs" action={admin && !companyId && <AutomationAction path="/automation/health-check">Run worker check</AutomationAction>} />
+    <Section title="Run history">
+      <form action="/automation" className="flex items-center gap-2 border-b p-3">
+        {companyId && <input type="hidden" name="company_id" value={companyId} />}
+        <NativeSelect name="state" aria-label="Run status" defaultValue={filter}>
+          <option value="">All statuses</option>{states.map((state) => <option key={state} value={state}>{label(state)}</option>)}
+        </NativeSelect>
+        <Button size="sm" variant="outline">Apply</Button>
+      </form>
+      {runs.length ? <Table className="min-w-[660px]">
+        <TableHeader><TableRow><TableHead>Step</TableHead><TableHead>Status</TableHead><TableHead>Retries</TableHead>
+          <TableHead>Started</TableHead><TableHead>Finished</TableHead><TableHead>Error</TableHead><TableHead><span className="sr-only">Details</span></TableHead>
+        </TableRow></TableHeader>
         <TableBody>{runs.map((run) => <TableRow key={run.id}>
-          <TableCell className="whitespace-normal">
-            <div className="font-medium">{run.intake_case_id ? <Link className="text-primary hover:underline" href={`/review/${run.intake_case_id}`}>{label(run.stage)}</Link> : label(run.stage)}</div>
-            <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Trace</summary><code className="break-all">{run.trace_id}</code></details>
-          </TableCell>
+          <TableCell><Link className="data-link" href={scopedPath(`/automation/${run.id}`, companyId)}>{label(run.stage)}</Link></TableCell>
           <TableCell><Status value={run.state} /></TableCell><TableCell>{run.retry_count}</TableCell>
-          <TableCell>{timestamp(run.started_at)}</TableCell><TableCell>{timestamp(run.ended_at)}</TableCell>
-          <TableCell className="space-y-1 whitespace-normal">
-            {run.error_code ? <p className="text-sm">{label(run.error_code)}</p> : "—"}
-            {run.state === "queued" && run.retry_count > 0 && <p className="text-xs text-muted-foreground">Retry after {timestamp(run.available_at)}</p>}
-            {run.state === "failed" && <AutomationAction path={`/automation/runs/${run.id}/retry`}>Retry</AutomationAction>}
-          </TableCell>
+          <TableCell className="text-muted-foreground">{timestamp(run.started_at)}</TableCell><TableCell className="text-muted-foreground">{timestamp(run.ended_at)}</TableCell>
+          <TableCell className={run.error_code ? "text-danger" : "text-muted-foreground"}>{run.error_code ? label(run.error_code) : "—"}</TableCell>
+          <TableCell className="text-right"><Link aria-label="Open run" className="inline-flex text-primary" href={`/automation/${run.id}`}><ArrowRight size={15} aria-hidden /></Link></TableCell>
         </TableRow>)}</TableBody>
-      </Table> : <Empty>{offset ? "No more runs." : "No runs yet. Archive an arrival or run a worker check."}</Empty>}
+      </Table> : <Empty>{offset ? "No runs on this page." : "No runs in this view."}</Empty>}
+      <ListPagination path={scopedPath(filter ? `/automation?state=${filter}` : "/automation", companyId)}
+        offset={offset} count={runs.length} hasNext={hasNext} />
     </Section>
-    <Pagination path="/automation" offset={offset} count={runs.length} />
-    <Section title="Local AI provider">
-      <div className="flex flex-wrap items-center justify-between gap-4 px-5 py-4 text-sm">
-        <div><p className="font-medium">Ollama · {provider.model}</p><p className="mt-1 text-muted-foreground">Local advisory model · {provider.context.toLocaleString("en-GB")} context · {provider.max_concurrency} concurrent request</p></div>
-        <Status value={provider.state} />
-      </div>
-    </Section>
-  </>;
+  </div>;
 }

@@ -4,13 +4,16 @@ Supports digital vector PDFs via PyMuPDF (fitz) with automatic OCR fallback
 using Tesseract for scanned/image PDFs. Supports English Truck Waybills,
 Ocean Bills of Lading, and Chinese Draft B/L confirmation formats.
 """
+import csv
 import io
 import math
 import os
 import re
 import shutil
 import subprocess
+from collections import defaultdict
 from datetime import datetime
+from io import StringIO
 from typing import Dict, Any, Optional, List, Tuple
 
 try:
@@ -87,17 +90,24 @@ def extract_bill(pdf_bytes: bytes, filename: str = '') -> Dict[str, Any]:
         tess_bin = shutil.which('tesseract') or '/opt/homebrew/bin/tesseract'
         if os.path.exists(tess_bin):
             ocr_text = ''
+            all_blocks = []
+            dpi = 200
             for page in doc:
                 try:
-                    pix = page.get_pixmap(dpi=150)
+                    pix = page.get_pixmap(dpi=dpi)
                     proc = subprocess.run(
                         [tess_bin, 'stdin', 'stdout', '-l', 'eng+chi_sim'],
                         input=pix.tobytes('png'),
                         capture_output=True,
                         check=True,
-                        timeout=20
+                        timeout=30
                     )
-                    ocr_text += proc.stdout.decode('utf-8', errors='ignore') + '\n'
+                    page_txt = proc.stdout.decode('utf-8', errors='ignore')
+                    ocr_text += page_txt + '\n'
+                    for b_idx, block_text in enumerate(page_txt.split('\n\n'), 1):
+                        b_clean = block_text.strip()
+                        if b_clean:
+                            all_blocks.append((0.0, 0.0, page.rect.width, page.rect.height, b_clean, b_idx, 0))
                 except Exception:
                     pass
             if len(ocr_text.strip()) > len(full_text.strip()):
@@ -129,7 +139,15 @@ def extract_bill(pdf_bytes: bytes, filename: str = '') -> Dict[str, Any]:
     if not meta['container_seal']:
         meta['container_seal'] = _extract_container_seal(full_text, meta['bl_no'])
     if not meta['container'] and meta['container_seal']:
-        meta['container'] = meta['container_seal']
+        meta['container'] = meta['container_seal'].split('/')[0].strip()
+
+    # Seal extraction if not populated
+    if not meta['seal']:
+        m_seal = re.search(r'\b(?:SEAL(?:\s*(?:NO\.?|NUMBER))?|封条号)\s*[:：#]?\s*([0-9]{6,12}|[A-Za-z0-9\-]{6,12})\b', full_text, re.I)
+        if m_seal:
+            meta['seal'] = m_seal.group(1).strip()
+    if meta['container'] and meta['seal'] and '/' not in meta['container_seal']:
+        meta['container_seal'] = f"{meta['container']} / {meta['seal']}"
 
     # 6. Shipper, Consignee, Origin, Destination, Carrier, Vessel, Voyage
     _extract_parties(full_text, all_blocks, meta)
@@ -146,7 +164,9 @@ def _extract_bill_date(text: str) -> tuple[str, str]:
         # Explicit labels: Date of Issue, Place and Date of Issue, Shipped on board dated
         r'(?:Place\s+and\s+Date\s+of\s+Issue|Date\s+of\s+Issue|SHIPPED\s+ON\s+BOARD\s+DATED|Issue\s+Date|B/?L\s*Date|Date\s*:)[\s\S]{0,40}?(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{4})',
         r'(?:Place\s+and\s+Date\s+of\s+Issue|Date\s+of\s+Issue|SHIPPED\s+ON\s+BOARD\s+DATED|Issue\s+Date|B/?L\s*Date)[\s\S]{0,40}?([A-Za-z]{3,9}[-\s]\d{1,2}[-\s]\d{4})',
+        r'(?:Place\s+and\s+Date\s+of\s+Issue|Date\s+of\s+Issue|SHIPPED\s+ON\s+BOARD\s+DATED|Issue\s+Date|B/?L\s*Date)[\s\S]{0,40}?(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{4})',
         r'(?:Place\s+and\s+Date\s+of\s+Issue|Date\s+of\s+Issue|SHIPPED\s+ON\s+BOARD\s+DATED|Issue\s+Date|B/?L\s*Date)[\s\S]{0,40}?(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})',
+        r'\b(\d{1,2}[-\s][A-Za-z]{3,9}[-\s]\d{4})\b',
         r'\b(\d{1,2}[-/\.]\d{1,2}[-/\.]\d{4})\b',
         r'\b([A-Za-z]{3}[-\s]\d{1,2}[-\s]\d{4})\b',
         r'\b(\d{4}[-/\.]\d{1,2}[-/\.]\d{1,2})\b',
@@ -159,11 +179,11 @@ def _extract_bill_date(text: str) -> tuple[str, str]:
                 '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',
                 '%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d',
                 '%b-%d-%Y', '%b %d %Y', '%b-%d-%y',
-                '%d-%b-%Y', '%d %b %Y',
+                '%d-%b-%Y', '%d %b %Y', '%d-%B-%Y', '%d %B %Y',
                 '%m/%d/%Y', '%m-%d-%Y'
             ):
                 try:
-                    dt = datetime.strptime(raw_d, fmt)
+                    dt = datetime.strptime(raw_d.replace(' ', '-'), fmt)
                     if 2000 <= dt.year <= 2035:
                         return dt.strftime('%d-%b-%Y'), raw_d
                 except Exception:
@@ -180,40 +200,50 @@ def _extract_bl_number(text: str, blocks: list) -> str:
         if val.upper() not in ['提单类型', 'SW', 'ORIGINAL', 'DRAFT', 'REF']:
             return val
 
-    # 2. Check block layout: word next to 'Truck Bill Of Lading No:' or 'B/L No.'
-    for i, b in enumerate(blocks):
-        b_txt = b[4].strip()
-        if re.search(r'(?:Truck\s+Bill\s+Of\s+Lading\s*No|B/?L\s*(?:NO\.?|NUMBER))', b_txt, re.I):
-            m = re.search(r'(?:No\.?|NUMBER)[\s:]*([A-Z0-9_\-\/\+]+)', b_txt, re.I)
-            if m and m.group(1).upper() not in ['REF', 'NO', 'NUMBER', 'OF', 'THE']:
-                return m.group(1).strip()
-            # If empty in current block, check next block
-            if i + 1 < len(blocks):
-                nb = blocks[i+1][4].strip()
-                if re.match(r'^[A-Z0-9_\-\/\+]{6,}$', nb) and nb.upper() not in ['REF', 'NO', 'NUMBER', 'CARRIER', 'PREPAID']:
-                    return nb
-
-    # 3. Regex patterns across text
+    # 2. Known carrier prefix patterns across text (highest priority)
     patterns = [
-        r'(?:Truck\s+Bill\s+Of\s+Lading\s*No|Bill\s+Of\s+Lading\s*No|B/?L\s*NO\.?)[\s:]*([A-Z0-9_\-\/\+]+)',
         r'\b(RCLY\d{6,}(?:\+RCLY\d+)?)\b',
         r'\b(OOLU\d{8,}[A-Z0-9]*)\b',
-        r'\b(CPL\d{6,}[A-Z0-9]*)\b',
+        r'\b(CPL[0-9O]\d{5,}[A-Z0-9]*)\b',
         r'\b(SIH\d{6,}[A-Z0-9]*)\b',
         r'\b(SITP[A-Z0-9]{6,})\b',
-        r'\b(YS\d{6,}[A-Z0-9\-]*)\b',
+        r'\b(YS\d{6,}(?:\+[A-Z0-9]+)?)\b',
     ]
     for pat in patterns:
         m = re.search(pat, text, re.I)
         if m:
-            val = m.group(1).strip()
-            if val.upper() not in ['REF', 'NO', 'NUMBER', 'OF', 'THE', 'DATE']:
+            val = m.group(1).strip().upper()
+            if val.startswith('CPLO'):
+                val = 'CPL0' + val[4:]
+            if val not in ['REF', 'NO', 'NUMBER', 'OF', 'THE', 'DATE', 'BILL', 'LADING']:
                 return val
 
-    # 4. Fallback to general tracking / bill number format
-    m_gen = re.search(r'\b([A-Z]{3,4}\d{8,}[A-Z0-9]*)\b', text)
-    if m_gen:
-        return m_gen.group(1).strip()
+    # 3. Check block layout: word next to 'Truck Bill Of Lading No:' or 'B/L No.' or 'BILL OF LADING NUMBER'
+    for i, b in enumerate(blocks):
+        b_txt = b[4].strip()
+        if re.search(r'(?:Truck\s+Bill\s+Of\s+Lading\s*No|Bill\s+Of\s+Lading\s*(?:NO\.?|NUMBER)|B/?L\s*(?:NO\.?|NUMBER))', b_txt, re.I):
+            m = re.search(r'(?:No\.?|NUMBER)[\s:|]*([A-Z0-9_\-\/\+]+)', b_txt, re.I)
+            if m and m.group(1).upper() not in ['REF', 'NO', 'NUMBER', 'OF', 'THE', 'CARRIER', 'EXPORT', 'BILL', 'LADING', 'DRAFT', 'ORIGINAL']:
+                return m.group(1).strip()
+            # If empty or noise in current block, check next block
+            if i + 1 < len(blocks):
+                nb = blocks[i+1][4].strip()
+                if re.match(r'^[A-Z0-9_\-\/\+]{6,}$', nb) and nb.upper() not in ['REF', 'NO', 'NUMBER', 'CARRIER', 'PREPAID', 'EXPORT', 'REFERENCES', 'BILL', 'LADING', 'ORIGINAL']:
+                    return nb
+
+    # 4. Explicit label regex across text
+    m_lbl = re.search(r'(?:Truck\s+Bill\s+Of\s+Lading\s*No|Bill\s+Of\s+Lading\s*(?:NO\.?|NUMBER)|B/?L\s*NO\.?)[\s:|]*([A-Z0-9_\-\/\+]+)', text, re.I)
+    if m_lbl:
+        val = m_lbl.group(1).strip()
+        if val.upper() not in ['REF', 'NO', 'NUMBER', 'OF', 'THE', 'DATE', 'CARRIER', 'EXPORT', 'BILL', 'LADING', 'ORIGINAL']:
+            return val
+
+    # 5. Fallback to general tracking / bill number format (excluding EXPORT REFERENCES)
+    for m_gen in re.finditer(r'\b([A-Z]{3,4}\d{7,}[A-Z0-9]*)\b', text):
+        val = m_gen.group(1).strip()
+        before = text[max(0, m_gen.start() - 35):m_gen.start()].upper()
+        if 'EXPORT' not in before and 'REFERENCE' not in before and 'SEAL' not in before and 'CONTAINER' not in before:
+            return val
     return ''
 
 
@@ -267,19 +297,28 @@ def _extract_chinese_draft_table(blocks: list, meta: Dict[str, Any]) -> None:
 
 def _extract_container_seal(text: str, bl_no: str) -> str:
     """Extract container / seal number or trailer info."""
+    # 1. Standard ISO container numbers (4 letters ending in U/J/Z + 7 digits)
+    m_iso = re.search(r'\b([A-Z]{3}[UJZ]\s*\d{7})\b', text)
+    if m_iso:
+        c_num = re.sub(r'\s+', '', m_iso.group(1).upper())
+        before = text[max(0, m_iso.start() - 35):m_iso.start()].upper()
+        if c_num != bl_no and 'EXPORT' not in before and 'REFERENCE' not in before:
+            return c_num
+
     patterns = [
         r'(\d+X\d+[ \t]*HQ[^\n\r]*)',
         r'([\/]{0,2}PART[ \t]*OF[ \t]*\d+[A-Za-z0-9]*)',
-        r'([A-Z]{4}\d{7}[ \t\/]*[A-Z0-9]+)',
         r'\b([A-Z]{4}\d{7})\b',
     ]
     for pat in patterns:
-        m = re.search(pat, text, re.I)
-        if m:
+        for m in re.finditer(pat, text, re.I):
             val = m.group(1).strip().lstrip('/ ')
             val = re.sub(r'PART[ \t]*OF(\d+)', r'PART OF \1', val, flags=re.I)
             if 'CFS' in text.upper() and 'LCL' not in val.upper() and 'CFS' not in val.upper():
                 val = f"{val} (LCL / CFS-CFS)"
+            before = text[max(0, m.start() - 35):m.start()].upper()
+            if 'EXPORT' in before or 'REFERENCE' in before:
+                continue
             if val != bl_no and val.upper() not in ['CHINA', 'CAMBODIA', 'VIETNAM']:
                 return val
     if 'CFS-CFS' in text.upper() or 'CFS/CFS' in text.upper():
@@ -289,7 +328,31 @@ def _extract_container_seal(text: str, bl_no: str) -> str:
 
 def _extract_quantities(text: str, meta: Dict[str, Any]) -> None:
     """Extract packages, gross weight, and volume."""
-    pkg_m = re.search(r'(\d+)\s*(?:PACKAGES|PKGS|CTNS|COLLI|CARTONS|PIECES|PCS|ROLLS|PACKAGE)\b', text, re.I)
+    # 1. Table row pattern common in English ocean B/Ls:
+    # e.g. TCNU5031571 1 x 40HC 531 PACKAGE (S) 25117.000 3810 57.200
+    m_row = re.search(
+        r'(\d+)\s*(?:PACKAGE\s*\(S\)|PACKAGES?|PKGS?|CTNS?|CARTONS?)\s+([\d,]+\.?\d*)\s+(?:[\d,]+\.?\d*\s+)?([\d,]+\.?\d*)',
+        text,
+        re.I
+    )
+    if m_row:
+        if meta['packages'] is None:
+            try:
+                meta['packages'] = int(m_row.group(1))
+            except ValueError:
+                pass
+        if meta['gross_weight'] is None:
+            try:
+                meta['gross_weight'] = float(m_row.group(2).replace(',', ''))
+            except ValueError:
+                pass
+        if meta['volume'] is None:
+            try:
+                meta['volume'] = float(m_row.group(3).replace(',', ''))
+            except ValueError:
+                pass
+
+    pkg_m = re.search(r'(\d+)\s*(?:PACKAGE\s*\(S\)|PACKAGES|PKGS|CTNS|COLLI|CARTONS|PIECES|PCS|ROLLS|PACKAGE)\b', text, re.I)
     if pkg_m and meta['packages'] is None:
         try:
             meta['packages'] = int(pkg_m.group(1))
@@ -297,6 +360,8 @@ def _extract_quantities(text: str, meta: Dict[str, Any]) -> None:
             pass
 
     gw_m = re.search(r'([\d,]+\.?\d*)\s*(?:KGS|KG|GROSS\s*WEIGHT)\b', text, re.I)
+    if not gw_m:
+        gw_m = re.search(r'(?:GROSS\s*WEIGHT|GW|G\.W\.)\s*[:：]?\s*([\d,]+\.?\d*)', text, re.I)
     if gw_m and meta['gross_weight'] is None:
         try:
             meta['gross_weight'] = float(gw_m.group(1).replace(',', ''))
@@ -304,6 +369,8 @@ def _extract_quantities(text: str, meta: Dict[str, Any]) -> None:
             pass
 
     cbm_m = re.search(r'([\d,]+\.?\d*)\s*(?:CBM|M3|MEASUREMENT)\b', text, re.I)
+    if not cbm_m:
+        cbm_m = re.search(r'(?:MEASUREMENT|VOLUME)\s*[:：]?\s*([\d,]+\.?\d*)', text, re.I)
     if cbm_m and meta['volume'] is None:
         try:
             meta['volume'] = float(cbm_m.group(1).replace(',', ''))
@@ -366,17 +433,37 @@ def _extract_parties(text: str, blocks: list, meta: Dict[str, Any]) -> None:
     for i, b in enumerate(blocks):
         b_txt = b[4].strip()
         b_lower = b_txt.lower()
-        if b_lower == 'shipper:' and i + 1 < len(blocks):
-            lines = [l.strip() for l in blocks[i+1][4].strip().split('\n') if l.strip()]
-            if lines and not meta['shipper']:
-                meta['shipper'] = lines[0]
-                meta['shipper_address'] = '\n'.join(lines[1:])
-        elif b_lower == 'consignee:' and i + 1 < len(blocks):
-            lines = [l.strip() for l in blocks[i+1][4].strip().split('\n') if l.strip()]
-            if lines and not meta['consignee']:
-                meta['consignee'] = lines[0]
-                meta['consignee_address'] = '\n'.join(lines[1:])
-                m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', '\n'.join(lines))
+        if re.match(r'^[\s|:_~-]*shipper\b', b_lower) and not any(kw in b_lower for kw in ['shipper\'s declared', 'shippers declared', 'shipper\'s load', 'shippers load', 'signed for the shipper', 'as stated by shipper']):
+            curr_lines = [l.strip() for l in b[4].strip().split('\n') if l.strip()]
+            header_idx = -1
+            for li, l in enumerate(curr_lines):
+                if re.match(r'^[\s|:_~-]*shipper\b', l, re.I):
+                    header_idx = li
+                    break
+            val_lines = curr_lines[header_idx + 1:] if header_idx >= 0 else []
+            if not val_lines and i + 1 < len(blocks):
+                val_lines = [l.strip() for l in blocks[i+1][4].strip().split('\n') if l.strip()]
+            clean_val_lines = [l for l in val_lines if not any(kw in l.upper() for kw in ['ADDITIONAL CLAUSES', 'DECLARED VALUE', 'CARRIER', 'PRE CARRIAGE'])]
+            if clean_val_lines and not meta['shipper']:
+                meta['shipper'] = clean_val_lines[0]
+                meta['shipper_address'] = '\n'.join(clean_val_lines[1:])
+        elif re.match(r'^[\s|:_~-]*consignee\b', b_lower):
+            curr_lines = [l.strip() for l in b[4].strip().split('\n') if l.strip()]
+            header_idx = -1
+            for li, l in enumerate(curr_lines):
+                if re.match(r'^[\s|:_~-]*consignee\b', l, re.I):
+                    header_idx = li
+                    break
+            val_lines = curr_lines[header_idx + 1:] if header_idx >= 0 else []
+            if not val_lines and i + 1 < len(blocks):
+                val_lines = [l.strip() for l in blocks[i+1][4].strip().split('\n') if l.strip()]
+            clean_val_lines = [l for l in val_lines if not any(kw in l.upper() for kw in ['NOTIFY PARTY', 'SAME AS CONSIGNEE', 'CARRIER', 'PRE CARRIAGE'])]
+            if clean_val_lines and not meta['consignee']:
+                c_name = clean_val_lines[0]
+                m_end = re.match(r'^(.*?(?:LIMITED|LTD\.?|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?))', c_name, re.I)
+                meta['consignee'] = m_end.group(1).strip() if m_end else c_name
+                meta['consignee_address'] = '\n'.join(clean_val_lines)
+                m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', '\n'.join(clean_val_lines))
                 if m_vat:
                     meta['vat'] = m_vat.group(1).strip()
         elif 'place of delivery' in b_lower and i + 1 < len(blocks):
@@ -385,61 +472,141 @@ def _extract_parties(text: str, blocks: list, meta: Dict[str, Any]) -> None:
         elif 'place of loading' in b_lower and i + 1 < len(blocks):
             if not meta['origin']:
                 meta['origin'] = blocks[i+1][4].strip().split('\n')[0]
-        elif any(w in b_lower for w in ['supply chain', 'lines', 'logistics', 'carrier']):
+        elif any(w in b_lower for w in ['supply chain', 'lines', 'logistics', 'carrier']) and not any(kw in b_lower for kw in ['not to be responsible', 'failure to notify']):
             if not meta['carrier'] and len(b_txt) < 80:
                 meta['carrier'] = b_txt.split('\n')[0]
 
-    # 3. Direct detection of XIN CAI FU (Consignee) if label was in background graphic
+    # 3. Direct detection of XIN CAI FU (Consignee) if label was in background graphic or faint
     if not meta['consignee']:
         for b in blocks:
             b_txt = b[4].strip()
-            if 'XIN CAI FU' in b_txt.upper():
+            if 'XIN CAI FU' in b_txt.upper() or 'CAI FU (CAMBODIA)' in b_txt.upper():
                 lines = [l.strip() for l in b_txt.split('\n') if l.strip()]
-                if lines:
-                    meta['consignee'] = lines[0]
-                    meta['consignee_address'] = '\n'.join(lines)
-                    m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', '\n'.join(lines))
-                    if m_vat:
-                        meta['vat'] = m_vat.group(1).strip()
-                break
-
-    # 4. Direct detection of Shipper in upper half (y0 < 350) if label was in background graphic
-    if not meta['shipper']:
-        for b in blocks:
-            if b[1] < 350:  # upper half of page
-                b_lines = [l.strip() for l in b[4].strip().split('\n') if l.strip()]
-                for l in b_lines:
+                for l in lines:
                     lu = l.upper()
-                    if any(kw in lu for kw in ['LIMITED', 'LTD', 'CORP', 'INC', 'COMPANY']) and not any(kw in lu for kw in ['XIN CAI FU', 'LOGISTIC', 'CARRIER', 'EXPRESS', 'SUPPLY CHAIN', 'FREIGHT']):
-                        meta['shipper'] = l
-                        meta['shipper_address'] = b[4].strip()
+                    if 'XIN CAI FU' in lu or 'CAI FU' in lu:
+                        clean_cnee = re.sub(r'^(?:CONSIGNEE|收货人)\s*[:：]?\s*', '', l, flags=re.I).strip()
+                        m_end = re.match(r'^(.*?(?:LIMITED|LTD\.?|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?))', clean_cnee, re.I)
+                        c_val = m_end.group(1).strip() if m_end else clean_cnee
+                        if c_val.upper().startswith('CAI FU') and 'XIN CAI FU' in text.upper():
+                            c_val = 'XIN ' + c_val
+                        meta['consignee'] = c_val
+                        meta['consignee_address'] = '\n'.join(lines)
+                        m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', '\n'.join(lines))
+                        if m_vat:
+                            meta['vat'] = m_vat.group(1).strip()
                         break
-                if meta['shipper']:
+                if meta['consignee']:
                     break
+
+    # 4. Direct detection of Shipper in top blocks (first 5 blocks)
+    if not meta['shipper']:
+        for b in blocks[:6]:
+            b_lines = [l.strip() for l in b[4].strip().split('\n') if l.strip()]
+            for l in b_lines:
+                lu = l.upper()
+                if any(kw in lu for kw in ['LIMITED', 'LTD', 'CORP', 'INC', 'COMPANY']) and not any(kw in lu for kw in ['XIN CAI FU', 'CAI FU', 'LOGISTIC', 'CARRIER', 'EXPRESS', 'SUPPLY CHAIN', 'FREIGHT']):
+                    m_end = re.match(r'^(.*?(?:LIMITED|LTD\.?|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?))', l, re.I)
+                    meta['shipper'] = m_end.group(1).strip() if m_end else l
+                    meta['shipper_address'] = b[4].strip()
+                    break
+            if meta['shipper']:
+                break
 
     # 5. Fallback regex for shipper/consignee
     if not meta['shipper']:
-        sm = re.search(r'Shipper\s*:?\s*\n?([A-Z0-9\s\.,&]+(?:\n[^\n]+)?)', text, re.I)
-        if sm:
-            meta['shipper'] = sm.group(1).strip().split('\n')[0]
+        for b in blocks:
+            b_txt = b[4].strip()
+            if 'SHIPPER' in b_txt.upper() and not any(kw in b_txt.upper() for kw in ['DECLARED VALUE', 'ADDITIONAL CLAUSES']):
+                lines = [l.strip() for l in b_txt.splitlines() if l.strip()]
+                for li, l in enumerate(lines):
+                    if re.match(r'^[\s|:_~-]*SHIPPER', l, re.I) and not any(kw in l.upper() for kw in ['DECLARED VALUE', 'SIGNED FOR']):
+                        for sub in lines[li+1:]:
+                            sub_u = sub.upper()
+                            if len(sub_u) > 3 and any(kw in sub_u for kw in ['LIMITED', 'LTD', 'CORP', 'INC', 'COMPANY']) and not any(kw in sub_u for kw in ['XIN CAI FU', 'CAI FU', 'CARRIER', 'LOGISTIC']):
+                                m_end = re.match(r'^(.*?(?:LIMITED|LTD\.?|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?))', sub, re.I)
+                                meta['shipper'] = m_end.group(1).strip() if m_end else sub
+                                meta['shipper_address'] = '\n'.join(lines[li+1:])
+                                break
+                    if meta['shipper']:
+                        break
+            if meta['shipper']:
+                break
 
     if not meta['consignee']:
         for m in re.finditer(r'(?:^|[\r\n])\s*Consignee\s*:?\s*\n?([A-Z0-9\s\.,&]+(?:\n[^\n]+)?)', text, re.I):
             val = m.group(1).strip()
             val_first = val.split('\n')[0].strip()
-            if val_first.upper() not in ['PACKAGES', 'SAME AS CONSIGNEE', 'SAME AS CNEE', ''] and 'SAME AS' not in val_first.upper():
-                meta['consignee'] = val_first
+            if val_first.upper() not in ['PACKAGES', 'SAME AS CONSIGNEE', 'SAME AS CNEE', ''] and 'SAME AS' not in val_first.upper() and 'NOTIFY' not in val_first.upper():
+                clean_cnee = re.sub(r'^(?:CONSIGNEE|收货人)\s*[:：]?\s*', '', val_first, flags=re.I).strip()
+                m_end = re.match(r'^(.*?(?:LIMITED|LTD\.?|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?))', clean_cnee, re.I)
+                meta['consignee'] = m_end.group(1).strip() if m_end else clean_cnee
                 break
+
+    # 6. Carrier detection
+    if not meta['carrier'] or any(kw in meta['carrier'].lower() for kw in ['not to be responsible', 'clause', 'signed for']):
+        m_carr = re.search(r'\bCARRIER\s*[:：]\s*([^\n\r]+)', text, re.I)
+        if m_carr and 'not to be responsible' not in m_carr.group(1).lower():
+            c_val = re.sub(r'[\s|;]+$', '', m_carr.group(1).strip()).strip(' "\'|')
+            if 'CMA CGM' in c_val:
+                meta['carrier'] = 'CMA CGM Asia Shipping Pte. Ltd.'
+            else:
+                meta['carrier'] = c_val
+        elif 'CNC' in text and ('CMA CGM' in text or 'CNC' in text):
+            meta['carrier'] = 'CMA CGM Asia Shipping Pte. Ltd. (CNC)'
+
+    # 7. Vessel & Voyage detection
+    if not meta['vessel'] or any(kw in meta['vessel'].upper() for kw in ['PORT OF', 'PLACE OF', 'DISCHARGE', 'LOADING', 'FINAL', 'PORT', 'PLACE', 'CARRIER']):
+        m_v_known = re.search(r'\b(CNC[ \t]+[A-Z0-9]+|WAN[ \t]+HAI[ \t]+\d+|SITC[ \t]+[A-Z0-9]+|EVER[ \t]+[A-Z0-9]+|MAERSK[ \t]+[A-Z0-9]+|MSC[ \t]+[A-Z0-9]+|COSCO[ \t]+[A-Z0-9]+)\b', text, re.I)
+        if m_v_known:
+            meta['vessel'] = re.sub(r'\s+', ' ', m_v_known.group(1).strip())
+        else:
+            m_vessel = re.search(r'(?:VESSEL|OCEAN VESSEL|FEEDER VESSEL)\s*[:：|]?\s*([A-Za-z0-9\s]+?)(?:PORT OF LOADING|PLACE OF|FINAL|\n|\|)', text, re.I)
+            if m_vessel:
+                v_val = m_vessel.group(1).strip()
+                if v_val and not any(kw in v_val.upper() for kw in ['PORT', 'PLACE', 'NAME', 'NO', 'NUMBER', 'LOADING', 'DISCHARGE', 'CARRIER']):
+                    meta['vessel'] = v_val
+
+    if not meta['voyage'] or meta['voyage'].upper() in ['KA', 'NUMBER', 'NO', 'OF', 'THE', 'ORIGINAL']:
+        m_voyage = re.search(r'VOYAGE(?:\s*(?:NO\.?|NUMBER))?[\s:：|\-]*\n?([^\n\r]+)', text, re.I)
+        if m_voyage:
+            voy_line = m_voyage.group(1).strip()
+            m_code = re.search(r'\b([A-Za-z0-9]{3,}\/[A-Za-z0-9]+|\d{3,4}[A-Za-z]|[A-Za-z0-9]{5,})\b', voy_line)
+            if m_code and m_code.group(1).upper() not in ['NUMBER', 'ORIGINAL', 'CONTAINER', 'BILL']:
+                meta['voyage'] = m_code.group(1).split('/')[0]
+        if not meta['voyage'] or meta['voyage'].upper() in ['KA', 'NUMBER', 'NO']:
+            m_voy_any = re.search(r'\b([A-Z0-9]{5,}\/[A-Z0-9]+)\b', text)
+            if m_voy_any:
+                meta['voyage'] = m_voy_any.group(1).split('/')[0]
 
     if not meta['vat']:
         m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', text, re.I)
         if m_vat:
             meta['vat'] = m_vat.group(1).strip()
 
-    if not meta['origin'] and 'SHANGHAI' in text.upper():
-        meta['origin'] = 'SHANGHAI'
-    if not meta['destination'] and 'SIHANOUKVILLE' in text.upper():
-        meta['destination'] = 'SIHANOUKVILLE'
+    if not meta['origin'] or any(kw in meta['origin'].lower() for kw in ['clause', 'demurrage', 'detention', 'carrier', 'tariff']) or len(meta['origin']) <= 2:
+        m_orig = re.search(r'(?:PORT OF LOADING|PLACE OF RECEIPT|装货港|起运港)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:PORT OF DISCHARGE|FREIGHT|VESSEL|\n|\|)', text, re.I)
+        if m_orig:
+            o_cand = m_orig.group(1).strip()
+            if o_cand.upper() not in ['PORT', 'PLACE', 'LOADING', 'RECEIPT', 'I', 'A'] and 2 < len(o_cand) < 40 and not any(kw in o_cand.lower() for kw in ['clause', 'demurrage', 'carrier', 'tariff', 'whichever', 'freight']):
+                meta['origin'] = o_cand
+        if not meta['origin'] or any(kw in meta['origin'].lower() for kw in ['clause', 'demurrage', 'detention']) or len(meta['origin']) <= 2:
+            for port in ['SHANGHAI', 'NINGBO', 'SHENZHEN', 'GUANGZHOU', 'QINGDAO', 'XIAMEN', 'TIANJIN', 'HO CHI MINH', 'BANGKOK', 'JAKARTA', 'SINGAPORE', 'BUSAN', 'HONG KONG']:
+                if port in text.upper():
+                    meta['origin'] = port
+                    break
+
+    if not meta['destination'] or any(kw in meta['destination'].lower() for kw in ['clause', 'demurrage', 'detention', 'carrier', 'tariff']) or len(meta['destination']) <= 2:
+        m_dest = re.search(r'(?:PORT OF DISCHARGE|FINAL PLACE OF DELIVERY|PLACE OF DELIVERY|卸货港|目的港)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:FINAL PLACE|\n|\|)', text, re.I)
+        if m_dest:
+            d_cand = m_dest.group(1).strip()
+            if d_cand.upper() not in ['PORT', 'DISCHARGE', 'DELIVERY', 'FINAL', 'I', 'A'] and 2 < len(d_cand) < 40 and not any(kw in d_cand.lower() for kw in ['clause', 'demurrage', 'carrier', 'tariff', 'whichever', 'freight']):
+                meta['destination'] = d_cand
+        if not meta['destination'] or any(kw in meta['destination'].lower() for kw in ['clause', 'demurrage', 'detention']) or len(meta['destination']) <= 2:
+            for dest in ['SIHANOUKVILLE', 'PHNOM PENH']:
+                if dest in text.upper():
+                    meta['destination'] = dest
+                    break
 
 
 def _extract_goods_descriptions(text: str, blocks: list) -> List[str]:

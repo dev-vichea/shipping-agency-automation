@@ -1,8 +1,9 @@
-export async function write<T>(path: string, body?: FormData | object): Promise<T> {
+export async function write<T>(path: string, body?: FormData | object, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
       method: "POST",
+      signal,
       headers: body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {},
       body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
     });

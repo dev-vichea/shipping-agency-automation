@@ -4,7 +4,7 @@ from getpass import getpass
 from pydantic import EmailStr, TypeAdapter
 from sqlalchemy.dialects.postgresql import insert
 
-from shipping_ai.models import User
+from shipping_ai.models import DEFAULT_WORKSPACE, User, WorkspaceMember
 
 from .auth import PASSWORD
 from .db import session_factory
@@ -14,6 +14,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("command", choices=["create-staff"])
     parser.add_argument("email")
+    parser.add_argument("--default-workspace-admin", action="store_true")
     args = parser.parse_args()
     email = TypeAdapter(EmailStr).validate_python(args.email).casefold()
     password = getpass("Password (12–128 characters): ")
@@ -26,6 +27,8 @@ def main() -> None:
             .on_conflict_do_nothing(index_elements=[User.email])
             .returning(User.id)
         )
+        if result is not None and args.default_workspace_admin:
+            db.add(WorkspaceMember(workspace_id=DEFAULT_WORKSPACE, user_id=result, role="admin"))
     if result is None:
         parser.exit(2, "Staff account already exists.\n")
     print("Staff account created.")

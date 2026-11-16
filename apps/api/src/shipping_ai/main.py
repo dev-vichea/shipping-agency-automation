@@ -6,6 +6,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from .ai.provider import ModelProvider, OllamaProvider, ProviderStatus
+from .approvals.routes import router as approvals_router
 from .automation.routes import router as automation_router
 from .cdc.routes import router as cdc_router
 from .core.auth import Staff
@@ -16,7 +17,12 @@ from .core.http import PrivateAPI
 from .documents.routes import router as documents_router
 from .imports.routes import router as imports_router
 from .intakes.routes import router as intakes_router
+from .integrations.folders import router as folders_router
+from .integrations.routes import router as integrations_router
+from .permits.routes import router as permits_router
+from .reports.routes import router as reports_router
 from .review.routes import router as review_router
+from .workspaces.routes import router as workspaces_router
 
 
 def create_app() -> FastAPI:
@@ -33,12 +39,18 @@ def create_app() -> FastAPI:
     api = APIRouter(prefix="/api/v1")
     for router in (
         auth_router,
+        workspaces_router,
+        integrations_router,
+        folders_router,
         intakes_router,
         imports_router,
         documents_router,
         automation_router,
         cdc_router,
         review_router,
+        approvals_router,
+        permits_router,
+        reports_router,
     ):
         api.include_router(router)
 
@@ -66,7 +78,7 @@ def create_app() -> FastAPI:
     def ready():
         try:
             with engine().connect() as connection:
-                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0002":
+                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0009":
                     return JSONResponse({"status": "unavailable"}, status_code=503)
             with Redis.from_url(str(cfg.redis_url), socket_timeout=2) as redis:
                 redis.ping()

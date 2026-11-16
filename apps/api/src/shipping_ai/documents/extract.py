@@ -3,8 +3,9 @@
 import io
 import re
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from threading import Lock
 from uuid import UUID
 from zipfile import ZipFile
 
@@ -19,6 +20,8 @@ from services.packing import extract_packing
 from shipping_ai.review.schemas import Evidence, Extraction, Item, Role
 from shipping_ai.review.values import UNIT_ALIASES, clean, currency, decimal, field, folded, unit
 
+PDF_LOCK = Lock()
+
 MAX_ROWS = 5000
 MAX_COLS = 100
 MAX_SHEETS = 12
@@ -29,7 +32,7 @@ MAX_OCR_PAGES = 3
 WEIGHT = re.compile(
     r"(?<![a-z])(?:kilograms?|kgs?|kg|lbs?|tonnes?|g(?!\.)|t)(?![a-z])|公斤|千克|吨", re.I
 )
-IDENTIFIER = re.compile(r"\b[A-Z]{4}\s?\d{7}\b", re.I)
+IDENTIFIER = re.compile(r"\b[A-Z]{4}\s?[0-9]{6}[ -]?[0-9]\b", re.I)
 BILL_MARKER = re.compile(r"bill of lading|\bwaybill\b|\bB\s*/\s*L\b|提单", re.I)
 ROUTE_MODE = re.compile(
     r"\b(?:by (?:sea|air|truck|road)|ocean vessel|sea freight|air freight|truck waybill)\b", re.I
@@ -42,7 +45,9 @@ META_LABELS = {
     "bl_no": re.compile(
         r"^(?:b/?l\s*(?:no\.?|number)|bill of lading\s*(?:no\.?|number)|提单号码)\s*[:：]?", re.I
     ),
-    "invoice_date": re.compile(r"^(?:invoice date|date of invoice|date\s*[:：]|发票日期)", re.I),
+    "invoice_date": re.compile(
+        r"^(?:invoice\s*date|date\s+of\s+invoice|date\s*[:：]|发票日期)", re.I
+    ),
     "supplier": re.compile(r"^(?:supplier|seller|exporter|供应商)\s*[:：]?\s*$", re.I),
     "shipper": re.compile(r"^(?:shipper|发货人)\s*[:：]?\s*$", re.I),
     "consignee": re.compile(
@@ -214,21 +219,46 @@ def headers_for(rows: list[Row], before: int) -> tuple[dict[str, int], list[str]
     return best
 
 
+def is_any_meta_label(text: str) -> bool:
+    for p in META_LABELS.values():
+        if p.match(text):
+            return True
+    return False
+
+
 def labelled(
     rows: list[Row], doc: UUID, sheet: str, pattern: re.Pattern
 ) -> tuple[object, Evidence] | None:
-    for number, cells in rows[:35]:
+    for idx, (number, cells) in enumerate(rows[:35]):
         for col, value in enumerate(cells):
             raw = clean(value)
             match = pattern.match(raw)
             if not match:
                 continue
             tail = raw[match.end() :].lstrip(":： ")
-            if tail:
+            if tail and not is_any_meta_label(tail):
                 return tail, cell_evidence(doc, sheet, number, col, value)
+            # 1. Search horizontally in current row
             for nxt in range(col + 1, min(len(cells), col + 5)):
-                if clean(cells[nxt]):
+                val = clean(cells[nxt])
+                if val:
+                    if is_any_meta_label(val):
+                        break
                     return cells[nxt], cell_evidence(doc, sheet, number, nxt, cells[nxt])
+            # 2. Check row directly below for vertical column alignment
+            if idx + 1 < len(rows[:35]):
+                next_number, next_cells = rows[idx + 1]
+                for below_col in range(col, min(len(next_cells), col + 2)):
+                    val = clean(next_cells[below_col])
+                    if val:
+                        if is_any_meta_label(val) or val.lower() in ("from", "to"):
+                            continue
+                        if pattern in (META_LABELS["invoice_no"], META_LABELS["bl_no"]):
+                            if re.search(r"\b(?:co\.?,?\s*ltd|inc|corporation|corp|llc|limited)\b", val, re.I):
+                                continue
+                        return val, cell_evidence(
+                            doc, sheet, next_number, below_col, next_cells[below_col]
+                        )
     return None
 
 
@@ -248,12 +278,19 @@ def date_text(value: object) -> str | None:
         return value.date().isoformat()
     if isinstance(value, date):
         return value.isoformat()
-    match = re.fullmatch(r"(20\d{2})[-./](\d{1,2})[-./](\d{1,2})(?:\s+00:00:00)?", clean(value))
+    text = clean(value)
+    match = re.fullmatch(r"(20\d{2})[-./](\d{1,2})[-./](\d{1,2})(?:\s+00:00:00)?", text)
     if match:
         try:
             return date(*map(int, match.groups())).isoformat()
         except ValueError:
             pass
+    try:
+        serial = float(text)
+        if 35000 <= serial <= 55000:
+            return (date(1899, 12, 30) + timedelta(days=int(serial))).isoformat()
+    except (ValueError, TypeError):
+        pass
     return None
 
 
@@ -423,6 +460,28 @@ def excel_items(doc, sheet, rows, parsed, columns, headers, end):
     return results
 
 
+def apply_invoice_footer_currency(doc, sheet, rows, items, amount_col, total_row):
+    if total_row is None or amount_col is None:
+        return
+    number, cells = total_row
+    label_row = dict(rows).get(number + 1, [])
+    label = clean(at(label_row, amount_col))
+    if decimal(at(cells, amount_col)) is None or not re.fullmatch(
+        r"USD|CNY|RMB|KHR|EUR", label, re.I
+    ):
+        return
+    code = currency(label)
+    money = [item.fields[key] for item in items for key in ("unit_price", "amount")]
+    if any(value.currency and value.currency != code for value in money):
+        return
+    evidence = cell_evidence(doc, sheet, number + 1, amount_col, label)
+    for value in money:
+        if value.value is not None and value.currency is None:
+            value.currency = code
+            value.evidence.append(evidence)
+    return evidence
+
+
 def header_unit(text: str) -> str | None:
     match = re.search(r"[（(]([^）)]+)[）)]", text)
     return unit(match.group(1)) if match else None
@@ -433,11 +492,10 @@ def weight_unit(text: str) -> str | None:
     return unit(match.group()) if match else None
 
 
-def totals(doc, sheet, rows, items, columns, headers):
-    result = {key: field(None) for key in (*TOTAL_FIELDS, "amount")}
+def declared_total(rows, items):
     if not items:
-        return result
-    total_row = next(
+        return None
+    return next(
         (
             (number, cells)
             for number, cells in rows
@@ -445,6 +503,12 @@ def totals(doc, sheet, rows, items, columns, headers):
         ),
         None,
     )
+
+
+def totals(doc, sheet, items, columns, total_row, footer_currency, rows=None):
+    result = {key: field(None) for key in (*TOTAL_FIELDS, "amount")}
+    if not items:
+        return result
     for key in result:
         col = columns.get(key)
         if col is None:
@@ -452,10 +516,13 @@ def totals(doc, sheet, rows, items, columns, headers):
         if total_row:
             number, cells = total_row
             sample = items[0].fields[key]
-            printed = numeric_cell(
-                doc, sheet, number, cells, col, units=sample.unit, code=sample.currency
-            )
+            code = sample.currency
+            if key == "amount" and footer_currency is not None:
+                code = currency(footer_currency.raw or "")
+            printed = numeric_cell(doc, sheet, number, cells, col, units=sample.unit, code=code)
             if printed.value is not None or printed.status == "uncertain":
+                if key == "amount" and footer_currency is not None:
+                    printed.evidence.append(footer_currency)
                 result[key] = printed
                 continue
         # Never sum incomplete data or mix dimensions. The operands remain visible at their cells.
@@ -474,6 +541,39 @@ def totals(doc, sheet, rows, items, columns, headers):
                     unit=units,
                     currency=code,
                 )
+
+    # Secondary scan for unaligned footer labels (e.g. "TTL: 531.0 PACKAGES", "24955.0 KGS N.W.")
+    if total_row and rows:
+        indexed_rows = dict(rows)
+        number, cells = total_row
+        next_cells = indexed_rows.get(number + 1, [])
+        for col_idx, cell_val in enumerate(cells):
+            amt = decimal(cell_val)
+            if amt is not None and amt > 0:
+                context = " ".join(
+                    [
+                        clean(cells[col_idx - 1]) if col_idx > 0 else "",
+                        clean(cells[col_idx + 1]) if col_idx + 1 < len(cells) else "",
+                        clean(next_cells[col_idx]) if col_idx < len(next_cells) else "",
+                        clean(next_cells[col_idx - 1])
+                        if col_idx > 0 and col_idx - 1 < len(next_cells)
+                        else "",
+                        clean(next_cells[col_idx + 1]) if col_idx + 1 < len(next_cells) else "",
+                    ]
+                )
+                if result["packages"].value is None and re.search(
+                    r"\b(?:packages?|pkgs?|cartons?|ctns?|件|箱)\b", context, re.I
+                ):
+                    evidence = cell_evidence(doc, sheet, number, col_idx, str(amt))
+                    result["packages"] = field(str(amt), evidence, unit="PKG")
+                elif (
+                    result["net_weight"].value is None
+                    and amt != decimal(result["gross_weight"].value)
+                    and re.search(r"\b(?:kgs?|kg|n\.?w\.?|净重)\b", context, re.I)
+                ):
+                    evidence = cell_evidence(doc, sheet, number, col_idx, str(amt))
+                    result["net_weight"] = field(str(amt), evidence, unit="KG")
+
     return result
 
 
@@ -545,8 +645,14 @@ def workbook_role(data, name, doc, workbook, role: Role, classification: str):
         )
         headers[7] = headers[9] = code or ""
     items = excel_items(doc, sheet, rows, relevant, columns, headers, end)
+    total_row = declared_total(rows, items)
+    footer_currency = None
+    if role == "invoice":
+        footer_currency = apply_invoice_footer_currency(
+            doc, sheet, rows, items, columns.get("amount"), total_row
+        )
     fields = metadata(doc, sheet, rows, legacy, role)
-    fields.update(totals(doc, sheet, rows, items, columns, headers))
+    fields.update(totals(doc, sheet, items, columns, total_row, footer_currency, rows=rows))
     missing_core = not items or any(
         item.fields[key].status != "present"
         for item in items
@@ -658,7 +764,7 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
             context = " ".join(
                 line.raw or ""
                 for line in lines
-                if line.page == evidence.page and abs((line.line or 0) - (evidence.line or 0)) <= 1
+                if line.page == evidence.page and abs((line.line or 0) - (evidence.line or 0)) <= 3
             )
             labels = (
                 r"loading|receipt|起运|装船"
@@ -724,6 +830,23 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
                     str(amount), line, unit=units, uncertain=used_ocr or units is None
                 )
                 break
+    for num_key in ("packages", "gross_weight"):
+        if fields[num_key].status != "present" and raw.get(num_key) is not None:
+            val_num = raw[num_key]
+            val_str = (
+                str(int(val_num))
+                if isinstance(val_num, float) and val_num.is_integer()
+                else str(val_num)
+            )
+            ev_line = None
+            for line in lines:
+                l_raw = line.raw or ""
+                if val_str in l_raw or (isinstance(val_num, float) and f"{val_num:.3f}" in l_raw):
+                    ev_line = line
+                    break
+            if ev_line:
+                u = "PKG" if num_key == "packages" else "KG"
+                fields[num_key] = field(val_str, ev_line, unit=u, uncertain=used_ocr)
     for key, label_pattern in (
         ("cargo_summary", r"description of goods|cargo description|货物描述"),
         ("container", r"container(?:\s*(?:no\.?|number))?|集装箱号"),
@@ -743,10 +866,19 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
                     fields[key] = field(value, line, uncertain=used_ocr)
                 break
     mode = ROUTE_MODE.search(text)
-    evidence = locate(mode.group()) if mode else None
+    mode_val = clean(raw.get("shipping_mode")) or (mode.group().upper() if mode else None)
+    evidence = (
+        locate(mode.group())
+        if mode
+        else (
+            locate(fields["origin"].value)
+            or locate(fields["destination"].value)
+            or (lines[0] if lines else None)
+        )
+    )
     fields["shipping_mode"] = (
-        field(clean(raw.get("shipping_mode")) or None, evidence, uncertain=used_ocr)
-        if evidence
+        field(mode_val, evidence, uncertain=used_ocr)
+        if evidence and mode_val
         else field(None)
     )
     cargo = [(clean(value)[:140], locate(value)) for value in raw.get("descriptions", [])[:5]]
@@ -757,7 +889,7 @@ def extract_pdf(data: bytes, name: str, doc: UUID, classification: str):
             *(evidence for _, evidence in cargo),
             uncertain=used_ocr and bool(cargo),
         )
-    core = all(fields[key].status == "present" for key in ("bl_no", "shipper", "consignee"))
+    core = all(fields[key].value for key in ("bl_no", "shipper", "consignee"))
     return Extraction(
         document_id=doc,
         role="draft_bl",

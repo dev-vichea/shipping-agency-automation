@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shipping Agency AI — Guided Workflow Demo</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Header / Navigation Bar -->
+  <header class="app-header">
+    <div class="header-left">
+      <div class="brand">
+        <span class="brand-badge">API</span>
+        <h1>Shipping Agency AI Demo</h1>
+      </div>
+      <span class="version-pill">Phase 1–3 Guided Workflow</span>
+    </div>
+
+    <div class="header-right">
+      <div class="case-switcher">
+        <label for="caseSelect">Active Intake Case:</label>
+        <select id="caseSelect" title="Select an existing intake case">
+          <option value="">+ New Intake (Start at Step 1)</option>
+        </select>
+        <button id="refreshBtn" type="button" class="btn btn-outline btn-sm" title="Refresh case data from backend">
+          ↻ Refresh
+        </button>
+      </div>
+
+      <div class="auth-box">
+        <span id="staffStatus" class="staff-badge">Checking Auth...</span>
+        <button id="loginModalBtn" type="button" class="btn btn-sm btn-outline">Sign In</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Case Context Bar (Active when case is selected) -->
+  <section id="caseContextBar" class="case-context-bar hidden">
+    <div class="context-item">
+      <span class="ctx-label">Case ID:</span>
+      <span id="ctxCaseId" class="ctx-value font-mono">—</span>
+    </div>
+    <div class="context-item">
+      <span class="ctx-label">Invoice Ref:</span>
+      <span id="ctxRef" class="ctx-value font-bold">—</span>
+    </div>
+    <div class="context-item">
+      <span class="ctx-label">Revision:</span>
+      <span id="ctxRev" class="ctx-value font-mono">0</span>
+    </div>
+    <div class="context-item">
+      <span class="ctx-label">Status:</span>
+      <span id="ctxState" class="status-pill status-queued">queued</span>
+    </div>
+    <div class="context-item">
+      <span class="ctx-label">Analysis:</span>
+      <span id="ctxOutcome" class="outcome-pill">—</span>
+    </div>
+    <div class="context-item">
+      <span class="ctx-label">AI Status:</span>
+      <span id="ctxAi" class="ai-pill">—</span>
+    </div>
+  </section>
+
+  <!-- Global Error Banner -->
+  <div id="errorBanner" class="error-banner hidden">
+    <div class="error-icon">⚠</div>
+    <div class="error-content">
+      <strong id="errorTitle">Backend Error</strong>
+      <p id="errorMsg"></p>
+    </div>
+    <button id="errorCloseBtn" type="button" class="close-btn">&times;</button>
+  </div>
+
+  <!-- 7-Step Horizontal Wizard Navigator -->
+  <nav class="step-wizard" aria-label="Workflow progress">
+    <button type="button" class="wizard-step active" data-step="1">
+      <span class="step-num">Step 1</span>
+      <span class="step-title">Create Intake</span>
+      <span class="step-sub">Upload files</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="2">
+      <span class="step-num">Step 2</span>
+      <span class="step-title">Process Documents</span>
+      <span class="step-sub">Worker & AI</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="3">
+      <span class="step-num">Step 3</span>
+      <span class="step-title">Document Validation</span>
+      <span class="step-sub">Extractions & rules</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="4">
+      <span class="step-num">Step 4</span>
+      <span class="step-title">CDC Reconciliation</span>
+      <span class="step-sub">Master list matching</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="5">
+      <span class="step-num">Step 5</span>
+      <span class="step-title">Staff Review</span>
+      <span class="step-sub">Resolve blockers</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="6">
+      <span class="step-num">Step 6</span>
+      <span class="step-title">Approve Import</span>
+      <span class="step-sub">Commit record</span>
+    </button>
+    <button type="button" class="wizard-step" data-step="7">
+      <span class="step-num">Step 7</span>
+      <span class="step-title">Generated Results</span>
+      <span class="step-sub">Permit & report</span>
+    </button>
+  </nav>
+
+  <!-- Step Content Containers -->
+  <main class="main-content">
+    
+    <!-- STEP 1: CREATE INTAKE -->
+    <section id="step1View" class="step-panel">
+      <div class="panel-header">
+        <h2>Step 1: Simulate Inbound Shipping Arrival</h2>
+        <p class="panel-desc">
+          Upload commercial shipping documents to create a new intake. Calls <code>POST /api/v1/intakes/simulate</code> with multipart attachments.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <form id="intakeForm" class="workflow-form">
+          <!-- Intake Target Selector (active when case is selected) -->
+          <div id="intakeTargetBox" class="intake-target-box hidden">
+            <span class="target-title"><strong>Intake Destination:</strong></span>
+            <div class="target-options">
+              <label class="radio-label">
+                <input type="radio" name="intake_mode" id="modeNew" value="new" checked>
+                <span><strong>Create New Intake Case</strong> (fresh shipment arrival)</span>
+              </label>
+              <label class="radio-label">
+                <input type="radio" name="intake_mode" id="modeExisting" value="existing">
+                <span><strong>Attach Documents to Active Case:</strong> <code id="activeCasePill">—</code></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group flex-2">
+              <label for="intakeSubject">Subject / Manifest Title *</label>
+              <input type="text" id="intakeSubject" name="subject" required value="TK164 Import · Invoice, Packing List & Draft B/L">
+            </div>
+            <div class="form-group flex-1">
+              <label for="intakeSender">Sender Email</label>
+              <input type="email" id="intakeSender" name="sender" value="supplier@tokayma.example.com">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="intakeBody">Message Notes / Forwarder Instructions</label>
+            <textarea id="intakeBody" name="body" rows="2">Attached shipping documents for import TK164 to Sihanoukville port.</textarea>
+          </div>
+
+          <div class="preset-selector-card">
+            <div class="preset-selector-header"><strong>Synthetic package-count examples</strong></div>
+            <div class="preset-buttons">
+              <button type="button" class="btn btn-outline btn-sm preset-btn" id="btnLoadScan">
+                Scanned B/L · 531 PKG
+              </button>
+              <button type="button" class="btn btn-outline btn-sm preset-btn" id="btnLoadMismatch">
+                Conflicting B/L · 513 PKG vs 531 PKG
+              </button>
+            </div>
+          </div>
+
+          <!-- Multi-File Upload Dropzone with Append & Drag-Drop -->
+          <div id="dropzoneArea" class="upload-dropzone">
+            <div class="dropzone-content">
+              <span class="dropzone-icon">📁</span>
+              <span class="dropzone-title">Select or Drag & Drop Shipping Documents to Upload *</span>
+              <span class="dropzone-sub">Attach multiple documents (commercial invoice, packing list, B/L PDF, arrival notice). Supported: .xls, .xlsx, .pdf (up to 5 files)</span>
+              <div class="dropzone-buttons">
+                <label for="intakeFiles" class="btn btn-outline btn-sm">
+                  + Choose File(s)
+                </label>
+              </div>
+            </div>
+            <input type="file" id="intakeFiles" name="files" multiple accept=".xls,.xlsx,.pdf">
+          </div>
+
+          <!-- Staged Files Preview Container -->
+          <div id="stagedFilesContainer" class="staged-files-container hidden">
+            <div class="staged-files-header">
+              <div class="staged-title-wrap">
+                <strong>Staged Shipping Documents</strong>
+                <span id="stagedCountBadge" class="badge">0 / 5 files</span>
+              </div>
+              <div class="staged-actions">
+                <label for="intakeFiles" class="btn btn-sm btn-outline">+ Add Another File</label>
+                <button type="button" id="clearFilesBtn" class="btn btn-sm btn-outline text-danger">Clear All</button>
+              </div>
+            </div>
+            <div id="fileListPreview" class="file-list-preview"></div>
+          </div>
+
+          <div class="form-row advanced-row">
+            <div class="form-group flex-1">
+              <label for="intakeProviderId">Provider Message ID (for replay testing)</label>
+              <div class="input-with-action">
+                <input type="text" id="intakeProviderId" name="provider_message_id" placeholder="Auto-generated if empty">
+                <button type="button" id="genIdBtn" class="btn btn-sm btn-outline">Generate</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" id="submitIntakeBtn" class="btn btn-primary">
+              Archive Arrival & Start Intake &rarr;
+            </button>
+          </div>
+        </form>
+
+        <div id="receiptBox" class="response-box hidden">
+          <h3>Backend Ingestion Receipt</h3>
+          <pre id="receiptJson" class="json-viewer"></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 2: PROCESS DOCUMENTS -->
+    <section id="step2View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 2: Document Processing & Background Workers</h2>
+          <span id="step2StatusPill" class="status-pill status-queued">Queued</span>
+        </div>
+        <p class="panel-desc">
+          Celery verifies originals, extracts fields, and runs eligible package-count investigations and Ollama advice.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <!-- Pipeline 3-box progress indicator -->
+        <div class="pipeline-progress">
+          <div id="stageReceipt" class="stage-card">
+            <div class="stage-num">Stage 1</div>
+            <div class="stage-name">Vault & Checksums</div>
+            <div class="stage-desc">SHA-256 archive verification</div>
+            <span class="stage-status status-succeeded">Verified</span>
+          </div>
+
+          <div id="stageAnalysis" class="stage-card">
+            <div class="stage-num">Stage 2</div>
+            <div class="stage-name">Deterministic Parser</div>
+            <div class="stage-desc">Excel sheets & PyMuPDF extraction</div>
+            <span id="analysisStageStatus" class="stage-status status-queued">Running</span>
+          </div>
+
+          <div id="stageAi" class="stage-card">
+            <div class="stage-num">Stage 3</div>
+            <div class="stage-name">Ollama advisory</div>
+            <div class="stage-desc">Structured advice for staff review</div>
+            <span id="aiStageStatus" class="stage-status status-queued">Pending</span>
+          </div>
+        </div>
+
+        <!-- Celery Runs Audit Table -->
+        <div class="section-box">
+          <div class="section-box-header">
+            <h3>Background Celery Runs for Intake</h3>
+            <div class="actions">
+              <button type="button" id="reprocessBtn" class="btn btn-sm btn-outline">
+                Force Reprocess (Revision +1)
+              </button>
+            </div>
+          </div>
+          <div class="table-container">
+            <table id="runsTable" class="data-table">
+              <thead>
+                <tr>
+                  <th>Run ID / Trace</th>
+                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Attempt</th>
+                  <th>Started</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody id="runsTableBody">
+                <tr><td colspan="6" class="text-center">Loading run logs...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="investigationBox" class="section-box hidden">
+          <div class="section-box-header"><h3>B/L package-count investigation</h3></div>
+          <p id="investigationSummary" class="text-sm" aria-live="polite"></p>
+          <ol id="investigationSteps" style="padding: 0 24px 0 42px;"></ol>
+        </div>
+
+        <div class="gate-actions">
+          <button type="button" id="btnToStep3" class="btn btn-primary" disabled>
+            Inspect Document Validation (Step 3) &rarr;
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 3: DOCUMENT VALIDATION -->
+    <section id="step3View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 3: Document Validation & Cross-Checks</h2>
+          <span id="step3OutcomePill" class="outcome-pill">—</span>
+        </div>
+        <p class="panel-desc">
+          Deterministic cross-document rules comparing invoice, packing list, and bill of lading summary fields with decimal arithmetic.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <!-- Extracted Documents Overview Cards -->
+        <div class="section-box">
+          <h3>Extracted Documents Summary</h3>
+          <div id="documentsSummaryGrid" class="cards-grid"></div>
+        </div>
+
+        <!-- Ollama AI Advisory Box -->
+        <div id="aiAdvisoryBox" class="ai-advisory-box hidden">
+          <div class="ai-header">
+            <span class="ai-sparkle">✦</span>
+            <strong>Local Ollama AI Advisory Suggestions (<span id="aiModelName">qwen3.5:4b-q4_K_M</span>)</strong>
+          </div>
+          <div id="aiSuggestionsList" class="ai-suggestions-list"></div>
+        </div>
+
+        <!-- Line Items Table -->
+        <div class="section-box">
+          <h3>Extracted Commercial Invoice Items</h3>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Line</th>
+                  <th>Description</th>
+                  <th>Quantity</th>
+                  <th>Unit</th>
+                  <th>Unit Price</th>
+                  <th>Total Amount</th>
+                  <th>Source Cell</th>
+                </tr>
+              </thead>
+              <tbody id="invoiceItemsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Deterministic Findings Table with Filter -->
+        <div class="section-box">
+          <div class="section-box-header">
+            <h3>Deterministic Comparison Findings (<span id="findingsCount">0</span>)</h3>
+            <div class="filter-tabs">
+              <button type="button" class="filter-tab active" data-filter="ALL">All</button>
+              <button type="button" class="filter-tab" data-filter="MISMATCH">Mismatches</button>
+              <button type="button" class="filter-tab" data-filter="NEEDS_REVIEW">Needs Review</button>
+              <button type="button" class="filter-tab" data-filter="WARNING">Warnings</button>
+              <button type="button" class="filter-tab" data-filter="PASS">Passed</button>
+            </div>
+          </div>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Outcome</th>
+                  <th>Group / Field</th>
+                  <th>Explanation</th>
+                  <th>Invoice Value</th>
+                  <th>B/L or PL Value</th>
+                  <th>Evidence</th>
+                </tr>
+              </thead>
+              <tbody id="findingsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="gate-actions">
+          <button type="button" class="btn btn-outline" data-nav-step="2">&larr; Back to Processing</button>
+          <button type="button" class="btn btn-primary" data-nav-step="4">Proceed to CDC Reconciliation (Step 4) &rarr;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 4: CDC RECONCILIATION -->
+    <section id="step4View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 4: CDC Master List Reconciliation</h2>
+          <span id="selectedMasterPill" class="badge">No CDC Version</span>
+        </div>
+        <p class="panel-desc">
+          Rank duty exemption master list candidates using RapidFuzz and localized translation memory. Validates company agreement and remaining quota balances.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <!-- Master List Selector Card -->
+        <div class="section-box">
+          <h3>Select CDC Master List Version</h3>
+          <div class="form-row items-end">
+            <div class="form-group flex-2">
+              <label for="cdcVersionSelect">Registered Master List Workbook:</label>
+              <select id="cdcVersionSelect">
+                <option value="">-- Choose a registered Master List --</option>
+              </select>
+            </div>
+            <button type="button" id="applyCdcBtn" class="btn btn-primary">
+              Apply CDC Version & Re-analyze
+            </button>
+            <button type="button" id="toggleUploadMasterBtn" class="btn btn-outline">
+              + Register New Master List
+            </button>
+          </div>
+
+          <div id="companyCheckNotice" class="notice-box hidden"></div>
+
+          <!-- Register Master List Collapsible Form -->
+          <div id="registerMasterBox" class="register-master-box hidden">
+            <h4>Upload & Register a Verified CDC Master List Workbook</h4>
+            <form id="registerMasterForm" class="workflow-form">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="masterCompany">Company Name (Exact) *</label>
+                  <input type="text" id="masterCompany" name="company" required placeholder="XIN CAI FU (CAMBODIA) CO., LTD.">
+                </div>
+                <div class="form-group">
+                  <label for="masterRef">Approval Reference *</label>
+                  <input type="text" id="masterRef" name="approval_ref" required placeholder="QIP # 211-26">
+                </div>
+                <div class="form-group">
+                  <label for="masterYear">Approval Year *</label>
+                  <input type="number" id="masterYear" name="year" required value="2026" min="2000" max="2100">
+                </div>
+                <div class="form-group">
+                  <label for="masterBalance">Balance As Of Date</label>
+                  <input type="date" id="masterBalance" name="balance_as_of">
+                </div>
+              </div>
+              <div class="form-group">
+                <label for="masterFile">Excel Master List File (.xls / .xlsx) *</label>
+                <input type="file" id="masterFile" name="file" required accept=".xls,.xlsx">
+              </div>
+              <label class="checkbox-label">
+                <input type="checkbox" name="verified" value="true" required>
+                <span>I confirm this workbook was verified against the official CDC approval document.</span>
+              </label>
+              <button type="submit" id="submitMasterBtn" class="btn btn-sm btn-primary">
+                Upload & Register Workbook
+              </button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Candidate Matches Table -->
+        <div class="section-box">
+          <h3>Automated CDC Candidate Matches (<span id="candidateCount">0</span>)</h3>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Invoice Line</th>
+                  <th>CDC Master Row</th>
+                  <th>Similarity Score</th>
+                  <th>Candidate Master Description</th>
+                  <th>Source Evidence</th>
+                </tr>
+              </thead>
+              <tbody id="candidatesTableBody">
+                <tr><td colspan="5" class="text-center text-muted">No CDC candidates available yet. Apply a Master List above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="gate-actions">
+          <button type="button" class="btn btn-outline" data-nav-step="3">&larr; Back to Validation</button>
+          <button type="button" class="btn btn-primary" data-nav-step="5">Proceed to Staff Review (Step 5) &rarr;</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STEP 5: STAFF REVIEW -->
+    <section id="step5View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 5: Staff Review & Conflict Resolution</h2>
+          <span id="reviewReadyPill" class="status-pill status-needs_review">Needs Review</span>
+        </div>
+        <p class="panel-desc">
+          Check the suggested findings against the originals. Save your review to see what must be resolved before approval.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <!-- Live Blockers Alert -->
+        <div id="blockersBox" class="blockers-alert hidden">
+          <div class="blocker-header">
+            <strong>⚠ Review status (<span id="blockersCount">0</span>)</strong>
+          </div>
+          <ul id="blockersList"></ul>
+        </div>
+
+        <div id="readyBox" class="ready-alert hidden">
+          <strong>✓ All Required Checks Resolved</strong>
+          <p>Zero blockers remain. This intake is ready for staff approval commit.</p>
+        </div>
+
+        <form id="staffReviewForm" class="workflow-form">
+          <!-- 1. CDC Candidate Mapping Table -->
+          <div class="section-box">
+            <h3>1. Verify CDC mappings for the permit draft</h3>
+            <p class="section-desc">Compare each suggested row with the applicable CDC Master List. The match score measures description similarity. Verify the unit, approved limits and available balance before confirming a row.</p>
+            <div class="table-container">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Invoice Row / Description</th>
+                    <th>Invoice Qty & Unit</th>
+                    <th>CDC Master List row</th>
+                  </tr>
+                </thead>
+                <tbody id="mappingRowsTableBody"></tbody>
+              </table>
+            </div>
+
+            <label class="checkbox-label mt-2">
+              <input type="checkbox" id="verifyCdcCheckbox">
+              <span>I confirm the selected CDC rows were verified against the official CDC approval document.</span>
+            </label>
+          </div>
+
+          <!-- 2. Discrepancy Resolutions -->
+          <div class="section-box">
+            <h3>2. Resolve Discrepancies with Audit Notes</h3>
+            <p class="section-desc">For the findings below, record what you confirmed in the originals. For a genuine mismatch, use a verified field correction in the staff workspace or upload a revised document.</p>
+            <div id="resolutionsContainer" class="resolutions-list"></div>
+          </div>
+
+          <!-- 3. Informational Findings (Read-only) -->
+          <div id="infoFindingsBox" class="section-box hidden">
+            <h3>3. Other comparison findings</h3>
+            <p class="section-desc">A value printed on only one document appears as a warning. Save the review to check which findings block approval.</p>
+            <div id="infoFindingsList" class="info-findings-list"></div>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" class="btn btn-outline" data-nav-step="4">&larr; Back to CDC</button>
+            <button type="submit" id="saveReviewBtn" class="btn btn-secondary">
+              Save Staff Review
+            </button>
+            <button type="button" id="btnToStep6" class="btn btn-primary" disabled>
+              Proceed to Approval (Step 6) &rarr;
+            </button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- STEP 6: APPROVE IMPORT -->
+    <section id="step6View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 6: Staff Approval Gate</h2>
+          <span id="step6StatePill" class="status-pill status-ready_for_approval">Ready for Approval</span>
+        </div>
+        <p class="panel-desc">
+          Commit the verified intake snapshot into the internal import record and generate an eligible, unsubmitted permit draft.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <div id="alreadyApprovedNotice" class="banner hidden" style="margin-bottom: 20px; padding: 14px 18px; border-radius: 8px; background: rgba(34, 197, 94, 0.12); border: 1px solid #22c55e; color: #15803d; display: flex; align-items: center; justify-content: space-between; gap: 16px;">
+          <div>
+            <strong style="font-size: 15px;">✓ Import Case Already Approved</strong>
+            <p style="margin: 4px 0 0; font-size: 13px; color: #166534;">This intake snapshot has already been approved and saved as an internal import record.</p>
+          </div>
+          <button type="button" id="goToStep7FromApprovedBtn" class="btn btn-primary" style="white-space: nowrap;">
+            View Generated Results (Step 7) &rarr;
+          </button>
+        </div>
+
+        <div id="approvalGateWarning" class="error-banner hidden">
+          <div class="error-icon">🔒</div>
+          <div class="error-content">
+            <strong>Approval Gate Blocked</strong>
+            <p>This intake currently has unresolved blockers or has not been saved by staff. Return to Step 5 to resolve blockers first.</p>
+          </div>
+        </div>
+
+        <div class="section-box">
+          <h3>Reviewed Snapshot to be Committed</h3>
+          <dl class="snapshot-dl">
+            <div>
+              <dt>Analysis Revision:</dt>
+              <dd id="snapRev" class="font-mono">0</dd>
+            </div>
+            <div>
+              <dt>Snapshot Hash:</dt>
+              <dd id="snapHash" class="font-mono text-xs text-muted">—</dd>
+            </div>
+            <div>
+              <dt>Permit Generation Readiness:</dt>
+              <dd id="snapPermitPending" class="font-medium">—</dd>
+            </div>
+          </dl>
+        </div>
+
+        <form id="approvalForm" class="workflow-form">
+          <div class="form-group">
+            <label for="approvalNotes">Staff Decision Notes *</label>
+            <input type="text" id="approvalNotes" required value="Verified against original shipping documents and CDC limits.">
+          </div>
+
+          <div class="form-actions space-between">
+            <button type="button" class="btn btn-outline" data-nav-step="5">&larr; Back to Staff Review</button>
+            <div class="btn-group">
+              <button type="button" id="rejectBtn" class="btn btn-danger">
+                Reject Intake
+              </button>
+              <button type="submit" id="approveBtn" class="btn btn-primary">
+                Approve Import & Commit Business Record &rarr;
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <!-- STEP 7: GENERATED RESULTS -->
+    <section id="step7View" class="step-panel hidden">
+      <div class="panel-header">
+        <div class="title-with-pill">
+          <h2>Step 7: Approved Import Records & Permit Deliverables</h2>
+          <span class="status-pill status-approved">Approved</span>
+        </div>
+        <p class="panel-desc">
+          Official import business record persisted in PostgreSQL. Download generated permit drafts, authorize broker release, or download customs reporting.
+        </p>
+      </div>
+
+      <div class="panel-body">
+        <!-- Approved Record Card -->
+        <div class="section-box">
+          <h3>Approved Business Record (PostgreSQL)</h3>
+          <div class="import-overview-grid" id="importOverviewGrid"></div>
+        </div>
+
+        <!-- Approved Items Table -->
+        <div class="section-box">
+          <h3>Persisted Import Items (<span id="approvedItemsCount">0</span>)</h3>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Line</th>
+                  <th>Description</th>
+                  <th>Quantity</th>
+                  <th>Unit</th>
+                  <th>Unit Price</th>
+                  <th>Total Amount</th>
+                  <th>Currency</th>
+                  <th>Verification</th>
+                </tr>
+              </thead>
+              <tbody id="approvedItemsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Generated Permit Drafts -->
+        <div class="section-box">
+          <h3>Generated Permit Drafts (INV + PL Sheets)</h3>
+          <div class="table-container">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Draft ID</th>
+                  <th>Revision</th>
+                  <th>Status</th>
+                  <th>Broker Release Authorization</th>
+                  <th>Download</th>
+                </tr>
+              </thead>
+              <tbody id="permitDraftsTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Broker Release Authorization Box -->
+        <div id="brokerReleaseBox" class="section-box bg-muted">
+          <h3>Authorize Outbound Broker Release (Human Approval Gate)</h3>
+          <p class="section-desc">Under agency safety rules, drafts are never sent automatically. Authorize the broker recipient here.</p>
+          <form id="brokerReleaseForm" class="workflow-form">
+            <div class="form-row">
+              <div class="form-group flex-1">
+                <label for="brokerEmail">Broker Email *</label>
+                <input type="email" id="brokerEmail" required value="broker-phnompenh@example.com">
+              </div>
+              <div class="form-group flex-2">
+                <label for="releaseNotes">Release Authorization Notes *</label>
+                <input type="text" id="releaseNotes" required value="Authorized for customs declaration preparation.">
+              </div>
+            </div>
+            <button type="submit" id="authReleaseBtn" class="btn btn-sm btn-primary">
+              Record Release Authorization
+            </button>
+          </form>
+          <div id="releaseSuccessMsg" class="notice-box success hidden"></div>
+        </div>
+
+        <!-- Customs Report Download -->
+        <div class="section-box">
+          <h3>Customs Duty Exemption Reporting</h3>
+          <p class="section-desc">Monthly and annual reporting aggregated in Cambodia local timezone (Asia/Phnom_Penh).</p>
+          <div class="btn-group">
+            <a id="downloadReportExcelBtn" href="/api/v1/reports/imports?excel=true" class="btn btn-outline" download>
+              📥 Download Cambodia Customs Register (.xlsx)
+            </a>
+          </div>
+        </div>
+
+        <div class="gate-actions">
+          <button type="button" id="startNewIntakeBtn" class="btn btn-primary">
+            + Start Another Inbound Shipment Workflow
+          </button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Login Modal Dialog -->
+  <dialog id="loginModal" class="modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Staff Authentication</h3>
+        <button type="button" id="closeLoginModal" class="close-btn">&times;</button>
+      </div>
+      <form id="loginForm" class="workflow-form">
+        <p class="text-sm text-muted">Sign in with an active agency staff account.</p>
+        <div class="form-group">
+          <label for="loginEmail">Email Address</label>
+          <input type="email" id="loginEmail" required>
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" required>
+        </div>
+        <div id="loginError" class="field-error hidden"></div>
+        <div class="modal-actions">
+          <button type="submit" id="loginSubmitBtn" class="btn btn-primary">Sign In</button>
+        </div>
+      </form>
+    </div>
+  </dialog>
+
+  <!-- Footer Navigation Info -->
+  <footer class="app-footer">
+    <div class="footer-left">
+      <span>Shipping Agency AI Platform · Internal Guided Workflow Test Bench</span>
+    </div>
+    <div class="footer-right">
+      <span>Backend: FastAPI / Celery / PostgreSQL / Ollama</span>
+    </div>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
+

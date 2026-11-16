@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, StringConstraints
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints
 
 
 def database_text(value: str) -> str:
@@ -37,6 +37,7 @@ class Arrival(BaseModel):
         Annotated[str, StringConstraints(strip_whitespace=True, max_length=200), SafeText] | None
     ) = None
     body: Annotated[str, StringConstraints(max_length=16_000), SafeText] | None = None
+    company_id: UUID | None = None
     intake_case_id: UUID | None = None
     parent_version_id: UUID | None = None
     classification: Literal["invoice", "packing_list", "draft_bl", "other"] = "other"
@@ -69,12 +70,23 @@ class CaseSummary(ORM):
     id: UUID
     state: str
     channel: str
+    company_id: UUID | None = None
+    company: str | None = None
     detected_reference: str | None
     review_reason: str | None
     created_at: datetime
     updated_at: datetime
     attachment_count: int
     subject: str | None
+    sender: str | None = None
+    received_at: datetime | None = None
+    analysis_outcome: Literal["PASS", "WARNING", "MISMATCH", "NEEDS_REVIEW"] | None = None
+    review_checks: dict[str, Literal["PASS", "WARNING", "MISMATCH", "NEEDS_REVIEW"]] = Field(
+        default_factory=dict
+    )
+    document_roles: list[str] = Field(default_factory=list)
+    issue_count: int = 0
+    bill_of_lading: str | None = None
 
 
 class CaseDetail(CaseSummary):

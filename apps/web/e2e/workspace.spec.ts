@@ -20,16 +20,16 @@ test("staff archives originals, verifies the worker and saves an import draft", 
   await page.getByLabel("Work email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await expect(page.getByRole("heading", { name: "Inbox" })).toBeVisible();
-  await page.getByText("Simulate an arrival", { exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
+  await page.getByRole("link", { name: "Upload documents", exact: true }).click();
   await page.getByLabel("Subject").fill(subject);
   await page.getByLabel("Message", { exact: true }).fill("Synthetic shipping note without an invoice reference.");
   await page.getByLabel("Attachments", { exact: true }).setInputFiles({
     name: filename, mimeType: "application/pdf", buffer: original,
   });
   await page.getByLabel("Attachment type").selectOption("draft_bl");
-  await page.getByRole("button", { name: "Archive arrival" }).click();
-  await expect(page.getByRole("heading", { name: subject })).toBeVisible();
+  await page.getByRole("button", { name: "Upload and process" }).click();
+  await expect(page).toHaveURL(/\/review\/[0-9a-f-]{36}$/);
   const caseUrl = page.url();
   const caseId = new URL(caseUrl).pathname.split("/").at(-1);
   const downloadLink = page.getByRole("link", { name: `Download ${filename}` });
@@ -45,9 +45,9 @@ test("staff archives originals, verifies the worker and saves an import draft", 
     const record = await response.json();
     return [record.state, record.detected_reference, record.import_id];
   }).toEqual(["needs_review", null, null]);
-  await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByText("Needs review", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("Review required", { exact: true }).first()).toBeVisible();
 
+  await page.getByText("Enter a draft manually", { exact: true }).click();
   await page.getByLabel("Company", { exact: true }).fill("Synthetic Shipping Co");
   await page.getByLabel("Invoice number").fill(invoice);
   await page.getByLabel("Supplier").fill("Synthetic Supplier");
@@ -56,10 +56,11 @@ test("staff archives originals, verifies the worker and saves an import draft", 
   const draftUrl = page.url();
   await expect(page.getByText("Import draft · pending approval")).toBeVisible();
   await expect(page.getByRole("link", { name: `Download ${filename}` })).toBeVisible();
-  await page.getByRole("link", { name: "Imports", exact: true }).click();
+  const workspace = page.getByRole("navigation", { name: "Workspace" });
+  await workspace.getByRole("link", { name: "Import records", exact: true }).click();
   await expect(page.getByRole("link", { name: invoice })).toBeVisible();
 
-  await page.getByRole("link", { name: "Automation", exact: true }).click();
+  await workspace.getByRole("link", { name: "Automation runs", exact: true }).click();
   const healthResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/v1/automation/health-check") && response.status() === 202);
   await page.getByRole("button", { name: "Run worker check" }).click();
@@ -68,13 +69,14 @@ test("staff archives originals, verifies the worker and saves an import draft", 
     const runs = await (await page.request.get("/api/v1/automation/runs")).json();
     return runs.find((run: { id: string }) => run.id === healthId)?.state;
   }).toBe("succeeded");
-  await page.getByRole("button", { name: "Refresh" }).click();
   await expect(page.getByRole("row").filter({ hasText: "Worker health check" }).first()).toContainText("Succeeded");
-  await expect(page.getByText(/Ollama · qwen3.5/)).toBeVisible();
+  await page.getByRole("row").filter({ hasText: "Worker health check" }).first().getByRole("link", { name: "Worker health check" }).click();
+  await expect(page.getByRole("heading", { name: "Run details" })).toBeVisible();
 
   await page.goto(draftUrl);
   await expect(page.getByRole("heading", { name: invoice })).toBeVisible();
-  await page.getByRole("button", { name: "Sign out" }).click();
+  await page.getByLabel("Account menu").click();
+  await page.getByRole("menuitem", { name: "Sign out" }).click();
   await expect(page.getByRole("heading", { name: "Staff sign in" })).toBeVisible();
   expect((await page.request.get(href)).status()).toBe(401);
   expect(consoleErrors).toEqual([]);

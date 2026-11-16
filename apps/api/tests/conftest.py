@@ -66,11 +66,14 @@ def api(integration_database):
 def staff(api):
     from shipping_ai.core.auth import PASSWORD as hasher
     from shipping_ai.core.db import session_factory
-    from shipping_ai.models import User
+    from shipping_ai.models import DEFAULT_WORKSPACE, User, WorkspaceMember
 
     email = f"test-{uuid4().hex}@example.com"
     with session_factory().begin() as db:
-        db.add(User(email=email, password_hash=hasher.hash(PASSWORD)))
+        user = User(email=email, password_hash=hasher.hash(PASSWORD))
+        db.add(user)
+        db.flush()
+        db.add(WorkspaceMember(workspace_id=DEFAULT_WORKSPACE, user_id=user.id, role="admin"))
     response = api.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
     assert response.status_code == 200, response.text
     assert "HttpOnly" in response.headers["set-cookie"]

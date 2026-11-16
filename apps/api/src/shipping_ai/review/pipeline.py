@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date
 from time import monotonic
 from uuid import UUID
 
@@ -13,14 +14,18 @@ from shipping_ai.ai.provider import (
     ProviderUnavailable,
     review_context,
 )
-from shipping_ai.cdc.master import check_cdc
+from shipping_ai.approvals.review import blockers_for
+from shipping_ai.cdc.master import check_cdc, company_key
 from shipping_ai.core.config import settings
 from shipping_ai.core.db import session_factory
 from shipping_ai.documents.extract import extract
 from shipping_ai.documents.storage import LocalStorage
+from shipping_ai.investigation.jobs import eligible
+from shipping_ai.investigation.schemas import Investigation
 from shipping_ai.models import (
     AutomationRun,
     CdcMasterVersion,
+    Company,
     Document,
     DocumentExtraction,
     IntakeCase,
@@ -31,7 +36,7 @@ from .compare import finding, overall, review_documents
 from .schemas import Candidate, Extraction, Finding
 from .values import usable
 
-RULES_VERSION = "2.0"
+RULES_VERSION = "2.2"
 MAX_ACTIVE_DOCUMENTS = 12
 ANALYSIS_BUDGET_SECONDS = 180
 
@@ -43,6 +48,7 @@ class Analysis:
     candidates: list[Candidate]
     reference: str | None
     master_id: UUID | None
+    detected_company_id: UUID | None = None
 
 
 def enqueue(db, case_id: UUID, revision: int, stage: str = "analysis"):
@@ -54,6 +60,57 @@ def enqueue(db, case_id: UUID, revision: int, stage: str = "analysis"):
         .returning(AutomationRun.id)
     )
     return run_id or db.scalar(select(AutomationRun.id).where(AutomationRun.event_key == event_key))
+
+
+def registered_master(db, case, invoice: Extraction | None, *, company_id=None):
+    if invoice is None or not invoice.items:
+        return None, "An extracted invoice with line items is needed to look up a CDC Master List."
+    company = company_key(usable(invoice.fields.get("consignee")))
+    if not company:
+        return None, "Verify the invoice consignee before choosing a CDC Master List."
+    invoice_date = usable(invoice.fields.get("invoice_date"))
+    try:
+        year = date.fromisoformat(invoice_date).year if invoice_date else None
+    except ValueError:
+        year = None
+    if year is None:
+        return None, "The invoice date is missing or uncertain. Choose the applicable CDC version."
+    query = select(CdcMasterVersion.id).where(
+        CdcMasterVersion.workspace_id == case.workspace_id,
+        CdcMasterVersion.company_key == company,
+        CdcMasterVersion.year == year,
+    )
+    if assigned := company_id or case.company_id:
+        query = query.where(CdcMasterVersion.company_id == assigned)
+    matches = db.scalars(query.limit(2)).all()
+    if len(matches) == 1:
+        return db.get(CdcMasterVersion, matches[0]), None
+    if matches:
+        return (
+            None,
+            "Several CDC versions match the invoice company and year. Choose the applicable approval reference and workbook revision.",
+        )
+    return None, "No verified CDC Master List is registered for the invoice company and year."
+
+
+def detected_company(db, case, roles):
+    if case.company_id or case.channel != "gmail":
+        return None
+    invoice = roles.get("invoice")
+    consignee = company_key(usable(invoice.fields.get("consignee"))) if invoice else None
+    if not consignee:
+        return None
+    observed = {
+        company_key(usable(doc.fields.get("consignee")))
+        for doc in roles.values()
+        if usable(doc.fields.get("consignee"))
+    }
+    matches = []
+    for company in db.scalars(select(Company).where(Company.workspace_id == case.workspace_id)):
+        names = {company_key(name) for name in (company.name, *company.aliases)}
+        if consignee in names and observed <= names:
+            matches.append(company.id)
+    return matches[0] if len(matches) == 1 else None
 
 
 def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
@@ -109,12 +166,24 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
             )
         )
     invoice = roles.get("invoice")
-    checks, candidates = check_cdc(invoice, master)
-    findings.extend(checks)
+    lookup_issue = None
+    company_id = None
+    if master is None and processed == len(active):
+        with session_factory()() as db:
+            company_id = detected_company(db, case, roles)
+            master, lookup_issue = registered_master(db, case, invoice, company_id=company_id)
+    if lookup_issue:
+        findings.append(finding("cdc", "version", "NEEDS_REVIEW", lookup_issue))
+        candidates = []
+    else:
+        checks, candidates = check_cdc(invoice, master)
+        findings.extend(checks)
     reference = usable(invoice.fields.get("invoice_no")) if invoice else None
     if reference and len(reference) > 160:
         reference = None
-    return Analysis(extractions, findings, candidates, reference, master.id if master else None)
+    return Analysis(
+        extractions, findings, candidates, reference, master.id if master else None, company_id
+    )
 
 
 class ArchiveUnavailable(Exception):
@@ -134,6 +203,15 @@ def save_analysis(db, run: AutomationRun, case: IntakeCase, result: Analysis) ->
         ai_state="disabled",
     )
     cfg = settings()
+    blockers, roles, _ = blockers_for(result.extractions, {})
+    document_limit = any(item.field == "document_limit" for item in result.findings)
+    if cfg.investigation_enabled and not document_limit:
+        if eligible(roles, result.findings):
+            investigation_id = enqueue(db, case.id, run.input_revision, "investigation")
+            investigation = db.get(AutomationRun, investigation_id)
+            investigation.investigation = Investigation(
+                model=cfg.ollama_model if cfg.ollama_enabled else None,
+            ).model_dump(mode="json")
     if cfg.ollama_enabled:
         if review_context(result.findings):
             ai_id = enqueue(db, case.id, run.input_revision, "ai")
@@ -157,9 +235,15 @@ def save_analysis(db, run: AutomationRun, case: IntakeCase, result: Analysis) ->
             for doc in result.extractions
         ]
     )
+    if result.detected_company_id and not case.company_id:
+        case.company_id = result.detected_company_id
     case.detected_reference = result.reference
-    case.state = "needs_review"
-    case.review_reason = "Document findings are ready for staff review."
+    if not blockers and not document_limit:
+        case.state = "ready_for_approval"
+        case.review_reason = "Required checks passed. Save and confirm the staff review."
+    else:
+        case.state = "needs_review"
+        case.review_reason = "Document findings are ready for staff review."
 
 
 def advisory(case_id: UUID, revision: int):

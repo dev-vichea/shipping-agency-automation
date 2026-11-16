@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import httpx
+import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 from fixtures.build_samples import COMPANY, REFERENCE, XLSX, draft_bill, master, supplier
@@ -14,7 +15,7 @@ from shipping_ai.ai.provider import InvalidAdvisory, OllamaProvider, review_cont
 from shipping_ai.cdc.master import check_cdc, company_key, parse_master
 from shipping_ai.core.config import Settings
 from shipping_ai.documents.extract import extract
-from shipping_ai.review.compare import overall, review_documents
+from shipping_ai.review.compare import line_comparisons, overall, review_documents
 
 API = "/api/v1"
 
@@ -61,6 +62,23 @@ def test_merged_layout_and_missing_formula_value():
     assert any(f.field == "invoice_no" and f.outcome == "NEEDS_REVIEW" for f in findings)
 
 
+def test_invoice_currency_in_footer_is_linked_to_the_printed_total_and_lines():
+    invoice = documents(supplier(merged=True, footer_currency="USD", declared_subtotal="54.75"))[0]
+    for item in invoice.items:
+        for key in ("unit_price", "amount"):
+            value = item.fields[key]
+            assert value.currency == "USD"
+            assert value.evidence[-1].cell == "J36"
+    assert invoice.fields["amount"].currency == "USD"
+    assert [e.cell for e in invoice.fields["amount"].evidence] == ["J35", "J36"]
+
+
+def test_footer_currency_does_not_override_explicit_column_currency():
+    invoice = documents(supplier(footer_currency="CNY"))[0]
+    assert invoice.items[0].fields["amount"].currency == "USD"
+    assert [e.cell for e in invoice.fields["amount"].evidence] == ["G11"]
+
+
 def test_mismatches_are_deterministic():
     findings, _ = review_documents(
         documents(supplier(packing_quantity=10, packing_price="2.75"), draft_bill(weight="26.00"))
@@ -72,6 +90,43 @@ def test_mismatches_are_deterministic():
         ("transport", "gross_weight"),
     } <= found
     assert all(item.evidence for item in findings if item.outcome == "MISMATCH")
+
+
+def test_audit_checks_declared_subtotal_and_container_check_digit():
+    extracted = documents(
+        supplier(packing_quantity=10, declared_subtotal="31.00"),
+        draft_bill(container="CSQU 305438-3"),
+    )
+    findings, _ = review_documents(extracted)
+    checks = {check.field: check for check in findings if check.group == "validation"}
+    assert checks["invoice_subtotal"].outcome == "MISMATCH"
+    assert checks["invoice_subtotal"].right == "30.00 USD"
+    assert [e.cell for e in checks["invoice_subtotal"].evidence] == ["G11", "G10"]
+    assert checks["currency_uniformity"].outcome == "PASS"
+    assert checks["container_check_digit"].outcome == "PASS"
+    assert line_comparisons(extracted, findings)[0].quantity_delta == "-2"
+    changed, _ = review_documents(documents(bill=draft_bill(container="CSQU3054384")))
+    container = next(check for check in changed if check.field == "container_check_digit")
+    assert container.outcome == "MISMATCH" and container.right == "CSQU3054383"
+
+
+def test_cdc_low_quota_warning_uses_a_current_workbook():
+    invoice = documents()[0]
+    today = datetime.now(UTC).date()
+    parsed = parse_master(master(balance="20"), "master.xlsx", uuid4())
+    version = SimpleNamespace(
+        company=COMPANY,
+        company_key=company_key(COMPANY),
+        year=2026,
+        approval_ref="DEMO-2026",
+        balance_as_of=today,
+        items=[item.model_dump(mode="json") for item in parsed.items],
+    )
+    checks, _ = check_cdc(invoice, version, today)
+    assert any(check.field == "low_quota" and check.outcome == "WARNING" for check in checks)
+    version.balance_as_of = None
+    checks, _ = check_cdc(invoice, version, today)
+    assert all(check.field != "low_quota" for check in checks)
 
 
 @pytest.mark.parametrize("approved_price", [True, False])
@@ -113,7 +168,7 @@ def test_cdc_checks_units_prices_and_missing_balances(approved_price):
 
 @lru_cache
 def replay_files():
-    return supplier(packing_quantity=10), draft_bill()
+    return supplier(packing_quantity=10), draft_bill(vessel="TEST VESSEL 47")
 
 
 def send(staff, key, **metadata):
@@ -150,25 +205,94 @@ def finish_queue():
     pytest.fail("Test queue did not drain")
 
 
+def test_pdf_preview_uses_cited_occurrence_for_repeated_text(staff):
+    label = "Demo Port B"
+    with pymupdf.open(stream=draft_bill(), filetype="pdf") as pdf:
+        page = pdf[0]
+        page.insert_text((72, 420), label)
+        page.insert_text((72, 490), label)
+        earlier, later = [
+            index
+            for index, text in enumerate(page.get_text().splitlines(), 1)
+            if text.strip() == label
+        ]
+        data = pdf.tobytes()
+    receipt = staff.post(
+        f"{API}/intakes/simulate",
+        data={"provider_message_id": uuid4().hex, "subject": "Repeated PDF destination"},
+        files={"files": ("repeated.pdf", data, "application/pdf")},
+    )
+    assert receipt.status_code == 201, receipt.text
+    case = staff.get(f"{API}/intakes/{receipt.json()['case_id']}").json()
+    preview = f"{API}/documents/{case['documents'][0]['id']}/pages/1"
+    first = staff.get(preview, params={"line": earlier}).json()["box"]
+    second = staff.get(preview, params={"line": later}).json()["box"]
+    assert first[1] < second[1]
+    rotated = staff.get(preview, params={"line": later, "rotation": 90}).json()["box"]
+    assert rotated[0] == pytest.approx(1 - second[1] - second[3])
+    assert staff.get(preview, params={"line": later + 100}).json()["box"] is None
+
+
 def test_persistent_review_replay_revision_and_master(staff):
     from shipping_ai.core.db import session_factory
     from shipping_ai.models import DocumentExtraction, ReviewSnapshot
 
     finish_queue()
     key = uuid4().hex
-    first = send(staff, key)
+    metadata = {"subject": f"Fixture {key}", "sender": "supplier@example.test"}
+    first = send(staff, key, **metadata)
     assert first.status_code == 201, first.text
     case_id = first.json()["case_id"]
     path = f"{API}/intakes/{case_id}"
     assert TestClient(staff.app).get(f"{path}/analysis").status_code == 401
-    assert send(staff, key).status_code == 200
+    assert send(staff, key, **metadata).status_code == 200
     finish_queue()
-    assert send(staff, key).json()["replayed"] is True
+    assert send(staff, key, **metadata).json()["replayed"] is True
     finish_queue()
     result = staff.get(f"{path}/analysis").json()
     assert result["state"] == "available" and result["outcome"] == "MISMATCH"
     assert len(result["extractions"]) == 3
+    assert result["line_items"] == [
+        {
+            "invoice_row": 10,
+            "packing_row": 11,
+            "quantity_delta": "-2",
+            "delta_unit": "PCS",
+            "outcome": "MISMATCH",
+        }
+    ]
     assert staff.get(path).json()["import_id"] is None
+    queue = f"{API}/intakes"
+    assert TestClient(staff.app).get(queue).status_code == 401
+    filtered = staff.get(queue, params={"q": key, "outcome": "MISMATCH"})
+    assert filtered.status_code == 200, filtered.text
+    matches = filtered.json()
+    assert [row["id"] for row in matches] == [case_id]
+    assert matches[0]["sender"] == metadata["sender"]
+    assert staff.get(queue, params={"q": key, "outcome": "PASS"}).json() == []
+    assert staff.get(queue, params={"q": "%"}).json() == []
+    for term in ("demobl0001", "ABCD1234567", "test vessel 47", "580710"):
+        response = staff.get(queue, params={"q": term, "include_checks": True})
+        assert response.status_code == 200, response.text
+        matching = [row for row in response.json() if row["id"] == case_id]
+        assert len(matching) == 1
+        assert matching[0]["review_checks"]["invoice_packing"] == "MISMATCH"
+        assert set(matching[0]["document_roles"]) == {"invoice", "packing_list", "draft_bl"}
+        assert matching[0]["issue_count"] > 0
+    original_bill = next(
+        doc for doc in staff.get(path).json()["documents"] if doc["mime"] == "application/pdf"
+    )
+    preview = f"{API}/documents/{original_bill['id']}/pages/1"
+    assert TestClient(staff.app).get(f"{preview}/image").status_code == 401
+    info = staff.get(preview, params={"line": 10, "rotation": 90})
+    assert info.status_code == 200, info.text
+    assert info.json()["pages"] == 1 and info.json()["width"] > info.json()["height"]
+    assert all(0 < value < 1 for value in info.json()["box"])
+    image = staff.get(f"{preview}/image")
+    assert image.headers["content-type"] == "image/png"
+    assert "no-store" in image.headers["cache-control"]
+    assert image.content.startswith(b"\x89PNG")
+    assert staff.get(preview.replace("/pages/1", "/pages/2")).status_code == 404
     with session_factory()() as db:
         assert (
             db.scalar(
@@ -205,6 +329,12 @@ def test_persistent_review_replay_revision_and_master(staff):
     assert registered.status_code == 201, registered.text
     master_id = registered.json()["id"]
     assert staff.post(f"{API}/cdc/versions", data=metadata, files=payload).json()["id"] == master_id
+    items_path = f"{API}/cdc/versions/{master_id}/items"
+    assert TestClient(staff.app).get(items_path).status_code == 401
+    catalog = staff.get(items_path, params={"q": "woven", "limit": 1}).json()
+    assert catalog["total"] == 1
+    assert catalog["items"][0]["description"]["value"] == "Woven label"
+    assert staff.get(items_path, params={"q": "woven", "offset": 1}).json()["items"] == []
     assert (
         staff.post(
             f"{path}/cdc-version",
@@ -223,9 +353,6 @@ def test_persistent_review_replay_revision_and_master(staff):
     latest = staff.get(f"{path}/analysis").json()
     assert latest["analyzed_master"]["id"] == master_id and latest["candidates"]
 
-    original_bill = next(
-        doc for doc in staff.get(path).json()["documents"] if doc["mime"] == "application/pdf"
-    )
     revision = staff.post(
         f"{API}/intakes/simulate",
         data={"intake_case_id": case_id, "parent_version_id": original_bill["id"]},
@@ -235,13 +362,60 @@ def test_persistent_review_replay_revision_and_master(staff):
     finish_queue()
     latest = staff.get(f"{path}/analysis").json()
     assert all(row["document_id"] != original_bill["id"] for row in latest["extractions"])
-    assert staff.get(f"{API}/documents/{original_bill['id']}/download").status_code == 200
+    original = staff.get(f"{API}/documents/{original_bill['id']}/download")
+    assert original.status_code == 200
+    assert original.content == replay_files()[1]
+    details = staff.get(path).json()
+    revised_bill = next(
+        doc for doc in details["documents"] if doc["parent_version_id"] == original_bill["id"]
+    )
+    assert latest["extractions"][0]["document_id"] == revised_bill["id"]
+    with session_factory()() as db:
+        old = db.scalar(
+            select(ReviewSnapshot).where(
+                ReviewSnapshot.intake_case_id == UUID(case_id),
+                ReviewSnapshot.revision == result["revision"],
+            )
+        )
+        assert old is not None and old.findings == result["findings"]
     assert (
         staff.post(f"{path}/process", json={"expected_revision": result["revision"]}).json()[
             "revision"
         ]
         == latest["revision"]
     )
+
+
+@pytest.mark.parametrize("missing_reference", [False, True])
+def test_review_queue_distinguishes_passing_checks_from_missing_information(
+    staff, missing_reference
+):
+    finish_queue()
+    subject = f"workflow-fixture-{uuid4().hex}"
+    receipt = staff.post(
+        f"{API}/intakes/simulate",
+        data={"subject": subject, "provider_message_id": subject},
+        files=[
+            ("files", ("supplier.xlsx", supplier(missing_ref=missing_reference), XLSX)),
+            ("files", ("draft.pdf", draft_bill(), "application/pdf")),
+        ],
+    )
+    assert receipt.status_code == 201, receipt.text
+    case_id = receipt.json()["case_id"]
+    finish_queue()
+    response = staff.get(f"{API}/intakes", params={"q": subject, "include_checks": True})
+    assert response.status_code == 200, response.text
+    [case] = response.json()
+    assert case["id"] == case_id
+    assert case["review_checks"]["invoice_packing"] == "PASS"
+    assert case["review_checks"]["transport"] == "PASS"
+    assert case["review_checks"]["cdc"] == "NEEDS_REVIEW"
+    if missing_reference:
+        assert case["review_checks"]["extraction"] == "NEEDS_REVIEW"
+        assert case["detected_reference"] is None
+    else:
+        assert case["detected_reference"] == REFERENCE
+    assert staff.get(f"{API}/intakes/{case_id}").json()["import_id"] is None
 
 
 def test_ollama_unavailable_keeps_deterministic_snapshot(staff, monkeypatch):
@@ -338,3 +512,23 @@ def test_cdc_price_discrepancy_in_comparable_units():
     assert price.outcome == "MISMATCH"
     assert price.left == "2.50 USD PCS" and price.right == "3.00 USD PCS"
     assert {e.cell for e in price.evidence} == {"F10", "H3"}
+
+
+def test_cdc_detect_categories():
+    from shipping_ai.cdc.master import classify_item_description, detect_categories_for_rows
+
+    rows = [
+        (1, ["CIB 01E", "Company : Test Co"]),
+        (7, ["I", "MACHINERIES AND EQUIPMENT"]),
+        (8, ["1", "One needle sewing machine", "New", "Set", 100]),
+        (15, ["SUB-TOTAL (I):", 50000]),
+        (16, ["II-RAW MATERIALS AND ACCESSORIES"]),
+        (17, ["1", "Cotton Fabric", "New", "YDS", 5000]),
+    ]
+    categories = detect_categories_for_rows(rows, "Sheet1")
+    assert categories[8] == "Machinery & Equipment"
+    assert categories[17] == "Raw Materials & Accessories"
+
+    assert classify_item_description("Auto fabric cutting machine") == "Machinery & Equipment"
+    assert classify_item_description("Woven main label") == "Raw Materials & Accessories"
+    assert classify_item_description("Plastic polybag") == "Raw Materials & Accessories"

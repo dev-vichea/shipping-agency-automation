@@ -1,8 +1,8 @@
 # Shipping Agency AI Automation System
 
-The new internal workspace runs beside the original CDC matcher. Start with the
-[development guide](docs/development.md) for Compose, staff sign-in, simulated
-intake, and verification. See the [architecture decisions](docs/architecture-decisions.md)
+Harborway is the internal shipping operations workspace. It runs beside the
+original CDC matcher. Start with the [development guide](docs/development.md)
+for setup, manual and Gmail intake, company access, Telegram, and verification. See the [architecture decisions](docs/architecture-decisions.md)
 for Phase 0 audit results and Phase 1 boundaries.
 
 ## Legacy shipping workspace + CDC Excel matcher

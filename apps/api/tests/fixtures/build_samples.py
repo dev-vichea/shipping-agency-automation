@@ -1,5 +1,6 @@
 """Generate fictional values in supplier layouts seen in the legacy regression suite."""
 
+import argparse
 from io import BytesIO
 from pathlib import Path
 
@@ -28,6 +29,9 @@ def supplier(
     missing_ref=False,
     missing_amount=False,
     merged=False,
+    footer_currency=None,
+    declared_subtotal="30.00",
+    packages=2,
 ):
     book = Workbook()
     invoice = book.active
@@ -41,7 +45,8 @@ def supplier(
     invoice.append(["Container No:", "ABCD1234567"])
     invoice.append(["BY SEA"])
     if merged:
-        invoice.cell(17, 1, "USD")
+        if footer_currency is None:
+            invoice.cell(17, 1, "USD")
         invoice.merge_cells("C18:G19")
         invoice["C18"] = "数量与货品名称"
         invoice.merge_cells("I18:L18")
@@ -59,6 +64,10 @@ def supplier(
                 (10, "=E25*H25" if missing_amount else str(qty * float(price))),
             ]:
                 invoice.cell(row, col, value)
+        if footer_currency is not None:
+            invoice["C35"] = "TOTAL:"
+            invoice["J35"] = declared_subtotal
+            invoice["J36"] = footer_currency
     else:
         invoice.append(
             [
@@ -83,7 +92,7 @@ def supplier(
                 "PCS",
                 "2.50",
                 "=D10*F10" if missing_amount else "30.00",
-                2,
+                packages,
                 "24.00",
                 "22.00",
             ]
@@ -96,12 +105,14 @@ def supplier(
                 quantity,
                 None,
                 None,
-                None if missing_amount else "30.00",
-                2,
+                None if missing_amount else declared_subtotal,
+                packages,
                 "24.00",
                 "22.00",
             ]
         )
+        if footer_currency is not None:
+            invoice["G12"] = footer_currency
     packing = book.create_sheet("PackingList")
     packing.append([SUPPLIER])
     packing.append(["Packing List"])
@@ -135,18 +146,27 @@ def supplier(
             "PCS",
             packing_price,
             "30.00",
-            2,
+            packages,
             "24.00",
             "22.00",
         ]
     )
     packing.append(
-        ["TOTAL:", None, None, packing_quantity, None, None, "30.00", 2, "24.00", "22.00"]
+        ["TOTAL:", None, None, packing_quantity, None, None, "30.00", packages, "24.00", "22.00"]
     )
     return encoded(book)
 
 
-def draft_bill(*, unreadable=False, weight="24.00", company=COMPANY):
+def draft_bill(
+    *,
+    unreadable=False,
+    weight="24.00",
+    company=COMPANY,
+    container="ABCD1234567",
+    vessel=None,
+    packages=2,
+    scanned=False,
+):
     with pymupdf.open() as pdf:
         page = pdf.new_page()
         if not unreadable:
@@ -160,20 +180,37 @@ def draft_bill(*, unreadable=False, weight="24.00", company=COMPANY):
                         f"Consignee: {company}",
                         "Port of Loading: Demo Port A",
                         "Port of Discharge: Demo Port B",
-                        "Container No: ABCD1234567",
+                        f"Container No: {container}",
                         "Seal No: DEMO5678",
-                        "Packages: 2 CARTONS",
+                        f"Packages: {packages} PKG",
                         f"Gross Weight: {weight} KG",
                         "Net Weight: 22 KG",
                         "BY SEA",
                         "Description of Goods: Woven label",
+                        *([f"Vessel: {vessel}"] if vessel else []),
                     ]
                 ),
             )
+        if scanned:
+            image = page.get_pixmap(dpi=110, colorspace=pymupdf.csGRAY)
+            image.set_dpi(110, 110)
+            with pymupdf.open() as scan:
+                scan.new_page(width=page.rect.width, height=page.rect.height).insert_image(
+                    page.rect, pixmap=image
+                )
+                return scan.tobytes(deflate=True)
         return pdf.tobytes()
 
 
-def master(*, unit="PCS", price="2.50", balance="60", company=COMPANY, price_header=True):
+def master(
+    *,
+    unit="PCS",
+    price="2.50",
+    balance="60",
+    company=COMPANY,
+    price_header=True,
+    extra_rows=0,
+):
     book = Workbook()
     sheet = book.active
     sheet.title = "CDC cut stock"
@@ -206,14 +243,30 @@ def master(*, unit="PCS", price="2.50", balance="60", company=COMPANY, price_hea
             balance,
         ]
     )
+    for serial in range(2, extra_rows + 2):
+        sheet.append([serial, f"Synthetic item {serial}", None, None, None, "PCS", 100])
     return encoded(book)
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--agent-demo", type=Path, metavar="DIRECTORY")
+    args = parser.parse_args()
+    if args.agent_demo:
+        args.agent_demo.mkdir(parents=True, exist_ok=True)
+        for name, data in (
+            ("supplier-531.xlsx", supplier(packages=531)),
+            ("draft-bl-scan-531.pdf", draft_bill(packages=531, scanned=True)),
+            ("draft-bl-513.pdf", draft_bill(packages=513)),
+            ("cdc-paged.xlsx", master(extra_rows=120)),
+        ):
+            (args.agent_demo / name).write_bytes(data)
+        raise SystemExit(0)
     base = Path(__file__).parent
     for name, data in (
         ("supplier-review.xlsx", supplier(packing_quantity=10, packing_price="2.75")),
         ("draft-bl-review.pdf", draft_bill(weight="26.00")),
         ("cdc-review.xlsx", master(unit="ROLL", price="3.00", balance="=G3-10")),
+        ("cdc-approval.xlsx", master()),
     ):
         (base / name).write_bytes(data)

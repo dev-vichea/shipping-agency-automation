@@ -9,6 +9,8 @@ from sqlalchemy import and_, or_, select, text
 from shipping_ai.core.config import settings
 from shipping_ai.core.db import session_factory
 from shipping_ai.documents.storage import LocalStorage
+from shipping_ai.integrations.gmail import sync_all
+from shipping_ai.investigation.jobs import finish_investigation, investigate
 from shipping_ai.models import ActivityEvent, AutomationRun, Document, IntakeCase, ReviewSnapshot
 from shipping_ai.review.pipeline import (
     ArchiveUnavailable,
@@ -35,7 +37,12 @@ celery.conf.update(
             "task": "shipping.drain",
             "schedule": 3.0,
             "options": {"expires": 10},
-        }
+        },
+        "sync-authorized-gmail": {
+            "task": "shipping.sync_gmail",
+            "schedule": 60.0,
+            "options": {"expires": 55},
+        },
     },
 )
 
@@ -119,11 +126,18 @@ def finish(job: Claim, error: str | None, result=None) -> None:
         run = db.get(AutomationRun, job.id, with_for_update=True)
         if not run or run.state != "running" or run.attempt != job.attempt:
             return
+        if job.stage == "investigation" and run.lease_until <= now:
+            return
 
         current = case is not None and job.revision == case.analysis_revision
         run.error_code = error
         run.lease_until = None
-        if error and (not case or current) and run.retry_count < MAX_RETRIES and not job.exhausted:
+        retrying = (
+            error and (not case or current) and run.retry_count < MAX_RETRIES and not job.exhausted
+        )
+        if job.stage == "investigation":
+            finish_investigation(run, result, current=current, retrying=retrying)
+        if retrying:
             run.retry_count += 1
             run.available_at = now + timedelta(seconds=5 * 2 ** (run.retry_count - 1))
             run.state = "queued"
@@ -142,7 +156,7 @@ def finish(job: Claim, error: str | None, result=None) -> None:
 
         previous = case.state if case else None
         if current:
-            if error and job.stage != "ai":
+            if error and job.stage not in {"ai", "investigation"}:
                 case.state = "failed"
                 case.review_reason = "Document processing failed. See Automation to retry."
             elif job.stage == "receipt":
@@ -189,6 +203,10 @@ def drain() -> None:
             result = advisory(job.case_id, job.revision)
             if result and result[0] != "ready":
                 error = f"ollama_{result[0]}"
+        elif job.stage == "investigation":
+            result = investigate(job)
+            if result and result.reason == "model_unavailable":
+                error = "ollama_unavailable"
         else:
             with session_factory()() as db:
                 db.execute(text("SELECT 1"))
@@ -199,3 +217,8 @@ def drain() -> None:
     finish(job, error, result)
     if error:
         log.warning("automation trace=%s code=%s", job.trace_id, error)
+
+
+@celery.task(name="shipping.sync_gmail")
+def sync_gmail() -> None:
+    sync_all()

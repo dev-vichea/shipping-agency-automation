@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, model_validator
+from pydantic import AnyHttpUrl, Field, PostgresDsn, RedisDsn, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -20,6 +20,11 @@ class Settings(BaseSettings):
     session_hours: int = Field(default=8, ge=1, le=24)
     max_file_bytes: int = Field(default=10 * 1024**2, ge=1024, le=20 * 1024**2)
     max_files: int = Field(default=5, ge=1, le=5)
+    gmail_client_id: str = ""
+    gmail_client_secret: SecretStr | None = None
+    connector_key: SecretStr | None = None
+    telegram_bot_token: SecretStr | None = None
+    investigation_enabled: bool = True
     ollama_enabled: bool = False
     ollama_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:11434")
     ollama_model: str = Field(default="qwen3.5:4b-q4_K_M", min_length=1, max_length=120)

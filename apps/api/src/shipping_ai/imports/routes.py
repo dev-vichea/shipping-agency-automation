@@ -1,12 +1,20 @@
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.dialects.postgresql import insert
 
+from shipping_ai.core.access import (
+    case_access,
+    company_access,
+    require_workspace,
+    visible_case,
+    visible_company,
+)
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.intakes.routes import Offset, PageSize
 from shipping_ai.intakes.schemas import ORM, DocumentView, Key, Label
@@ -45,6 +53,7 @@ class ImportSummary(ORM):
     etd_status: str
     eta_status: str
     created_at: datetime
+    approved_at: datetime | None
 
 
 class ItemView(ORM):
@@ -76,29 +85,59 @@ def view(record: ImportRecord, name: str) -> ImportSummary:
     )
 
 
-@router.post(
-    "", status_code=201, response_model=ImportSummary, dependencies=[Depends(browser_origin)]
-)
-def create_draft(payload: CreateDraft, db: DB, user: Staff):
-    case = db.get(IntakeCase, payload.intake_case_id, with_for_update=True)
-    if not case:
-        raise HTTPException(404, "Intake not found")
-    if db.scalar(select(ImportRecord.id).where(ImportRecord.intake_case_id == case.id)):
-        raise HTTPException(409, "This intake already has a draft")
-    identity = " ".join(payload.company.split()).lower()
+def resolve_company(db, name, case):
+    identity = " ".join(name.split()).lower()
+    if case.company_id:
+        company = visible_company(db, case.company_id)
+        if identity not in {
+            company.identity_key,
+            *(" ".join(alias.split()).lower() for alias in company.aliases),
+        }:
+            raise HTTPException(
+                422, "The consignee must match the assigned company name or an alias"
+            )
+        return company
+    workspace = require_workspace(db, admin=True)
+    matches = [
+        company
+        for company in db.scalars(select(Company).where(company_access(db)))
+        if identity
+        in {company.identity_key, *(" ".join(alias.split()).lower() for alias in company.aliases)}
+    ]
+    if len(matches) > 1:
+        raise HTTPException(409, "Assign the intake to the correct company before approving it")
+    if matches:
+        return matches[0]
     if len(identity) > 254:
         raise HTTPException(422, "Company name is too long")
     company_id = db.scalar(
         insert(Company)
-        .values(name=payload.company, identity_key=identity)
-        .on_conflict_do_nothing(index_elements=[Company.identity_key])
+        .values(name=name, identity_key=identity, workspace_id=workspace)
+        .on_conflict_do_nothing(constraint="uq_company_workspace_identity")
         .returning(Company.id)
     )
-    company = (
+    return (
         db.get(Company, company_id)
         if company_id
-        else db.scalar(select(Company).where(Company.identity_key == identity))
+        else db.scalar(
+            select(Company).where(
+                Company.workspace_id == workspace, Company.identity_key == identity
+            )
+        )
     )
+
+
+@router.post(
+    "", status_code=201, response_model=ImportSummary, dependencies=[Depends(browser_origin)]
+)
+def create_draft(payload: CreateDraft, db: DB, user: Staff):
+    case = visible_case(db, payload.intake_case_id, lock=True)
+    if case.state == "rejected":
+        raise HTTPException(409, "This intake was rejected")
+    if db.scalar(select(ImportRecord.id).where(ImportRecord.intake_case_id == case.id)):
+        raise HTTPException(409, "This intake already has an import")
+    company = resolve_company(db, payload.company, case)
+    case.company_id = company.id
     record = ImportRecord(
         intake_case_id=case.id,
         company_id=company.id,
@@ -123,13 +162,40 @@ def create_draft(payload: CreateDraft, db: DB, user: Staff):
 
 
 @router.get("", response_model=list[ImportSummary])
-def list_imports(db: DB, _user: Staff, limit: PageSize = 30, offset: Offset = 0):
+def list_imports(
+    db: DB,
+    _user: Staff,
+    limit: PageSize = 30,
+    offset: Offset = 0,
+    company_id: UUID | None = None,
+    q: Annotated[str, Query(max_length=160)] = "",
+    state: Literal["draft", "approved"] | None = None,
+    oldest_first: bool = False,
+):
+    filters = [case_access(db)]
+    if company_id:
+        visible_company(db, company_id)
+        filters.append(ImportRecord.company_id == company_id)
+    if state:
+        filters.append(ImportRecord.state == state)
+    if q.strip():
+        filters.append(
+            or_(
+                ImportRecord.invoice_no.icontains(q.strip(), autoescape=True),
+                Company.name.icontains(q.strip(), autoescape=True),
+            )
+        )
     return [
         view(record, name)
         for record, name in db.execute(
             select(ImportRecord, Company.name)
             .join(Company)
-            .order_by(ImportRecord.created_at.desc(), ImportRecord.id.desc())
+            .join(IntakeCase, ImportRecord.intake_case_id == IntakeCase.id)
+            .where(*filters)
+            .order_by(
+                ImportRecord.created_at.asc() if oldest_first else ImportRecord.created_at.desc(),
+                ImportRecord.id,
+            )
             .offset(offset)
             .limit(limit)
         )
@@ -138,7 +204,10 @@ def list_imports(db: DB, _user: Staff, limit: PageSize = 30, offset: Offset = 0)
 
 def get_import(db: DB, import_id: UUID) -> tuple[ImportRecord, str]:
     row = db.execute(
-        select(ImportRecord, Company.name).join(Company).where(ImportRecord.id == import_id)
+        select(ImportRecord, Company.name)
+        .join(Company)
+        .join(IntakeCase, ImportRecord.intake_case_id == IntakeCase.id)
+        .where(ImportRecord.id == import_id, case_access(db))
     ).one_or_none()
     if row is None:
         raise HTTPException(404, "Import draft not found")

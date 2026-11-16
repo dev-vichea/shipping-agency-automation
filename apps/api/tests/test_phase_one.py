@@ -254,3 +254,24 @@ def test_xlsx_allowlist_and_plain_message(staff):
     assert message.status_code == 201
     assert staff.get(f"{API}/intakes/{message.json()['case_id']}").json()["attachment_count"] == 0
     assert arrival(staff, subject="NUL\x00character").status_code == 422
+
+
+def test_development_accepts_only_the_same_port_on_both_local_hosts(api, monkeypatch):
+    from shipping_ai.core.config import settings
+
+    config = settings()
+    primary = config.origin
+    alias = primary.replace("localhost", "127.0.0.1", 1)
+    urls = (primary, alias, "http://127.0.0.1:3001", "https://other.example")
+    for environment, expectations in (
+        ("development", (401, 401, 403, 403)),
+        ("test", (401, 403, 403, 403)),
+    ):
+        monkeypatch.setattr(config, "environment", environment)
+        for origin, status in zip(urls, expectations, strict=True):
+            response = api.post(
+                f"{API}/auth/login",
+                json={"email": "local-origin-test@example.com", "password": "unused-test-password"},
+                headers={"Origin": origin},
+            )
+            assert response.status_code == status

@@ -11,6 +11,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -32,12 +33,39 @@ class Created:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+DEFAULT_WORKSPACE = UUID("00000000-0000-4000-8000-000000000001")
+
+
+class Workspace(Identified, Created, Base):
+    __tablename__ = "workspaces"
+
+    name: Mapped[str] = mapped_column(String(254))
+
+
+class WorkspaceMember(Base):
+    __tablename__ = "workspace_members"
+    __table_args__ = (CheckConstraint("role IN ('admin','operator')", name="role"),)
+
+    workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id"), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(16))
+
+
+class CompanyMember(Base):
+    __tablename__ = "company_members"
+
+    company_id: Mapped[UUID] = mapped_column(ForeignKey("companies.id"), primary_key=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), primary_key=True, index=True)
+
+
 class User(Identified, Created, Base):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(String(254), unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
     active: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    approval_alerts: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    automation_alerts: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
 
 
 class StaffSession(Base):
@@ -51,12 +79,19 @@ class StaffSession(Base):
 class IntakeCase(Identified, Created, Base):
     __tablename__ = "intake_cases"
     __table_args__ = (
-        CheckConstraint("state IN ('queued','needs_review','failed')", name="state"),
+        CheckConstraint(
+            "state IN ('queued','needs_review','ready_for_approval','approved','rejected','failed')",
+            name="state",
+        ),
         Index("ix_intake_cases_recent", "created_at", "id"),
     )
 
     state: Mapped[str] = mapped_column(String(24), server_default="queued")
     channel: Mapped[str] = mapped_column(String(24))
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
+    )
+    company_id: Mapped[UUID | None] = mapped_column(ForeignKey("companies.id"), index=True)
     analysis_revision: Mapped[int] = mapped_column(Integer, server_default="0")
     cdc_master_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("cdc_master_versions.id"), index=True
@@ -73,12 +108,18 @@ class IntakeCase(Identified, Created, Base):
 class IncomingMessage(Identified, Base):
     __tablename__ = "incoming_messages"
     __table_args__ = (
-        UniqueConstraint("channel", "provider_message_id", name="uq_message_channel_provider"),
+        Index("ix_incoming_messages_workspace_channel_thread", "workspace_id", "channel", "thread_id"),
+        UniqueConstraint(
+            "workspace_id", "channel", "provider_message_id", name="uq_message_workspace_provider"
+        ),
         UniqueConstraint("id", "intake_case_id", name="uq_message_case"),
     )
 
     intake_case_id: Mapped[UUID] = mapped_column(ForeignKey("intake_cases.id"), index=True)
     channel: Mapped[str] = mapped_column(String(24))
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), server_default=str(DEFAULT_WORKSPACE)
+    )
     provider_message_id: Mapped[str] = mapped_column(String(160))
     thread_id: Mapped[str | None] = mapped_column(String(160))
     sender: Mapped[str | None] = mapped_column(String(254))
@@ -96,7 +137,8 @@ class ImportRecord(Identified, Created, Base):
     __tablename__ = "import_records"
     __table_args__ = (
         UniqueConstraint("id", "intake_case_id", name="uq_import_case"),
-        CheckConstraint("state = 'draft'", name="phase_one_draft_only"),
+        CheckConstraint("state IN ('draft','approved')", name="state"),
+        CheckConstraint("(state = 'approved') = (approved_at IS NOT NULL)", name="approval_time"),
         CheckConstraint(
             "(etd IS NULL AND etd_status = 'pending') OR "
             "(etd IS NOT NULL AND etd_status IN ('expected','confirmed'))",
@@ -120,13 +162,25 @@ class ImportRecord(Identified, Created, Base):
     eta: Mapped[date | None] = mapped_column(Date)
     etd_status: Mapped[str] = mapped_column(String(16), server_default="pending")
     eta_status: Mapped[str] = mapped_column(String(16), server_default="pending")
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
 
 class Company(Identified, Created, Base):
     __tablename__ = "companies"
 
     name: Mapped[str] = mapped_column(String(254))
-    identity_key: Mapped[str] = mapped_column(String(254), unique=True)
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "identity_key", name="uq_company_workspace_identity"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
+    )
+    identity_key: Mapped[str] = mapped_column(String(254))
+    aliases: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    identifier: Mapped[str | None] = mapped_column(String(160))
+    contact_name: Mapped[str | None] = mapped_column(String(254))
+    contact_email: Mapped[str | None] = mapped_column(String(254))
 
 
 class Document(Identified, Base):
@@ -206,7 +260,9 @@ class ImportItem(Identified, Base):
 class AutomationRun(Identified, Created, Base):
     __tablename__ = "automation_runs"
     __table_args__ = (
-        CheckConstraint("stage IN ('receipt','health_check','analysis','ai')", name="stage"),
+        CheckConstraint(
+            "stage IN ('receipt','health_check','analysis','ai','investigation')", name="stage"
+        ),
         CheckConstraint("state IN ('queued','running','succeeded','failed')", name="state"),
         CheckConstraint("attempt >= 0 AND retry_count >= 0", name="attempt"),
         Index("ix_automation_runs_recent", "created_at", "id"),
@@ -214,6 +270,9 @@ class AutomationRun(Identified, Created, Base):
         Index("ix_automation_runs_lease", "state", "lease_until"),
     )
 
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
+    )
     event_key: Mapped[str] = mapped_column(String(100), unique=True)
     stage: Mapped[str] = mapped_column(String(24))
     state: Mapped[str] = mapped_column(String(24), server_default="queued")
@@ -230,6 +289,7 @@ class AutomationRun(Identified, Created, Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error_code: Mapped[str | None] = mapped_column(String(48))
+    investigation: Mapped[dict | None] = mapped_column(JSONB(none_as_null=True))
 
 
 class ActivityEvent(Identified, Created, Base):
@@ -253,11 +313,17 @@ class ActivityEvent(Identified, Created, Base):
 class CdcMasterVersion(Identified, Created, Base):
     __tablename__ = "cdc_master_versions"
     __table_args__ = (
-        UniqueConstraint("company_key", "year", "approval_ref", "sha256", name="uq_cdc_version"),
+        UniqueConstraint(
+            "workspace_id", "company_key", "year", "approval_ref", "sha256", name="uq_cdc_version"
+        ),
         CheckConstraint("year BETWEEN 2000 AND 2100", name="year"),
     )
 
     company: Mapped[str] = mapped_column(String(254))
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
+    )
+    company_id: Mapped[UUID | None] = mapped_column(ForeignKey("companies.id"), index=True)
     company_key: Mapped[str] = mapped_column(String(254))
     year: Mapped[int] = mapped_column(Integer)
     approval_ref: Mapped[str] = mapped_column(String(160))
@@ -310,3 +376,132 @@ class DocumentExtraction(Identified, Created, Base):
     role: Mapped[str] = mapped_column(String(24))
     status: Mapped[str] = mapped_column(String(24))
     payload: Mapped[dict] = mapped_column(JSONB)
+
+
+class StaffReview(Identified, Created, Base):
+    __tablename__ = "staff_reviews"
+    __table_args__ = (
+        Index("ix_staff_reviews_case_revision", "intake_case_id", "revision", "created_at", "id"),
+        ForeignKeyConstraint(
+            ["intake_case_id", "revision"],
+            ["review_snapshots.intake_case_id", "review_snapshots.revision"],
+        ),
+    )
+
+    intake_case_id: Mapped[UUID] = mapped_column()
+    revision: Mapped[int] = mapped_column(Integer)
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    ready: Mapped[bool] = mapped_column(Boolean)
+    snapshot_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
+class Approval(Identified, Created, Base):
+    __tablename__ = "approvals"
+    __table_args__ = (
+        UniqueConstraint(
+            "intake_case_id", "revision", "scope", name="uq_approval_case_revision_scope"
+        ),
+        CheckConstraint(
+            "(scope = 'intake' AND decision IN ('approved','rejected')) OR "
+            "(scope = 'permit_release' AND decision = 'authorized' AND import_id IS NOT NULL)",
+            name="scope_decision",
+        ),
+        ForeignKeyConstraint(
+            ["import_id", "intake_case_id"],
+            ["import_records.id", "import_records.intake_case_id"],
+        ),
+    )
+
+    intake_case_id: Mapped[UUID] = mapped_column(ForeignKey("intake_cases.id"))
+    import_id: Mapped[UUID | None] = mapped_column(index=True)
+    staff_review_id: Mapped[UUID | None] = mapped_column(ForeignKey("staff_reviews.id"), index=True)
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    scope: Mapped[str] = mapped_column(String(24))
+    decision: Mapped[str] = mapped_column(String(24))
+    snapshot_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
+class PermitDraft(Identified, Created, Base):
+    __tablename__ = "permit_drafts"
+
+    approval_id: Mapped[UUID] = mapped_column(ForeignKey("approvals.id"), unique=True)
+    import_id: Mapped[UUID] = mapped_column(ForeignKey("import_records.id"), index=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    content: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+
+
+class FolderSource(Identified, Created, Base):
+    __tablename__ = "folder_sources"
+
+    workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    company_id: Mapped[UUID] = mapped_column(ForeignKey("companies.id"))
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    name: Mapped[str] = mapped_column(String(100))
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("true"))
+    key_hash: Mapped[str] = mapped_column(String(64))
+    last_contact_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    check_status: Mapped[str | None] = mapped_column(String(32))
+
+
+class GmailConnection(Base):
+    __tablename__ = "gmail_connections"
+
+    workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id"), primary_key=True)
+    owner_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    mailbox: Mapped[str] = mapped_column(String(254))
+    credential: Mapped[bytes] = mapped_column(LargeBinary)
+    history_id: Mapped[str] = mapped_column(String(32))
+    senders: Mapped[list[str]] = mapped_column(JSONB, server_default="[]")
+    company_id: Mapped[UUID | None] = mapped_column(ForeignKey("companies.id"))
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+
+
+class TelegramRecipient(Identified, Base):
+    __tablename__ = "telegram_recipients"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "chat_id", name="uq_telegram_workspace_chat"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    chat_id: Mapped[str] = mapped_column(String(24))
+    display_name: Mapped[str] = mapped_column(String(254))
+
+
+class TelegramDelivery(Identified, Created, Base):
+    __tablename__ = "telegram_deliveries"
+    __table_args__ = (
+        UniqueConstraint(
+            "case_id", "chat_id", "revision", "payload_hash", name="uq_telegram_delivery"
+        ),
+    )
+
+    case_id: Mapped[UUID] = mapped_column(ForeignKey("intake_cases.id"))
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"))
+    chat_id: Mapped[str] = mapped_column(String(24))
+    revision: Mapped[int] = mapped_column(Integer)
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(16))
+    provider_message_id: Mapped[str | None] = mapped_column(String(24))
+
+
+class CdcReservation(Base):
+    __tablename__ = "cdc_reservations"
+    __table_args__ = (
+        CheckConstraint("quantity > 0 AND amount >= 0", name="positive"),
+        Index("ix_cdc_reservations_master_id", "master_id", "master_row"),
+    )
+
+    import_id: Mapped[UUID] = mapped_column(ForeignKey("import_records.id"), primary_key=True)
+    master_id: Mapped[UUID] = mapped_column(ForeignKey("cdc_master_versions.id"))
+    master_row: Mapped[int] = mapped_column(Integer, primary_key=True)
+    approval_id: Mapped[UUID] = mapped_column(ForeignKey("approvals.id"))
+    quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+    amount: Mapped[Decimal] = mapped_column(Numeric(20, 6))

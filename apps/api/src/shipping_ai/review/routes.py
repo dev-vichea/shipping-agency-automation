@@ -5,18 +5,19 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from shipping_ai.cdc.routes import view
+from shipping_ai.core.access import master_access, visible_case
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.models import (
     ActivityEvent,
     AutomationRun,
     CdcMasterVersion,
     DocumentExtraction,
-    IntakeCase,
     ReviewSnapshot,
 )
 
+from .compare import line_comparisons
 from .pipeline import enqueue
-from .schemas import ReviewView
+from .schemas import Extraction, Finding, ReviewView
 
 router = APIRouter(prefix="/intakes", tags=["document review"])
 
@@ -36,10 +37,7 @@ class QueuedReview(BaseModel):
 
 
 def get_case(db, case_id, *, lock=False):
-    case = db.get(IntakeCase, case_id, with_for_update=lock)
-    if not case:
-        raise HTTPException(404, "Intake not found")
-    return case
+    return visible_case(db, case_id, lock=lock)
 
 
 def queued_run(db, case):
@@ -77,6 +75,9 @@ def review(case_id: UUID, db: DB, _user: Staff):
     )
     if snapshot is None:
         return output
+    analysis_run = (
+        run if run and run.id == snapshot.run_id else db.get(AutomationRun, snapshot.run_id)
+    )
     analyzed_master = (
         db.get(CdcMasterVersion, snapshot.cdc_master_version_id)
         if snapshot.cdc_master_version_id
@@ -87,15 +88,19 @@ def review(case_id: UUID, db: DB, _user: Staff):
         .where(DocumentExtraction.snapshot_id == snapshot.id)
         .order_by(DocumentExtraction.role, DocumentExtraction.document_id)
     ).all()
+    documents = [Extraction.model_validate(item.payload) for item in extractions]
+    findings = [Finding.model_validate(item) for item in snapshot.findings]
     return {
         **output,
         "state": "available" if snapshot.revision == case.analysis_revision else output["state"],
         "analysis_revision": snapshot.revision,
+        "trace_id": analysis_run.trace_id if analysis_run else None,
         "outcome": snapshot.outcome,
         "rules_version": snapshot.rules_version,
         "extracted_at": snapshot.created_at,
-        "extractions": [item.payload for item in extractions],
-        "findings": snapshot.findings,
+        "extractions": documents,
+        "findings": findings,
+        "line_items": line_comparisons(documents, findings),
         "candidates": snapshot.candidates,
         "analyzed_master": view(analyzed_master),
         "ai_state": snapshot.ai_state,
@@ -161,7 +166,42 @@ def select_master(case_id: UUID, payload: MasterSelection, db: DB, user: Staff):
         return QueuedReview(
             revision=case.analysis_revision, run_id=existing.id if existing else None
         )
-    if payload.version_id and db.get(CdcMasterVersion, payload.version_id) is None:
-        raise HTTPException(404, "CDC Master List version not found")
+    if payload.version_id:
+        master = db.scalar(
+            select(CdcMasterVersion).where(
+                CdcMasterVersion.id == payload.version_id, master_access(db)
+            )
+        )
+        if master is None or (case.company_id and case.company_id != master.company_id):
+            raise HTTPException(404, "CDC Master List version not found for this company")
     case.cdc_master_version_id = payload.version_id
     return queue_review(db, user, case, "cdc_version_selected")
+
+
+class CompanySelection(ProcessRequest):
+    company_id: UUID
+
+
+@router.post("/{case_id}/company", status_code=202, dependencies=[Depends(browser_origin)])
+def assign_company(case_id: UUID, payload: CompanySelection, db: DB, user: Staff):
+    from shipping_ai.core.access import require_workspace, visible_company
+    from shipping_ai.models import ImportRecord
+
+    require_workspace(db, admin=True)
+    case = get_case(db, case_id, lock=True)
+    company = visible_company(db, payload.company_id)
+    if payload.expected_revision != case.analysis_revision:
+        raise HTTPException(409, "This intake changed. Refresh before assigning its company.")
+    if case.company_id == company.id:
+        return {"revision": case.analysis_revision}
+    if (
+        case.company_id
+        or case.state in {"approved", "rejected"}
+        or db.scalar(select(ImportRecord.id).where(ImportRecord.intake_case_id == case.id))
+    ):
+        raise HTTPException(
+            409, "Only unassigned intakes without an import record can be assigned."
+        )
+    case.company_id = company.id
+    case.cdc_master_version_id = None
+    return queue_review(db, user, case, "company_assigned")

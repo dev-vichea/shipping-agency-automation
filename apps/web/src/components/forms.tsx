@@ -1,5 +1,6 @@
 "use client";
 
+import { NativeSelect } from "@/components/ui/native-select";
 import { useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -7,17 +8,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { write } from "@/lib/client-api";
-import type { ImportSummary, Receipt } from "@/lib/contracts";
+import type { Company, ImportSummary, Receipt } from "@/lib/contracts";
 
 function ErrorMessage({ error }: { error: string }) {
-  return error && <p role="alert" className="rounded-md bg-rose-50 p-3 text-sm text-destructive">{error}</p>;
+  return error && <p role="alert" className="field-error">{error}</p>;
 }
 
 function Field({ id, label, children }: { id: string; label: string; children: ReactNode }) {
-  return <div className="space-y-2"><Label htmlFor={id}>{label}</Label>{children}</div>;
+  return <div className="space-y-1"><Label htmlFor={id}>{label}</Label>{children}</div>;
 }
 
-function useWrite() {
+export function useWrite() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(action: () => Promise<void>) {
@@ -34,18 +35,17 @@ function useWrite() {
   return { error, busy, submit };
 }
 
-export function LoginForm() {
+export function LoginForm({ destination = "/home" }: { destination?: string }) {
   const { error, busy, submit } = useWrite();
   function handle(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     void submit(async () => {
       await write("/auth/login", Object.fromEntries(form));
-      // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Clear the router cache when the session changes.
-      window.location.assign("/inbox");
+      window.location.assign(destination);
     });
   }
-  return <form method="post" onSubmit={handle} className="space-y-4">
+  return <form method="post" onSubmit={handle} className="space-y-3">
     <Field id="email" label="Work email"><Input id="email" name="email" type="email" autoComplete="username" required /></Field>
     <Field id="password" label="Password"><Input id="password" name="password" type="password" autoComplete="current-password" maxLength={128} required /></Field>
     <ErrorMessage error={error} />
@@ -53,7 +53,8 @@ export function LoginForm() {
   </form>;
 }
 
-export function IntakeForm({ caseId, revisionChoices = [] }: {
+export function IntakeForm({ caseId, revisionChoices = [], companies = [], defaultCompany = "", allowUnassigned = true }: {
+  companies?: Company[]; defaultCompany?: string; allowUnassigned?: boolean;
   caseId?: string; revisionChoices?: { id: string; original_filename: string }[];
 }) {
   const router = useRouter();
@@ -73,7 +74,7 @@ export function IntakeForm({ caseId, revisionChoices = [] }: {
       form.set("provider_message_id", generated);
     }
     void submit(async () => {
-      const receipt = await write<Receipt>("/intakes/simulate", form);
+      const receipt = await write<Receipt>("/intakes/upload", form);
       setMessageId(undefined);
       if (caseId) {
         element.reset();
@@ -84,38 +85,44 @@ export function IntakeForm({ caseId, revisionChoices = [] }: {
     });
   }
   return (
-    <form method="post" onSubmit={handle} className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
+    <form method="post" onSubmit={handle} className="space-y-3">
+      {!caseId && <Field id="upload-company" label="Company">
+        <NativeSelect required={!allowUnassigned} id="upload-company" name="company_id" defaultValue={defaultCompany} className="w-full">
+          <option value="">{allowUnassigned ? "Unassigned" : "Select a company"}</option>
+          {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+        </NativeSelect>
+      </Field>}
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field id="subject" label="Subject"><Input id="subject" name="subject" maxLength={200} placeholder="e.g. Supplier shipping documents" /></Field>
         <Field id="sender" label="Sender"><Input id="sender" name="sender" maxLength={254} /></Field>
       </div>
       <Field id="body" label="Message"><Textarea id="body" name="body" maxLength={16000} rows={3} /></Field>
-      <div className="grid gap-4 sm:grid-cols-2">
+      <div className="grid gap-3 sm:grid-cols-2">
         <Field id="files" label="Attachments">
-          <Input id="files" name="files" type="file" accept=".pdf,.xls,.xlsx" multiple aria-describedby="file-limits" />
-          <p id="file-limits" className="text-xs text-muted-foreground">PDF, XLS or XLSX. Up to five files, 10 MB each.</p>
+          <Input id="files" name="files" type="file" accept=".pdf,.xls,.xlsx" required={!caseId} multiple aria-describedby="file-limits" />
+          <p id="file-limits" className="text-body-sm text-muted-foreground">PDF, XLS or XLSX. Up to five files, 10 MB each.</p>
         </Field>
         <Field id="classification" label="Attachment type">
-          <select id="classification" name="classification" className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+          <NativeSelect id="classification" name="classification" className="w-full">
             <option value="other">Unclassified</option><option value="invoice">Invoice</option>
             <option value="packing_list">Packing list</option><option value="draft_bl">Draft B/L</option>
-          </select>
+          </NativeSelect>
         </Field>
       </div>
       {revisionChoices.length > 0 && <Field id="parent_version_id" label="Revises an original (optional)">
-        <select id="parent_version_id" name="parent_version_id" aria-describedby="revision-info" className="h-9 w-full rounded-md border border-input bg-transparent px-3 text-sm">
+        <NativeSelect id="parent_version_id" name="parent_version_id" aria-describedby="revision-info" className="w-full">
           <option value="">New attachment or message</option>
           {revisionChoices.map((doc) => <option key={doc.id} value={doc.id}>{doc.original_filename} · {doc.id.slice(0, 8)}</option>)}
-        </select>
-        <p id="revision-info" className="text-xs text-muted-foreground">Attach one file when saving a revision.</p>
+        </NativeSelect>
+        <p id="revision-info" className="text-body-sm text-muted-foreground">Attach one file when saving a revision.</p>
       </Field>}
       <ErrorMessage error={error} />
-      <Button type="submit" disabled={busy}>{busy ? "Archiving…" : "Archive arrival"}</Button>
+      <Button type="submit" disabled={busy}>{busy ? "Uploading…" : caseId ? "Archive arrival" : "Upload and process"}</Button>
     </form>
   );
 }
 
-export function DraftForm({ caseId }: { caseId: string }) {
+export function DraftForm({ caseId, company }: { caseId: string; company?: string | null }) {
   const router = useRouter();
   const { error, busy, submit } = useWrite();
   function handle(event: FormEvent<HTMLFormElement>) {
@@ -129,9 +136,9 @@ export function DraftForm({ caseId }: { caseId: string }) {
       router.push(`/imports/${draft.id}`);
     });
   }
-  return <form method="post" className="space-y-4" onSubmit={handle}>
-    <div className="grid gap-4 sm:grid-cols-2">
-      <Field id="company" label="Company"><Input id="company" name="company" maxLength={254} required /></Field>
+  return <form method="post" className="space-y-3" onSubmit={handle}>
+    <div className="grid gap-3 sm:grid-cols-2">
+      <Field id="company" label="Company"><Input id="company" name="company" defaultValue={company ?? ""} maxLength={254} required /></Field>
       <Field id="invoice_no" label="Invoice number"><Input id="invoice_no" name="invoice_no" maxLength={160} required /></Field>
       <Field id="supplier" label="Supplier"><Input id="supplier" name="supplier" maxLength={254} /></Field>
       <Field id="consignee" label="Consignee"><Input id="consignee" name="consignee" maxLength={254} /></Field>

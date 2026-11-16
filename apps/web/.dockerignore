@@ -6,3 +6,5 @@
 !postcss.config.mjs
 !src/
 !src/**
+!public/
+!public/harborway-folder-intake-mac.zip

@@ -1,33 +1,147 @@
-# Development: Shipping Agency Automation
+# Development: Harborway shipping workspace
 
-Run from the repository root with Docker Desktop and Docker Compose v2:
+From the repository root, start the application using Docker Compose:
 
 ```sh
 ./scripts/init-dev-env.sh
 docker compose -f compose.dev.yml up -d --build --wait
-docker compose -f compose.dev.yml exec api python -m shipping_ai.core.cli create-staff staff@example.com
+docker compose -f compose.dev.yml exec api python -m shipping_ai.core.cli create-staff staff@example.com --default-workspace-admin
 ```
 
-The first command creates a Git-ignored `.env` with a random hex database password.
-Run it once. The staff command prompts for a password (12–128 characters). Open
-[the workspace](http://localhost:3000/inbox) and sign in. Use the exact configured
-web origin (default `http://localhost:3000`) for browser writes. If changing the
-web port, update both `SHIPPING_WEB_PORT` and `SHIPPING_WEB_ORIGIN` in `.env`.
-The API listens on host loopback port 8001 because 8000 was occupied on the audit
-machine. Postgres and Redis have no published ports in this stack.
+Open [Harborway](http://localhost:3000/home) and sign in. The setup script creates
+a Git-ignored `.env`. The staff command prompts for a 12–128 character password.
+Use the administrator flag only for a trusted administrator of the default
+workspace. Provision operators without that flag, then add their work email in
+**Settings → Staff members** and assign their companies from the company detail
+page. Administrators can create and switch workspaces with the same staff account.
 
-1. In **Inbox**, open **Simulate an arrival**. Add a subject and a synthetic
-   PDF, XLS, or XLSX. A reference number is optional. Each submitted message
-   can contain up to five 10 MiB files.
-2. Open the intake. Download the original or expand its name for SHA-256 and
-   source IDs. A new attachment can explicitly revise one of the originals.
-   The worker verifies the archive and analyzes supported documents. Use
-   **Refresh** to see the latest findings and review state.
-3. Enter a company and invoice number and save an import draft. It appears in
-   **Imports** with its source intake and originals. ETD and ETA remain pending.
-4. Open **Automation**, select **Run worker check**, then refresh. A completed
-   health-check row shows **Succeeded**. Failed runs show a short error code
-   and a **Retry** button.
+Use the configured web origin for browser writes. The development stack also accepts
+the other local address (`localhost` or `127.0.0.1`) on the same port. If changing the port,
+update both `SHIPPING_WEB_PORT` and `SHIPPING_WEB_ORIGIN`. The development API
+publishes on host loopback port 8001 by default. PostgreSQL and Redis stay on
+the Compose network. The standalone Streamlit application uses its original
+configuration on port 8501.
+
+1. Create or select a client company. Use **Inbox → Upload documents** to submit
+   up to five PDF, XLS, or XLSX files. The development limit is 10 MiB per file.
+2. Watch the case update while the worker verifies the archive and runs
+   extraction, deterministic checks, and any configured AI investigation.
+   **Intake cases** contains the originals, worksheet and PDF previews,
+   compared values, evidence, and activity. Upload a follow-up or explicit file
+   revision from the same case when required.
+3. Use **Import records → Drafts** or **Approvals** to review the current
+   evidence-backed proposal. An incomplete proposal stays available for staff
+   correction. Confirm the reviewed draft to commit an approved record.
+4. Open the approved record to download any eligible permit INV/PL draft or go
+   to **Reports** to export approved imports. **Automation runs** exposes
+   processing history, trace IDs, and failed-job retries.
+
+## Register a CDC Master List
+
+Open **CDC Master Lists → Register workbook** and select the XLS or XLSX file.
+The dialog reads the workbook header and shows suggested values with their
+cell locations. You can also add an approval PDF for suggestions. Harborway
+reads PDF text first and uses OCR for scanned pages. If enabled, local Ollama
+can suggest missing fields from short header excerpts. The workbook remains
+the source of the registered item rows.
+
+Choose **Apply suggestions** to fill blank fields, review the values against
+the approval, and confirm before registering. Previewing files leaves the
+catalog untouched. The optional PDF is used during preview.
+
+## Watch folders for document intake
+
+Open **Integrations → Add source → Watched folder** as a workspace administrator.
+Choose a company and a source name, then click **Choose folder**. Harborway
+Folder Intake opens the native Mac picker. First-time users can download the
+Mac app from the dialog and open it once to register the browser handoff.
+Repeat setup for each source. The Mac app stays in the menu bar and checks
+about every 20 seconds while running. Use **Open at Login** in its menu if it
+should start when you sign in. Only the Mac app stores the local folder path.
+
+Put each shipment in a direct subfolder with a stable name, such as
+`ORIGINAL DOCS/INV-2026-047/`. The Mac app checks PDF, XLS and XLSX files in
+those shipment folders. It ignores symbolic links, hidden entries, Office
+temporary files and empty folders. Files must stay unchanged across consecutive
+checks and be readable before upload. Google Drive streaming files may need
+time to download. The Integrations list shows the last successful check and
+whether the Mac app is waiting, offline, or needs attention.
+
+Setup uses new arrivals only. Files for the same
+shipment subfolder join one open intake case, where repeat bytes are
+deduplicated and same-name replacements are linked as revisions. Files received
+after approval or rejection start a follow-up case for staff review. The Mac app
+never removes or edits source files. Gmail can run alongside watched folders,
+and manual uploads remain available in the Inbox.
+
+Use **Pause** or **Resume** on a source, or select **Choose folder** in its menu. A
+completed setup replaces the previous connection for that source. Canceling
+the picker leaves it in place. Setup links are single-use and expire after
+five minutes.
+
+For maintainers, build the app on macOS before building the web image.
+`apps/folder-mac/build.sh` creates a universal app and packages the download
+for the local Harborway URL. Pass the actual workspace origin as the first
+argument for other deployments. Distribution to other Macs should use a
+Developer ID signature and notarization. The installed local build uses an
+ad-hoc signature.
+
+## Workspace data and upgrades
+
+Alembic migrations `0005`–`0009` preserve existing records, originals, staff
+reviews and permit drafts. Existing staff retain their previous access as
+administrators of the migrated **Shipping Agency** workspace. Review the roster
+in Settings and assign narrower access where appropriate. Newly provisioned
+staff require explicit workspace membership to see existing records.
+
+The draft list uses the current case analysis revision as the proposal. An
+approved import is committed only through the staff approval transaction.
+Eligible mapped rows get internal CDC reservations under a workbook-version
+lock. This leaves the archived workbook and its balance values intact.
+Historical approvals are preserved as recorded. Internal reservations begin
+with eligible approvals under this version of the application. Customs-cleared
+quantities require a separate verified clearance workflow.
+
+## Gmail and Telegram test setup
+
+Use agency-authorized accounts, bot chats, and test data. Keep provider
+credentials in the local environment or the deployment secret store.
+
+- **Gmail.** Enable the Gmail API in the agency's Google Cloud project and
+  configure a web OAuth client with redirect URI
+  `<SHIPPING_WEB_ORIGIN>/api/v1/integrations/gmail/callback`. Set
+  `SHIPPING_GMAIL_CLIENT_ID`, `SHIPPING_GMAIL_CLIENT_SECRET`, and
+  `SHIPPING_CONNECTOR_KEY` in the API/worker environment. The encryption key is a
+  stable Fernet key. Generate it privately with
+  `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'`
+  using the API's Python environment. After restarting, connect one mailbox in
+  **Integrations**, enter allowed sender addresses, and enable monitoring.
+  Celery polls Gmail history every minute starting from the connection, subject
+  to Google's history retention. Intake considers inbox messages with supported
+  attachments. A removed or expired cursor requires reconnecting. Resolve
+  ambiguous companies from the case. For a company-assigned mailbox, a
+  follow-up can join an open case when the mailbox thread, sender, subject,
+  company, and invoice reference agree.
+- **Telegram.** Set the agency bot's `SHIPPING_TELEGRAM_BOT_TOKEN` in the API
+  environment. In **Integrations**, link consenting staff to their confirmed
+  private chat IDs after they start the bot. On a completed draft, **Share draft**
+  shows the exact message and eligible recipients. Confirm one recipient and
+  the displayed message before sending. A delivery that Telegram cannot confirm
+  stays recorded for the operator to check in the chat.
+- **Approvals from a Telegram link.** Use a reachable HTTPS workspace origin for
+  delivery to real staff. The link opens the exact draft and its workspace.
+  A passing, eligible revision with a saved verified review opens the
+  authenticated quick approval screen. The API checks workspace/company access,
+  review ID, revision, and approval eligibility at submission. Other cases open
+  the full review.
+- **Local AI.** Set `SHIPPING_OLLAMA_ENABLED=true` and optionally
+  `SHIPPING_INVESTIGATION_ENABLED=true` in the API/worker environment. Install
+  the configured model on the Mac and verify Docker can reach
+  `http://host.docker.internal:11434`. **Settings** shows the provider status.
+  When Ollama is unavailable, deterministic findings and originals remain
+  available for manual review.
+
+### API and regression notes
 
 The API serves `GET /health/live`, `GET /health/ready`, `/docs`, and
 `/openapi.json` at [localhost:8001](http://localhost:8001/docs). Browser API
@@ -165,3 +279,63 @@ Generated fictional supplier, B/L, and CDC test files are under
 `apps/api/tests/fixtures/`. The spreadsheet layouts reproduce the relevant
 legacy headers and merged cells. Use these files to run the Review Center
 example without agency records.
+
+## Phase 3 staff approval and reporting
+
+1. Archive a simulated arrival with the synthetic supplier workbook and B/L PDF
+   in `apps/api/tests/fixtures/`. Open the case and wait for its analysis.
+2. In **Staff review**, inspect the source, enter reviewed corrections and
+   reasons, and save. Quantity and other deterministic conflicts must be
+   corrected. Wording and uncertain transport comparisons can be resolved with
+   a staff note. **Request correction** records an internal request. **Reject
+   intake** preserves the evidence and decision history.
+3. For a CDC draft, register and apply the verified workbook. For the synthetic
+   walkthrough use `cdc-approval.xlsx`, year 2026, reference `DEMO-2026`, and
+   today's UTC balance date. Select and verify the appropriate candidate in
+   Staff review. Real balance dates and workbook references must come from the
+   approved evidence.
+4. Save the review, enter the approval note, and click **Approve intake**. The
+   transaction stores the reviewed snapshot hash, actor and scope, updates one
+   import for the case, and attaches an unsubmitted INV/PL workbook when eligible.
+   The import detail lists the exact workbook revision and checksum-backed
+   download. A broker release authorization records the selected draft and
+   recipient for later delivery.
+5. In **Reports**, filter by Cambodia-local approval dates and download Excel.
+   Totals include approved line amounts and are grouped by currency.
+
+The Phase 3 migration adds audit and permit tables and preserves existing drafts
+and originals. The one-workspace staff authorization model remains in use.
+Each saved review is an immutable application record for an analysis revision.
+A new arrival or reprocess requires a new review. The previous approved import
+and draft remain available while that revision is reviewed. A replay of the
+same approval returns its original result.
+
+The existing CDC application exporter is the first template profile. It uses
+USD, a single quantity unit per sheet, paired INV/PL lines, verified CDC item
+mappings, and comparable current quantity limits. Where the workbook provides
+prices or value limits, the comparable reviewed values must pass those checks.
+ETD/ETA and final B/L are optional. The approval screen shows why a permit is
+pending while allowing approval of a qualifying import. Permit workbook bytes
+are stored with the approval transaction in PostgreSQL so a retry cannot create
+a second file or leave the approved record pointing at a missing draft. Archived
+originals continue to use the private document volume.
+
+Upgrade and check schema parity with:
+
+```sh
+docker compose -f compose.dev.yml up -d --build --wait
+docker compose -f compose.dev.yml exec -T api alembic check
+```
+
+## Package-count investigation
+
+Set `SHIPPING_INVESTIGATION_ENABLED=true` to queue a read-only investigation
+for eligible new analysis revisions. Run `alembic upgrade head` via Compose to
+install migration `0004`. With Ollama disabled, the same tools follow a
+deterministic policy. Backend OCR tests require Tesseract with English and
+Simplified Chinese language data.
+
+Use the [Shipping Agency AI Demo](../workflow_demo/README.md) for the
+531-package scan and the genuine 513-versus-531 discrepancy. See the
+[architecture audit](agent-investigation.md) for the runtime limits, worker
+recovery and staff approval boundaries.

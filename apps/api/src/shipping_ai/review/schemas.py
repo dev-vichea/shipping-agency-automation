@@ -45,7 +45,7 @@ class Extraction(BaseModel):
 
 class Finding(BaseModel):
     key: str
-    group: Literal["extraction", "invoice_packing", "transport", "cdc"]
+    group: Literal["extraction", "invoice_packing", "transport", "validation", "cdc"]
     field: str
     outcome: Outcome
     explanation: str
@@ -54,8 +54,18 @@ class Finding(BaseModel):
     right: str | None = None
 
 
+class LineComparison(BaseModel):
+    invoice_row: int | None = None
+    packing_row: int | None = None
+    quantity_delta: str | None = None
+    delta_unit: str | None = None
+    outcome: Outcome
+
+
 class MasterItem(BaseModel):
     row: int
+    serial: str | None = None
+    category: str | None = None
     description: ExtractedField
     unit: ExtractedField
     approved_quantity: ExtractedField
@@ -69,6 +79,7 @@ class MasterData(BaseModel):
     company: str
     approval_ref: str
     layout: str
+    categories: list[str] = []
     items: list[MasterItem]
 
 
@@ -106,6 +117,7 @@ class ReviewView(BaseModel):
     outcome: Outcome | None = None
     extractions: list[Extraction] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
+    line_items: list[LineComparison] = Field(default_factory=list)
     candidates: list[Candidate] = Field(default_factory=list)
     selected_master: MasterView | None = None
     analyzed_master: MasterView | None = None

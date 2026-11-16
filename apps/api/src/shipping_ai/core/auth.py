@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from shipping_ai.models import StaffSession, User
 
+from .access import WORKSPACE_COOKIE, bind_access
 from .config import settings
 from .db import get_db
 
@@ -35,8 +36,33 @@ class Credentials(BaseModel):
         return value
 
 
-class StaffProfile(BaseModel):
+class Preferences(BaseModel):
+    approval_alerts: bool
+    automation_alerts: bool
+
+
+class StaffProfile(Preferences):
     email: EmailStr
+
+
+def profile(user: User):
+    return StaffProfile(
+        email=user.email,
+        approval_alerts=user.approval_alerts,
+        automation_alerts=user.automation_alerts,
+    )
+
+
+class ChangePassword(BaseModel):
+    current_password: SecretStr
+    new_password: SecretStr
+
+    @field_validator("current_password", "new_password")
+    @classmethod
+    def bounded(cls, value: SecretStr):
+        if not 1 <= len(value.get_secret_value()) <= 128:
+            raise ValueError("Password length is invalid")
+        return value
 
 
 def digest(value: str) -> str:
@@ -44,7 +70,13 @@ def digest(value: str) -> str:
 
 
 def browser_origin(request: Request) -> None:
-    if request.headers.get("origin") != settings().origin:
+    cfg = settings()
+    allowed = {cfg.origin}
+    loopback = {"localhost": "127.0.0.1", "127.0.0.1": "localhost"}
+    host = cfg.web_origin.host
+    if cfg.environment == "development" and host in loopback:
+        allowed.add(cfg.origin.replace(f"://{host}", f"://{loopback[host]}", 1))
+    if request.headers.get("origin") not in allowed:
         raise HTTPException(403, "Request origin is not allowed")
 
 
@@ -61,6 +93,7 @@ def current_staff(request: Request, db: DB) -> User:
             )
         )
         if user:
+            bind_access(db, user.id, request.cookies.get(WORKSPACE_COOKIE, ""))
             return user
     raise HTTPException(401, "Sign in as an active staff member")
 
@@ -89,7 +122,7 @@ def throttle(email: str) -> None:
 def login(payload: Credentials, request: Request, response: Response, db: DB):
     email = payload.email.casefold()
     throttle(email)
-    user = db.scalar(select(User).where(User.email == email))
+    user = db.scalar(select(User).where(User.email == email).with_for_update())
     try:
         verified = PASSWORD.verify(
             user.password_hash if user else DUMMY_HASH, payload.password.get_secret_value()
@@ -117,12 +150,12 @@ def login(payload: Credentials, request: Request, response: Response, db: DB):
         secure=settings().session_secure,
         path="/",
     )
-    return StaffProfile(email=user.email)
+    return profile(user)
 
 
 @router.get("/me", response_model=StaffProfile)
 def me(user: Staff):
-    return StaffProfile(email=user.email)
+    return profile(user)
 
 
 @router.post("/logout", status_code=204, dependencies=[Depends(browser_origin)])
@@ -131,6 +164,38 @@ def logout(request: Request, response: Response, db: DB, _user: Staff) -> None:
         delete(StaffSession).where(StaffSession.token_hash == digest(request.cookies[COOKIE]))
     )
     db.commit()
+    response.delete_cookie(WORKSPACE_COOKIE, path="/")
     response.delete_cookie(
         COOKIE, path="/", samesite="strict", secure=settings().session_secure, httponly=True
     )
+
+
+@router.post("/preferences", response_model=StaffProfile, dependencies=[Depends(browser_origin)])
+def save_preferences(payload: Preferences, db: DB, user: Staff):
+    user.approval_alerts = payload.approval_alerts
+    user.automation_alerts = payload.automation_alerts
+    db.commit()
+    return profile(user)
+
+
+@router.post("/password", status_code=204, dependencies=[Depends(browser_origin)])
+def change_password(payload: ChangePassword, request: Request, db: DB, user: Staff):
+    if (
+        len(payload.new_password.get_secret_value()) < 12
+        or payload.current_password == payload.new_password
+    ):
+        raise HTTPException(422, "Choose a new password with at least 12 characters")
+    throttle(user.email)
+    locked = db.get(User, user.id, with_for_update=True, populate_existing=True)
+    try:
+        PASSWORD.verify(locked.password_hash, payload.current_password.get_secret_value())
+    except (VerificationError, InvalidHashError):
+        raise HTTPException(422, "Current password is incorrect") from None
+    locked.password_hash = PASSWORD.hash(payload.new_password.get_secret_value())
+    db.execute(
+        delete(StaffSession).where(
+            StaffSession.user_id == user.id,
+            StaffSession.token_hash != digest(request.cookies[COOKIE]),
+        )
+    )
+    db.commit()

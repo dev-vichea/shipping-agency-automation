@@ -29,17 +29,136 @@ def company_key(name: str | None) -> str:
     return identity(name)
 
 
+REFERENCE_LABEL = r"(?:(?:file|letter|reference|ref)\s+(?:no\.?|number|[:：])|no\.?|number)"
+REFERENCE_NUMBER = r"(?:[A-Z]*[0-9][A-Z0-9]*(?:[/-][A-Z0-9]+)*|[A-Z]{2,}[/-][0-9][A-Z0-9/-]*)"
+DOCUMENT_REFERENCE = re.compile(
+    rf"\b(?P<kind>QIP|CIB)\s*(?P<label>{REFERENCE_LABEL})?\s*(?:[.:：#/-]\s*)?"
+    rf"(?P<code>{REFERENCE_NUMBER})\b",
+    re.I,
+)
+
+
+def document_reference(text: str) -> re.Match[str] | None:
+    for match in DOCUMENT_REFERENCE.finditer(text):
+        code = match["code"]
+        # A bare CIB form code (for example, CIB 01E(i)) is a template identifier.
+        if match["kind"].upper() == "QIP" or match["label"] or "/" in code or "-" in code:
+            return match
+    return None
+
+
 def approval_key(ref: str) -> str:
-    return re.sub(r"^(?:qip|cib)[\s:#/-]*", "", folded(ref)).strip().upper()
+    return (
+        re.sub(rf"^(?:qip|cib)\s*(?:{REFERENCE_LABEL})?[\s:#./：-]*", "", folded(ref))
+        .strip()
+        .upper()
+    )
+
+
+def format_category_title(raw: str) -> str:
+    cleaned = re.sub(r"^[\s.:：#/-]+", "", raw).strip()
+    cleaned = re.sub(r"[\s.:：#/-]+$", "", cleaned).strip()
+    upper = cleaned.upper()
+    if "MACHIN" in upper:
+        return "Machinery & Equipment"
+    if "RAW MATERIAL" in upper or "ACCESSOR" in upper or "FABRIC" in upper:
+        return "Raw Materials & Accessories"
+    if "PACKAG" in upper:
+        return "Packaging Materials"
+    if "SPARE" in upper:
+        return "Spare Parts"
+    if "CONSTRUCTION" in upper:
+        return "Construction Materials"
+    return cleaned.title()
+
+
+def detect_category_header(cells: list) -> str | None:
+    non_empty = [str(c).strip() for c in cells if c is not None and str(c).strip()]
+    if not non_empty:
+        return None
+    joined = " ".join(non_empty).strip()
+    if re.search(
+        r"\b(?:TOTAL|SUB-TOTAL|SUBTOTAL|GRAND TOTAL|DATE|SIGNATURE|DIRECTOR|STAMP)\b", joined, re.I
+    ):
+        return None
+    if re.search(
+        r"\b(?:APPLICATION|COMPANY|ADRESS|ADDRESS|PHONE|VILLAGE|FACTORY|CIB FILE|QIP)\b", joined, re.I
+    ):
+        return None
+
+    first = non_empty[0]
+    roman_match = re.match(r"^(I|II|III|IV|V|VI|VII|VIII|IX|X)\b[\s.:：-]*(.*)", first, re.I)
+    if roman_match:
+        rest = roman_match.group(2).strip()
+        if not rest and len(non_empty) > 1:
+            rest = non_empty[1].strip()
+        if rest:
+            return format_category_title(rest)
+
+    for kw, title in [
+        (r"MACHIN", "Machinery & Equipment"),
+        (r"RAW MATERIAL|ACCESSOR|FABRIC", "Raw Materials & Accessories"),
+        (r"PACKAG", "Packaging Materials"),
+        (r"SPARE PART", "Spare Parts"),
+        (r"CONSTRUCTION", "Construction Materials"),
+    ]:
+        if re.search(kw, joined, re.I):
+            return title
+    return None
+
+
+def classify_item_description(desc: str | None) -> str:
+    if not desc:
+        return "General"
+    upper = desc.upper()
+    if re.search(
+        r"\b(?:MACHINE|CUTTER|SPREADER|IRON|BOILER|GENERATOR|MOTOR|COMPRESSOR|TABLE|PRINTER|SCANNER|PUMP|DRYER|WASHER|SYSTEM|CHILLER|FUSING|MOULD|PRESS|SEWING|BARTACK|HEMMING|HOLING|INTERLOCK|ATTACHING)\b",
+        upper,
+    ):
+        return "Machinery & Equipment"
+    if re.search(
+        r"\b(?:FABRIC|COTTON|POLYESTER|YARN|THREAD|LABEL|ZIPPER|BUTTON|ELASTIC|TAPE|INTERLINING|LINING|POLYBAG|CARTON|HANGTAG|BOX|HANGER|PIN|RIVET|HOOK|BADGE|RIBBON|WEBBING|FOAM|VELCRO|BUCKLE|SNAP|GLOVE|MATERIAL|ACCESSORY|ACCESSORIES)\b",
+        upper,
+    ):
+        return "Raw Materials & Accessories"
+    return "General"
+
+
+def detect_categories_for_rows(rows: list, sheet: str) -> dict[int, str]:
+    initial_cat = None
+    for kw, title in [
+        (r"MACHIN", "Machinery & Equipment"),
+        (r"RAW MATERIAL|ACCESSOR", "Raw Materials & Accessories"),
+        (r"PACKAG", "Packaging Materials"),
+        (r"SPARE", "Spare Parts"),
+    ]:
+        if re.search(kw, sheet, re.I):
+            initial_cat = title
+            break
+    current_cat = initial_cat
+    row_cats: dict[int, str] = {}
+    for number, cells in rows:
+        cat = detect_category_header(cells)
+        if cat:
+            current_cat = cat
+        if current_cat:
+            row_cats[number] = current_cat
+    return row_cats
 
 
 def parse_master(data: bytes, name: str, source: UUID) -> MasterData:
+    master, _ = parse_master_with_headers(data, name, source)
+    return master
+
+
+def parse_master_with_headers(data: bytes, name: str, source: UUID):
     guarded_workbook(data, name)
     meta, parsed = extract_cdc(data, name)
     if not parsed:
         raise ValueError("Unsupported CDC Master List layout")
     sheet = meta["sheet"]
-    rows = dict(rows_from_workbook(data, name))[sheet]
+    workbook = dict(rows_from_workbook(data, name))
+    rows = workbook[sheet]
     headers: dict[int, str] = defaultdict(str)
     for number, cells in rows[:20]:
         if number >= parsed[0]["row"]:
@@ -62,7 +181,9 @@ def parse_master(data: bytes, name: str, source: UUID) -> MasterData:
         raise ValueError("CDC unit and approved quantity columns are required")
 
     indexed = dict(rows)
+    row_cats = detect_categories_for_rows(rows, sheet)
     items = []
+    found_categories: list[str] = []
     for item in parsed:
         number = item["row"]
         cells = indexed[number]
@@ -71,6 +192,10 @@ def parse_master(data: bytes, name: str, source: UUID) -> MasterData:
         if not name_value or not unit_value:
             continue
 
+        item_cat = row_cats.get(number) or classify_item_description(name_value)
+        if item_cat and item_cat not in found_categories:
+            found_categories.append(item_cat)
+
         def number_at(column, *, units=None, money=False):
             code = currency(headers.get(column, "")) if money else None
             return numeric_cell(source, sheet, number, cells, column, units=units, code=code)
@@ -78,6 +203,8 @@ def parse_master(data: bytes, name: str, source: UUID) -> MasterData:
         items.append(
             MasterItem(
                 row=number,
+                serial=clean(item.get("serial"))[:80] or None,
+                category=item_cat,
                 description=field(
                     name_value[:350], cell_evidence(source, sheet, number, desc_col, name_value)
                 ),
@@ -100,12 +227,32 @@ def parse_master(data: bytes, name: str, source: UUID) -> MasterData:
         if is_english
         else "khmer_quota"
     )
-    return MasterData(
+    # Read metadata before the first item. Cover sheets can contain the approval header.
+    header_rows = {
+        title: [row for row in entries[:12] if title != sheet or row[0] < parsed[0]["row"]]
+        for title, entries in workbook.items()
+    }
+    approval_ref = clean(meta.get("qip"))
+    if not approval_ref:
+        cib_references = {
+            approval_key(match[0]): match[0]
+            for entries in header_rows.values()
+            for _, cells in entries
+            for cell in cells
+            if (match := document_reference(clean(cell)))
+            and match["kind"].upper() == "CIB"
+            and match["label"]
+        }
+        if len(cib_references) == 1:
+            approval_ref = next(iter(cib_references.values()))
+    master = MasterData(
         company=clean(meta.get("company")),
-        approval_ref=clean(meta.get("qip")),
+        approval_ref=approval_ref,
         layout=layout,
+        categories=found_categories,
         items=items,
     )
+    return master, header_rows
 
 
 def check_cdc(invoice: Extraction | None, master, today: date | None = None):
@@ -325,6 +472,24 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
                         key=f"{prefix}.{name}",
                     )
                 )
+                approved = decimal(usable(row.approved_quantity))
+                if (
+                    name == "remaining_quantity"
+                    and approved is not None
+                    and approved > 0
+                    and Decimal(0) <= ceiling - total < approved * Decimal("0.15")
+                ):
+                    result.append(
+                        finding(
+                            group,
+                            "low_quota",
+                            "WARNING",
+                            "The remaining quantity would be below 15% of the approved quantity if this candidate were used.",
+                            qty,
+                            limit,
+                            key=f"{prefix}.low_quota",
+                        )
+                    )
         for name, limit in (
             ("approved_value", row.approved_value),
             ("remaining_value", row.remaining_value),

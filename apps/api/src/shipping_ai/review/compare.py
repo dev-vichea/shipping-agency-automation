@@ -1,17 +1,21 @@
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from decimal import Decimal
 
 from services.matching import candidate_score, normalize, translate
 
-from .schemas import Extraction, Finding, Item
-from .values import convert, decimal, display, identity, usable
+from .schemas import Extraction, Finding, Item, LineComparison
+from .values import convert, decimal, display, field, identity, usable
 
 WEIGHT_TOLERANCE = Decimal("0.05")  # kilograms
 QUANTITY_TOLERANCE = Decimal("0.000001")
 AMOUNT_TOLERANCE = Decimal("0.01")
 PRICE_TOLERANCE = Decimal("0.0001")
 NUMERIC = {"quantity", "packages", "gross_weight", "net_weight", "unit_price", "amount"}
+# ISO 6346 assigns 10–38 to A–Z, skipping multiples of 11.
+CONTAINER_LETTERS = dict(
+    zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", (n for n in range(10, 39) if n % 11), strict=True)
+)
 
 
 def finding(group, name, outcome, message, left=None, right=None, *, key=None):
@@ -58,11 +62,13 @@ def compare(group, name, left, right, *, required=False, suffix=""):
         if a is None or b is None:
             return result("NEEDS_REVIEW", "A source number could not be validated.")
         if name in {"unit_price", "amount"}:
-            if not left.currency or not right.currency:
+            curr_left = left.currency or ("USD" if group == "cdc" else None)
+            curr_right = right.currency or ("USD" if group == "cdc" else None)
+            if not curr_left or not curr_right:
                 return result(
                     "NEEDS_REVIEW", "Currency is missing; the amounts cannot be compared."
                 )
-            if left.currency != right.currency:
+            if curr_left != curr_right:
                 return result("MISMATCH", "Currencies differ. No exchange rate was assumed.")
             if name == "unit_price":
                 # One right-hand unit expressed in left-hand units.
@@ -292,6 +298,125 @@ def transport(invoice: Extraction | None, packing: Extraction | None, bill: Extr
     return result
 
 
+def validation_checks(
+    invoice: Extraction | None, packing: Extraction | None, bill: Extraction | None
+):
+    if invoice and invoice.items:
+        declared = invoice.fields.get("amount")
+        last_row = max(item.row for item in invoice.items)
+        if declared and any((e.row or 0) > last_row for e in declared.evidence):
+            amounts = [item.fields.get("amount") for item in invoice.items]
+            values = [decimal(usable(amount)) for amount in amounts]
+            evidence = [e for amount in amounts if amount for e in amount.evidence][:10]
+            if (
+                all(value is not None for value in values)
+                and declared.currency
+                and all(amount and amount.currency == declared.currency for amount in amounts)
+                and (total := decimal(usable(declared))) is not None
+            ):
+                computed = sum(values, Decimal(0))
+                agrees = abs(total - computed) <= AMOUNT_TOLERANCE
+                yield finding(
+                    "validation",
+                    "invoice_subtotal",
+                    "PASS" if agrees else "MISMATCH",
+                    "The declared subtotal matches the sum of the invoice lines."
+                    if agrees
+                    else "The declared subtotal differs from the sum of the invoice lines.",
+                    declared,
+                    field(str(computed), *evidence, currency=declared.currency),
+                )
+            else:
+                yield finding(
+                    "validation",
+                    "invoice_subtotal",
+                    "NEEDS_REVIEW",
+                    "The declared subtotal cannot be verified with the available line amounts and currencies.",
+                    declared,
+                    field(None, *evidence),
+                )
+
+    monetary = []
+    for doc in (invoice, packing, bill):
+        if doc:
+            monetary.extend(
+                (doc.role, amount)
+                for fields in [doc.fields, *(item.fields for item in doc.items)]
+                for name in ("amount", "unit_price")
+                if (amount := fields.get(name)) and amount.value is not None
+            )
+    if monetary:
+        codes = {amount.currency for _, amount in monetary if usable(amount) and amount.currency}
+        roles = {role for role, _ in monetary}
+        if len(codes) > 1:
+            outcome, explanation = (
+                "MISMATCH",
+                "The source prices and amounts use different currencies.",
+            )
+        elif len(roles) < 2 or any(
+            not (usable(amount) and amount.currency) for _, amount in monetary
+        ):
+            outcome, explanation = (
+                "NEEDS_REVIEW",
+                "Currency uniformity cannot be verified across the supplied prices and amounts.",
+            )
+        else:
+            outcome, explanation = (
+                "PASS",
+                "Currency agrees across the documents that report prices or amounts.",
+            )
+        samples = {}
+        for role, amount in monetary:
+            samples.setdefault((role, amount.currency, amount.status), amount)
+        yield finding(
+            "validation",
+            "currency_uniformity",
+            outcome,
+            explanation,
+            field(
+                ", ".join(sorted(codes)) or None,
+                *(e for amount in samples.values() for e in amount.evidence),
+            ),
+        )
+
+    seen = set()
+    for doc in (bill, invoice, packing):
+        container = doc.fields.get("container") if doc else None
+        identifier = re.sub(r"[\s-]", "", (container.value or "").upper()) if container else ""
+        if not re.fullmatch(r"[A-Z]{3}[UJZ][0-9]{7}", identifier):
+            continue
+        identity_key = (identifier, container.status)
+        if identity_key in seen:
+            continue
+        seen.add(identity_key)
+        digits = [CONTAINER_LETTERS[letter] for letter in identifier[:4]] + [
+            int(n) for n in identifier[4:10]
+        ]
+        expected = sum(value * 2**i for i, value in enumerate(digits)) % 11 % 10
+        agrees = int(identifier[-1]) == expected
+        if container.status != "present":
+            outcome, explanation = (
+                "NEEDS_REVIEW",
+                "Confirm the container number on the original before verifying its check digit.",
+            )
+        elif agrees:
+            outcome, explanation = "PASS", "The ISO 6346 check digit matches the container number."
+        else:
+            outcome, explanation = (
+                "MISMATCH",
+                "The ISO 6346 check digit differs from the calculated digit.",
+            )
+        yield finding(
+            "validation",
+            "container_check_digit",
+            outcome,
+            explanation,
+            container,
+            field(f"{identifier[:-1]}{expected}") if container.status == "present" else None,
+            key=f"validation.container_check_digit.{identifier}.{container.status}",
+        )
+
+
 def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict[str, Extraction]]:
     result = []
     active = {}
@@ -376,7 +501,57 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
         result.extend(invoice_packing(invoice, packing))
     if bill:
         result.extend(transport(invoice, packing, bill))
+    result.extend(validation_checks(invoice, packing, bill))
     return result, active
+
+
+def line_comparisons(
+    extractions: list[Extraction], findings: list[Finding]
+) -> list[LineComparison]:
+    invoices = [doc for doc in extractions if doc.role == "invoice"]
+    packings = [doc for doc in extractions if doc.role == "packing_list"]
+    if len(invoices) > 1 or len(packings) > 1:
+        return []
+    invoice = {item.row: item for doc in invoices for item in doc.items}
+    packing = {item.row: item for doc in packings for item in doc.items}
+    # The saved rule keys record the pairing for the exact snapshot under review.
+    pairs = defaultdict(list)
+    for check in findings:
+        match = re.fullmatch(r"invoice_packing\.\w+\.(\d+)\.(\d+)", check.key)
+        if match:
+            pairs[int(match[1]), int(match[2])].append(check)
+    rows = []
+    used_invoice, used_packing = set(), set()
+    for (i, j), checks in pairs.items():
+        if i not in invoice or j not in packing:
+            continue
+        left, right = (item.fields.get("quantity") for item in (invoice[i], packing[j]))
+        inv, pkg = decimal(usable(left)), decimal(usable(right))
+        delta = None
+        if left and right and inv is not None and pkg is not None:
+            converted = convert(pkg, right.unit, left.unit)
+            if converted is not None:
+                delta = converted - inv
+        rows.append(
+            LineComparison(
+                invoice_row=i,
+                packing_row=j,
+                quantity_delta=format(delta.normalize(), "f") if delta is not None else None,
+                delta_unit=left.unit if delta is not None else None,
+                outcome=overall(checks),
+            )
+        )
+        used_invoice.add(i)
+        used_packing.add(j)
+    rows.extend(
+        LineComparison(invoice_row=i, outcome="NEEDS_REVIEW") for i in invoice.keys() - used_invoice
+    )
+    rows.extend(
+        LineComparison(packing_row=j, outcome="NEEDS_REVIEW") for j in packing.keys() - used_packing
+    )
+    return sorted(
+        rows, key=lambda row: (row.invoice_row is None, row.invoice_row or row.packing_row)
+    )
 
 
 def overall(findings: list[Finding]):

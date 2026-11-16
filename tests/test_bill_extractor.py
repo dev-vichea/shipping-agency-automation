@@ -179,6 +179,29 @@ class TestBillExtractor(unittest.TestCase):
         self.assertEqual(statuses['Gross Weight (KGS)'], 'MATCH')
         self.assertEqual(statuses['Goods Description (3+ Rule)'], 'MATCH')
 
+    def test_extract_ocean_bill_cma_cgm_cnc(self):
+        """Regression test for English ocean B/L (CMA CGM / CNC scanned PDF)."""
+        pdf_path = Path('/Users/kiddd/Desktop/TEST-FOLDER/inv-02/4707-30号进仓-西哈-扫描件.pdf')
+        if not pdf_path.exists():
+            self.skipTest('Test folder inv-02 B/L PDF not found on disk')
+
+        res = extract_bill(pdf_path.read_bytes(), pdf_path.name)
+        self.assertTrue(res['has_bill'])
+        self.assertEqual(res['bl_no'], 'CPL0534707')
+        self.assertEqual(res['shipping_mode'], 'BY SEA')
+        self.assertEqual(res['container'], 'TCNU5031571')
+        self.assertEqual(res['seal'], '32468795')
+        self.assertEqual(res['packages'], 531)
+        self.assertEqual(res['gross_weight'], 25117.0)
+        self.assertEqual(res['volume'], 57.2)
+        self.assertIn('WEALDONE', res['shipper'])
+        self.assertIn('CAI FU', res['consignee'])
+        self.assertEqual(res['origin'], 'SHANGHAI')
+        self.assertEqual(res['destination'], 'SIHANOUKVILLE')
+        self.assertEqual(res['vessel'], 'CNC MARS')
+        self.assertEqual(res['voyage'], 'CSE0E0S89')
+        self.assertIn('CMA CGM', res['carrier'])
+
 
 if __name__ == '__main__':
     unittest.main()
