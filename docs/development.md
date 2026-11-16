@@ -122,18 +122,22 @@ credentials in the local environment or the deployment secret store.
   ambiguous companies from the case. For a company-assigned mailbox, a
   follow-up can join an open case when the mailbox thread, sender, subject,
   company, and invoice reference agree.
-- **Telegram.** Set the agency bot's `SHIPPING_TELEGRAM_BOT_TOKEN` in the API
-  environment. In **Integrations**, link consenting staff to their confirmed
-  private chat IDs after they start the bot. On a completed draft, **Share draft**
-  shows the exact message and eligible recipients. Confirm one recipient and
-  the displayed message before sending. A delivery that Telegram cannot confirm
-  stays recorded for the operator to check in the chat.
-- **Approvals from a Telegram link.** Use a reachable HTTPS workspace origin for
-  delivery to real staff. The link opens the exact draft and its workspace.
-  A passing, eligible revision with a saved verified review opens the
-  authenticated quick approval screen. The API checks workspace/company access,
-  review ID, revision, and approval eligibility at submission. Other cases open
-  the full review.
+- **Telegram.** Create a test bot through [@BotFather](https://t.me/BotFather)
+  and set `SHIPPING_TELEGRAM_BOT_TOKEN` privately in the API environment. In
+  **Integrations**, link consenting staff to their confirmed private chat IDs
+  after they start the bot. **Share draft** previews the shipment summary,
+  buttons, and eligible recipients. A workspace admin confirms one recipient
+  and the exact message before delivery. Unconfirmed deliveries stay in the
+  audit history for the operator to check in the chat.
+- **Telegram Mini App.** Set `SHIPPING_WEB_ORIGIN` to the reachable HTTPS origin
+  of the workspace and serve both the web app and its API on that origin. The
+  development loopback origin produces a plain link. Private notifications
+  sent with an HTTPS origin include **Review in Telegram**, or **Approve** and
+  **Reject** for a passing revision with a saved verified review. The buttons
+  open Harborway inside Telegram and require the normal staff sign-in. Rejection
+  requires a reason. Both decisions recheck company access, review ID, revision,
+  and eligibility on submit. This private-chat flow uses inline Mini App buttons
+  and requires no webhook or BotFather menu setup.
 - **Local AI.** Set `SHIPPING_OLLAMA_ENABLED=true` and optionally
   `SHIPPING_INVESTIGATION_ENABLED=true` in the API/worker environment. Install
   the configured model on the Mac and verify Docker can reach

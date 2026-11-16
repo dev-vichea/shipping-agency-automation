@@ -249,7 +249,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                     {typeof count === "number" && count > 0 && (
                       <span
                         className={cn(
-                          "rounded-full px-1.5 py-0.2 text-[10px] font-mono",
+                          "rounded-control px-1.5 py-0.2 text-[10px] font-mono",
                           active
                             ? "bg-primary/10 text-primary font-bold"
                             : "bg-muted text-muted-foreground"
@@ -325,7 +325,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       <div className="sticky top-0 z-10 flex min-h-12 items-center justify-between border-b bg-card px-3 py-1.5">
         <div className="flex flex-wrap items-center gap-2">
           <SheetTitle className="flex items-center gap-2 text-headline-md"><ScanSearch size={16} aria-hidden className="text-tertiary" /> Audit &amp; Compliance</SheetTitle>
-          {analysis.rules_version && <Badge variant="secondary">Rules v{analysis.rules_version}</Badge>}
+          {analysis.rules_version && <Badge variant="secondary">v{analysis.rules_version}</Badge>}
         </div>
         <DialogCloseButton label="Close audit drawer" />
       </div>

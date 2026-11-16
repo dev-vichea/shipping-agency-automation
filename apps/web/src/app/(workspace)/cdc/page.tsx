@@ -136,7 +136,7 @@ export default async function CDCMasterPage({ searchParams }: {
                       <span>{tab.label}</span>
                       <span
                         className={cn(
-                          "rounded-full px-1.5 py-0.2 text-[10px] font-mono",
+                          "rounded-control px-1.5 py-0.2 text-[10px] font-mono",
                           active
                             ? "bg-primary/10 text-primary font-bold"
                             : "bg-muted text-muted-foreground"

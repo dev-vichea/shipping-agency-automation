@@ -227,7 +227,7 @@ export function DocumentCanvas({
   return (
     <div
       className={cn(
-        "relative flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-950",
+        "relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-950",
         "[background-image:radial-gradient(#cbd5e1_1.25px,transparent_1.25px)] dark:[background-image:radial-gradient(#334155_1.25px,transparent_1.25px)] [background-size:24px_24px]",
         isExpanded ? "fixed inset-3 z-50 h-[calc(100vh-24px)] rounded-lg shadow-2xl" : "h-[min(82vh,880px)] w-full",
         className
@@ -260,7 +260,7 @@ export function DocumentCanvas({
             type="button"
             size="xs"
             variant="outline"
-            className="h-7 rounded-full border-slate-200 bg-white text-xs dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
+            className="h-7 border-slate-200 bg-white text-xs dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
             onClick={() => setViewMode(showExcerpt ? "document" : "excerpt")}
           >
             {showExcerpt ? "Document Canvas" : "Raw Excerpt"}
@@ -271,7 +271,7 @@ export function DocumentCanvas({
               asChild
               size="icon-xs"
               variant="outline"
-              className="h-7 w-7 rounded-full border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"
+              className="h-7 w-7 border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800"
             >
               <a href={file.url} title={`Download original ${file.name}`}>
                 <ArrowDownToLine size={13} />
@@ -283,7 +283,7 @@ export function DocumentCanvas({
             type="button"
             size="icon-xs"
             variant="outline"
-            className="h-7 w-7 rounded-full border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
+            className="h-7 w-7 border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
             onClick={() => setIsExpanded(!isExpanded)}
             title={isExpanded ? "Exit expanded canvas" : "Expand canvas"}
           >
@@ -299,12 +299,12 @@ export function DocumentCanvas({
       {/* THE CANVAS VIEWPORT CONTAINER */}
       <div className="relative flex-1 w-full h-full min-h-0 overflow-hidden">
         {/* Floating Vertical Canvas Controls (Right Side, matching IDP studio) */}
-        <div className="absolute right-3.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-full border border-slate-200/90 bg-white/95 p-1.5 shadow-xl backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
+        <div className="absolute right-3.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
           <Button
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-8 rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
             onClick={() => setIsExpanded(!isExpanded)}
             title={isExpanded ? "Collapse canvas" : "Expand canvas"}
           >
@@ -315,7 +315,7 @@ export function DocumentCanvas({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-8 rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
             disabled={zoom >= 220}
             onClick={() => handleZoom(zoom + 15)}
             title="Zoom In"
@@ -329,7 +329,7 @@ export function DocumentCanvas({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-8 rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
             disabled={zoom <= 40}
             onClick={() => handleZoom(zoom - 15)}
             title="Zoom Out"
@@ -341,7 +341,7 @@ export function DocumentCanvas({
             type="button"
             variant="ghost"
             size="icon-xs"
-            className="size-8 rounded-full text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
+            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
             onClick={() => setRotation((r) => (r + 90) % 360)}
             title="Rotate Page"
           >
@@ -351,7 +351,7 @@ export function DocumentCanvas({
 
         {/* Floating Top Page Indicator & Navigation (PDF) */}
         {isPdf && totalPages > 1 && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-full border border-slate-200/90 bg-white/95 px-3 py-1 shadow-lg backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-2.5 py-1 shadow-md backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
             <Button
               type="button"
               variant="ghost"
@@ -383,7 +383,7 @@ export function DocumentCanvas({
           <button
             type="button"
             onClick={() => setIsExpanded(false)}
-            className="absolute top-3 right-3 z-30 flex size-8 items-center justify-center rounded-full bg-slate-900/80 text-white shadow-xl hover:bg-slate-900 backdrop-blur-md cursor-pointer transition-colors"
+            className="absolute top-3 right-3 z-30 flex size-8 items-center justify-center rounded-control bg-slate-900/80 text-white shadow-xl hover:bg-slate-900 backdrop-blur-md cursor-pointer transition-colors"
             title="Close expanded view"
           >
             ✕

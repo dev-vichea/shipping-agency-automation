@@ -298,10 +298,11 @@ export type Integrations = {
     configured: boolean; connected: boolean; enabled: boolean; mailbox: string | null;
     senders: string[]; company_id: string | null; last_synced_at: string | null; error: string | null;
   };
-  telegram: { configured: boolean; recipients: { id: string; email: string; display_name: string }[] };
+  telegram: { configured: boolean; mini_app: boolean; recipients: { id: string; email: string; display_name: string }[] };
 };
 export type TelegramPreview = {
   configured: boolean; revision: number; payload_hash: string; message: string; quick: boolean;
+  buttons: string[];
   recipients: { id: string; email: string; name: string }[];
 };
 export type QuickApproval = { eligible: boolean; message: string; revision: number; review_id: string | null };

@@ -78,6 +78,25 @@ def invoice_value(documents):
     return "Pending"
 
 
+def draft_url(case, review=None):
+    url = f"{settings().origin}/open/{case.id}?workspace={case.workspace_id}"
+    if review:
+        url += f"&revision={case.analysis_revision}&review={review.id}"
+    return url
+
+
+def mini_app_buttons(case, review=None):
+    if settings().web_origin.scheme != "https":
+        return []
+    if review:
+        url = draft_url(case, review)
+        return [
+            {"text": "Approve", "web_app": {"url": f"{url}&decision=approve"}},
+            {"text": "Reject", "web_app": {"url": f"{url}&decision=reject"}},
+        ]
+    return [{"text": "Review in Telegram", "web_app": {"url": draft_url(case)}}]
+
+
 def format_summary(case, company, snapshot, extracted, review):
     source = review.payload["documents"] if review and review.ready else extracted
     documents = [Extraction.model_validate(item) for item in source]
@@ -107,8 +126,7 @@ def format_summary(case, company, snapshot, extracted, review):
             f"Invoice value: {invoice_value(documents)}",
             f"Verification: {snapshot.outcome.replace('_', ' ').title()} ({issues} findings)",
             f"Approval: {approval}",
-            f"{'Approve draft' if quick else 'Review draft'}: {settings().origin}/open/{case.id}?workspace={case.workspace_id}"
-            + (f"&revision={case.analysis_revision}&review={review.id}" if quick else ""),
+            f"{'Approve draft' if quick else 'Review draft'}: {draft_url(case, review if quick else None)}",
         ]
     )
     return "\n".join(lines), quick

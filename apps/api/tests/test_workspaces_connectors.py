@@ -5,7 +5,7 @@ from conftest import ORIGIN, PASSWORD
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from fixtures.build_samples import COMPANY, XLSX, supplier
-from pydantic import SecretStr
+from pydantic import AnyHttpUrl, SecretStr
 from sqlalchemy import select
 from test_phase_three import analysis, apply_master, archive, decision, save
 from test_phase_two import finish_queue
@@ -267,6 +267,12 @@ def test_telegram_preview_exact_delivery_and_quick_approval_guards(staff, monkey
     assert first.json()["state"] == "sent"
     assert first.json() == staff.post(f"{path}/telegram", json=payload).json()
     assert len(sent) == 1 and sent[0]["text"] == preview["message"]
+    assert preview["buttons"] == [] and "reply_markup" not in sent[0]
+
+    https_origin = "https://harborway.example"
+    with monkeypatch.context() as secure:
+        secure.setattr(config, "web_origin", AnyHttpUrl(https_origin))
+        assert staff.get(f"{path}/telegram").json()["buttons"] == ["Review in Telegram"]
 
     # A deterministic pass can use the same staff approval transaction.
     with session_factory().begin() as db:
@@ -278,6 +284,29 @@ def test_telegram_preview_exact_delivery_and_quick_approval_guards(staff, monkey
             finding for finding in snapshot.findings if finding["outcome"] == "PASS"
         ]
     assert staff.get(f"{path}/quick-approval").json()["eligible"]
+
+    # HTTPS messages carry version-bound Mini App buttons and require a fresh preview.
+    with monkeypatch.context() as secure:
+        secure.setattr(config, "web_origin", AnyHttpUrl(https_origin))
+        headers = {"Origin": https_origin}
+        preview = staff.get(f"{path}/telegram").json()
+        assert preview["buttons"] == ["Approve", "Reject"]
+        assert staff.post(f"{path}/telegram", json=payload, headers=headers).status_code == 409
+        current_payload = {
+            **payload,
+            "revision": preview["revision"],
+            "payload_hash": preview["payload_hash"],
+        }
+        response = staff.post(f"{path}/telegram", json=current_payload, headers=headers)
+        assert response.json()["state"] == "sent"
+        [buttons] = sent[-1]["reply_markup"]["inline_keyboard"]
+        assert [button["text"] for button in buttons] == preview["buttons"]
+        for button in buttons:
+            url = button["web_app"]["url"]
+            assert url.startswith(f"{https_origin}/open/{case_id}?workspace=")
+            assert f"&revision={current['revision']}&review={review['id']}" in url
+            assert url.endswith(f"&decision={button['text'].lower()}")
+
     assert (
         staff.post(
             f"{path}/quick-approval", json={**decision(current, review), "review_id": str(uuid4())}
@@ -291,6 +320,51 @@ def test_telegram_preview_exact_delivery_and_quick_approval_guards(staff, monkey
     rows = staff.get(f"{API}/cdc/versions/{master}/items").json()
     assert rows["internally_reserved"] == {"3": "12.000000"}
     assert rows["items"][0]["remaining_quantity"]["value"] == "72"
+
+
+def test_telegram_quick_rejection_requires_a_current_eligible_review(staff):
+    from shipping_ai.core.db import session_factory
+    from shipping_ai.models import ReviewSnapshot
+
+    workspace(staff, "Telegram rejection")
+    company = new_company(staff, COMPANY)
+    path = archive(staff, company_id=company)
+    current, mappings = apply_master(staff, path, analysis(staff, path), balance="72")
+    review = save(staff, path, current, mappings=mappings, verify_cdc_mappings=True)
+    payload = {**decision(current, review), "notes": "Test rejection requested by staff."}
+    with TestClient(staff.app, base_url=ORIGIN) as unsigned:
+        assert (
+            unsigned.post(
+                f"{path}/quick-rejection", json=payload, headers={"Origin": ORIGIN}
+            ).status_code
+            == 401
+        )
+    with session_factory().begin() as db:
+        snapshot = db.scalar(
+            select(ReviewSnapshot).filter_by(
+                intake_case_id=UUID(path.rsplit("/", 1)[1]), revision=current["revision"]
+            )
+        )
+        snapshot.outcome = "MISMATCH"
+    assert staff.post(f"{path}/quick-rejection", json=payload).status_code == 409
+    with session_factory().begin() as db:
+        snapshot = db.get(ReviewSnapshot, snapshot.id)
+        snapshot.outcome = "PASS"
+        snapshot.findings = [
+            finding for finding in snapshot.findings if finding["outcome"] == "PASS"
+        ]
+
+    assert staff.post(f"{path}/quick-rejection", json={**payload, "notes": ""}).status_code == 422
+    stale = {**payload, "expected_revision": current["revision"] - 1}
+    assert staff.post(f"{path}/quick-rejection", json=stale).status_code == 409
+    stale = {**payload, "review_id": str(uuid4())}
+    assert staff.post(f"{path}/quick-rejection", json=stale).status_code == 409
+    rejected = staff.post(f"{path}/quick-rejection", json=payload)
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["decision"] == "rejected"
+    case = staff.get(path).json()
+    assert case["state"] == "rejected" and case["import_id"] is None
+    assert not staff.get(f"{path}/quick-approval").json()["eligible"]
 
 
 def test_password_change_retires_other_sessions_and_preferences_persist(staff):

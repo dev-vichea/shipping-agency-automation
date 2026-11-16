@@ -25,12 +25,15 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     {notice === "connection_failed" && <p className="field-error" role="alert">Gmail could not be connected. Start the authorization again.</p>}
     <IntakeSources gmail={gmail} companies={companies} folders={folders}
       macAppAvailable={existsSync(join(process.cwd(), "public", "harborway-folder-intake-mac.zip"))} />
-    <Section title="Notifications" action={<Badge variant="outline">{telegram.configured ? telegram.recipients.length ? "Recipients linked" : "Ready to link" : "Disconnected"}</Badge>}>
+    <Section title="Notifications" action={<Badge variant="outline">{telegram.configured ? telegram.recipients.length ? "Linked" : "Ready" : "Disconnected"}</Badge>}>
         <div className="space-y-3 p-4">
           <h3 className="flex items-center gap-2 text-label-lg"><Send size={18} className="text-primary" aria-hidden /> Telegram</h3>
           {telegram.configured
             ? <TelegramLinkForm members={members} />
             : <p className="text-muted-foreground">Configure the agency bot token on the server before linking private chats.</p>}
+          {telegram.configured && !telegram.mini_app && <p className="text-xs text-muted-foreground">
+            Telegram Mini App buttons require a reachable HTTPS workspace address.
+          </p>}
         </div>
         {telegram.recipients.length > 0 && <ul className="divide-y border-t">
           {telegram.recipients.map((entry) => <li key={entry.id} className="flex items-center justify-between gap-2 px-4 py-2.5">

@@ -17,7 +17,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
 from shipping_ai.approvals.review import latest_review
-from shipping_ai.approvals.routes import Decision, approve
+from shipping_ai.approvals.routes import Decision, approve, reject
 from shipping_ai.core.access import require_workspace, visible_case, visible_company
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.core.config import settings
@@ -95,6 +95,7 @@ def status(db: DB, _user: Staff):
         },
         "telegram": {
             "configured": enabled_bot(),
+            "mini_app": settings().web_origin.scheme == "https",
             "recipients": [dict(row._mapping) for row in rows],
         },
     }
@@ -297,15 +298,28 @@ def draft_notification(db, case):
             ReviewSnapshot.revision == case.analysis_revision,
         )
     )
-    if not snapshot or case.state not in {"needs_review", "ready_for_approval", "approved"}:
+    if not snapshot or case.state not in {
+        "needs_review",
+        "ready_for_approval",
+        "approved",
+        "rejected",
+    }:
         raise HTTPException(409, "Wait for the current draft analysis to complete")
     payloads = db.scalars(
         select(DocumentExtraction.payload).where(DocumentExtraction.snapshot_id == snapshot.id)
     ).all()
     company = db.get(Company, case.company_id) if case.company_id else None
-    return telegram.format_summary(
-        case, company.name if company else None, snapshot, payloads, latest_review(db, case)
+    review = latest_review(db, case)
+    text, quick = telegram.format_summary(
+        case, company.name if company else None, snapshot, payloads, review
     )
+    buttons = telegram.mini_app_buttons(case, review if quick else None)
+    return text, quick, buttons
+
+
+def notification_hash(text, buttons):
+    payload = json.dumps([text, buttons], separators=(",", ":")) if buttons else text
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def eligible_recipients(db, case):
@@ -327,12 +341,13 @@ def eligible_recipients(db, case):
 def notification_preview(case_id: UUID, db: DB, _user: Staff):
     require_workspace(db, admin=True)
     case = visible_case(db, case_id)
-    text, quick = draft_notification(db, case)
+    text, quick, buttons = draft_notification(db, case)
     return {
         "message": text,
         "revision": case.analysis_revision,
         "quick": quick,
-        "payload_hash": hashlib.sha256(text.encode()).hexdigest(),
+        "payload_hash": notification_hash(text, buttons),
+        "buttons": [button["text"] for button in buttons],
         "configured": enabled_bot(),
         "recipients": [
             {"id": recipient.id, "name": recipient.display_name, "email": email}
@@ -347,8 +362,8 @@ def send_notification(case_id: UUID, request: SendRequest, db: DB, user: Staff):
     if not enabled_bot():
         raise HTTPException(503, "Telegram bot configuration is missing")
     case = visible_case(db, case_id, lock=True)
-    preview, _ = draft_notification(db, case)
-    preview_hash = hashlib.sha256(preview.encode()).hexdigest()
+    preview, _, buttons = draft_notification(db, case)
+    preview_hash = notification_hash(preview, buttons)
     if request.revision != case.analysis_revision or not hmac.compare_digest(
         preview_hash, request.payload_hash
     ):
@@ -382,6 +397,7 @@ def send_notification(case_id: UUID, request: SendRequest, db: DB, user: Staff):
                 "chat_id": delivery.chat_id,
                 "text": preview,
                 "link_preview_options": {"is_disabled": True},
+                **({"reply_markup": {"inline_keyboard": [buttons]}} if buttons else {}),
             },
         )
         message_id = sent.get("message_id")
@@ -406,7 +422,7 @@ def send_notification(case_id: UUID, request: SendRequest, db: DB, user: Staff):
 @router.get("/intakes/{case_id}/quick-approval")
 def quick_preview(case_id: UUID, db: DB, _user: Staff):
     case = visible_case(db, case_id)
-    message, quick = draft_notification(db, case)
+    message, quick, _ = draft_notification(db, case)
     review = latest_review(db, case)
     return {
         "eligible": quick,
@@ -416,8 +432,7 @@ def quick_preview(case_id: UUID, db: DB, _user: Staff):
     }
 
 
-@router.post("/intakes/{case_id}/quick-approval", dependencies=mutation)
-def quick_approve(case_id: UUID, request: Decision, db: DB, user: Staff):
+def require_quick_decision(case_id: UUID, request: Decision, db: DB):
     case = visible_case(db, case_id, lock=True)
     review = latest_review(db, case)
     if (
@@ -426,7 +441,18 @@ def quick_approve(case_id: UUID, request: Decision, db: DB, user: Staff):
         or request.review_id != review.id
     ):
         raise HTTPException(409, "The draft changed. Open the current review.")
-    _, quick = draft_notification(db, case)
+    _, quick, _ = draft_notification(db, case)
     if not quick:
         raise HTTPException(409, "This draft requires full web review.")
+
+
+@router.post("/intakes/{case_id}/quick-approval", dependencies=mutation)
+def quick_approve(case_id: UUID, request: Decision, db: DB, user: Staff):
+    require_quick_decision(case_id, request, db)
     return approve(case_id, request, db, user)
+
+
+@router.post("/intakes/{case_id}/quick-rejection", dependencies=mutation)
+def quick_reject(case_id: UUID, request: Decision, db: DB, user: Staff):
+    require_quick_decision(case_id, request, db)
+    return reject(case_id, request, db, user)

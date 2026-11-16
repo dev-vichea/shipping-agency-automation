@@ -111,6 +111,9 @@ export function TelegramSendForm({ caseId, preview }: { caseId: string; preview:
     });
   }}>
     <pre className="rounded-lg border bg-muted p-3 text-xs leading-5 break-words whitespace-pre-wrap">{preview.message}</pre>
+    {preview.buttons.length > 0 && <div aria-label="Telegram buttons" className="flex flex-wrap gap-2">
+      {preview.buttons.map((button) => <span key={button} className="rounded-md border px-3 py-1 text-sm">{button}</span>)}
+    </div>}
     {preview.configured && preview.recipients.length > 0 ? <>
       <label className="grid gap-1.5 font-medium">Recipient<NativeSelect name="recipient_id" defaultValue="" required>
         <option value="">Choose a recipient</option>
@@ -124,18 +127,35 @@ export function TelegramSendForm({ caseId, preview }: { caseId: string; preview:
   </form>;
 }
 
-export function QuickApproveForm({ caseId, revision, reviewId }: { caseId: string; revision: number; reviewId: string }) {
+export function QuickDecisionForm({ caseId, revision, reviewId, reject }: {
+  caseId: string; revision: number; reviewId: string; reject: boolean;
+}) {
   const router = useRouter();
   const { error, busy, submit } = useWrite();
   return <form className="space-y-3" onSubmit={(event) => {
     event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const notes = reject ? String(form.get("notes") ?? "").trim() : "Confirmed through the draft quick approval link.";
+    const payload = { expected_revision: revision, review_id: reviewId, notes };
     void submit(async () => {
-      const result = await write<{ import_id: string }>(`/intakes/${caseId}/quick-approval`, { expected_revision: revision, review_id: reviewId, notes: "Confirmed through the draft quick approval link." });
-      router.push(`/imports/${result.import_id}`);
+      if (reject) {
+        await write(`/intakes/${caseId}/quick-rejection`, payload);
+        router.push(`/review/${caseId}`);
+      } else {
+        const { import_id: id } = await write<{ import_id: string }>(`/intakes/${caseId}/quick-approval`, payload);
+        router.push(`/imports/${id}`);
+      }
     });
   }}>
-    <label className="flex items-center gap-2"><input type="checkbox" required /> Confirm this exact revision for the approved import register.</label>
-    <Button size="sm" disabled={busy}>Approve import</Button>
+    {reject && <label className="grid gap-1.5 text-label-md">Rejection reason
+      <Textarea name="notes" required maxLength={1000} />
+    </label>}
+    <label className="flex items-start gap-2"><input type="checkbox" required className="mt-1" />
+      {reject ? "Confirm rejection of this draft revision." : "Confirm this exact revision for the approved import register."}
+    </label>
+    <Button size="sm" variant={reject ? "destructive" : "default"} disabled={busy}>
+      {reject ? "Reject draft" : "Approve import"}
+    </Button>
     {error && <p role="alert" className="field-error">{error}</p>}
   </form>;
 }

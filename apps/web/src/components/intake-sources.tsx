@@ -32,9 +32,9 @@ const titles: Record<Panel["view"], string> = {
 };
 
 const statuses: Record<FolderSource["status"], string> = {
-  paused: "Paused", awaiting_setup: "Awaiting setup", offline: "Mac offline",
-  connected: "Monitoring", waiting_for_files: "Waiting for files", folder_unavailable: "Folder unavailable",
-  file_rejected: "File needs attention", upload_retry: "Retrying upload",
+  paused: "Paused", awaiting_setup: "Setup", offline: "Offline",
+  connected: "Monitoring", waiting_for_files: "Waiting", folder_unavailable: "Unavailable",
+  file_rejected: "Rejected", upload_retry: "Retrying",
 };
 
 function FolderPicker({ pairing, available, connected, refreshLink, busy }: {
@@ -102,7 +102,7 @@ export function IntakeSources({ gmail, companies, folders, macAppAvailable }: {
             <TableCell className="max-w-60 truncate font-medium" title={gmail.mailbox ?? undefined}>{gmail.mailbox ?? "Gmail"}</TableCell>
             <TableCell>Gmail</TableCell>
             <TableCell>{companies.find((entry) => entry.id === gmail.company_id)?.name ?? "Unassigned"}</TableCell>
-            <TableCell><Badge variant="outline">{gmail.error ? "Needs attention" : gmail.enabled ? "Monitoring" : "Paused"}</Badge></TableCell>
+            <TableCell><Badge variant="outline">{gmail.error ? "Attention" : gmail.enabled ? "Monitoring" : "Paused"}</Badge></TableCell>
             <TableCell className="text-muted-foreground">{timestamp(gmail.last_synced_at)}</TableCell>
             <TableCell className="text-right"><Button size="sm" variant="ghost" onClick={() => setPanel({ view: "gmail" })}>Manage</Button></TableCell>
           </TableRow>}
