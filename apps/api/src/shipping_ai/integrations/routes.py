@@ -52,6 +52,10 @@ class TelegramLink(BaseModel):
     chat_id: Annotated[str, StringConstraints(pattern=r"^[1-9][0-9]{0,19}$")]
 
 
+class PairingTokenRequest(BaseModel):
+    email: EmailStr | None = None
+
+
 class SendRequest(BaseModel):
     recipient_id: UUID
     revision: int
@@ -95,6 +99,7 @@ def status(db: DB, _user: Staff):
         },
         "telegram": {
             "configured": enabled_bot(),
+            "bot_username": telegram.bot_username() if enabled_bot() else None,
             "mini_app": settings().web_origin.scheme == "https",
             "recipients": [dict(row._mapping) for row in rows],
         },
@@ -289,6 +294,78 @@ def unlink_telegram(recipient_id: UUID, db: DB, _user: Staff):
         )
     )
     db.commit()
+
+
+@router.post("/integrations/telegram/pairing-token", dependencies=mutation)
+def create_pairing_token(payload: PairingTokenRequest, db: DB, user: Staff):
+    workspace = require_workspace(db, admin=True)
+    if not enabled_bot():
+        raise HTTPException(503, "Telegram bot configuration is missing")
+    target_user = user
+    if payload.email:
+        target_user = db.scalar(
+            select(User)
+            .join(WorkspaceMember)
+            .where(
+                WorkspaceMember.workspace_id == workspace,
+                User.email == payload.email.casefold(),
+                User.active.is_(True),
+            )
+        )
+        if target_user is None:
+            raise HTTPException(404, "Select an active workspace staff account")
+
+    token = secrets.token_hex(8)
+    try:
+        with redis_client() as redis:
+            redis.set(
+                f"shipping:telegram_pair:{token}",
+                json.dumps([str(workspace), str(target_user.id)]),
+                ex=600,
+            )
+    except RedisError:
+        raise HTTPException(503, "Could not create pairing session") from None
+
+    bot_user = telegram.bot_username()
+    pairing_url = f"https://t.me/{bot_user}?start=harborway_{token}" if bot_user else None
+    return {
+        "token": token,
+        "bot_username": bot_user,
+        "pairing_url": pairing_url,
+        "expires_in": 600,
+    }
+
+
+@router.post("/integrations/telegram/sync", dependencies=mutation)
+def sync_telegram(db: DB, _user: Staff):
+    require_workspace(db, admin=True)
+    if not enabled_bot():
+        raise HTTPException(503, "Telegram bot configuration is missing")
+    try:
+        with redis_client() as redis:
+            telegram.setup_bot_menus()
+            count = telegram.sync_updates(db, redis)
+            return {"processed": count}
+    except RedisError:
+        raise HTTPException(503, "Redis connection failed") from None
+
+
+@router.post("/integrations/telegram/webhook")
+async def telegram_webhook(request: Request, db: DB):
+    if not enabled_bot():
+        raise HTTPException(503, "Telegram bot configuration is missing")
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON payload")
+
+    if isinstance(payload, dict):
+        try:
+            with redis_client() as redis:
+                telegram.process_update(db, redis, payload)
+        except RedisError:
+            pass
+    return {"ok": True}
 
 
 def draft_notification(db, case):

@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { write } from "@/lib/client-api";
-import type { Company, Integrations, StaffMember, TelegramPreview } from "@/lib/contracts";
+import type { Company, Integrations, StaffMember, TelegramPairing, TelegramPreview } from "@/lib/contracts";
+import { useTelegramWebApp } from "@/lib/telegram";
 
 export function ConnectGmail() {
   const { busy, error, submit } = useWrite();
@@ -57,31 +58,125 @@ export function GmailForm({ config, companies }: { config: Integrations["gmail"]
   </form>;
 }
 
-export function TelegramLinkForm({ members }: { members: StaffMember[] }) {
+export function TelegramLinkForm({ members, botUsername }: { members: StaffMember[]; botUsername?: string | null }) {
   const router = useRouter();
   const { error, busy, submit } = useWrite();
   const [saved, setSaved] = useState(false);
-  return <form className="space-y-3" onSubmit={(event) => {
-    event.preventDefault();
-    const element = event.currentTarget;
-    const data = new FormData(element);
-    setSaved(false);
+  const [pairing, setPairing] = useState<TelegramPairing | null>(null);
+  const [selectedEmail, setSelectedEmail] = useState("");
+
+  const generateLink = () => {
     void submit(async () => {
-      await write("/integrations/telegram/recipients", Object.fromEntries(data));
-      element.reset();
-      setSaved(true);
+      const data = await write<TelegramPairing>(
+        "/integrations/telegram/pairing-token",
+        selectedEmail ? { email: selectedEmail } : {}
+      );
+      setPairing(data);
+    });
+  };
+
+  const handleSync = () => {
+    void submit(async () => {
+      await write<{ processed: number }>("/integrations/telegram/sync", {});
       router.refresh();
     });
-  }}>
-    <p className="text-xs text-muted-foreground">Ask the staff member to start the agency bot and confirm their private chat ID.</p>
-    <label className="grid gap-1.5 font-medium">Staff account<NativeSelect required name="email" defaultValue="">
-      <option value="">Select staff</option>{members.map((member) => <option key={member.id} value={member.email}>{member.email}</option>)}
-    </NativeSelect></label>
-    <label className="grid gap-1.5 font-medium">Private chat ID<Input name="chat_id" required inputMode="numeric" pattern="[1-9][0-9]{0,19}" /></label>
-    {error && <p className="field-error" role="alert">{error}</p>}
-    {saved && <p className="text-success" role="status">Recipient linked.</p>}
-    <Button size="sm" disabled={busy}>Link recipient</Button>
-  </form>;
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-lg border bg-muted/40 p-3 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <h4 className="text-label-md font-semibold">1-Click Telegram Pairing</h4>
+            {botUsername && <span className="text-xs font-mono text-muted-foreground">@{botUsername}</span>}
+          </div>
+          <Button size="xs" variant="ghost" onClick={handleSync} disabled={busy} type="button">
+            Check updates
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Generate an instant pairing link. When tapped in Telegram, it links the account immediately.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <NativeSelect
+            value={selectedEmail}
+            onChange={(e) => setSelectedEmail(e.target.value)}
+            className="text-xs max-w-xs"
+          >
+            <option value="">Current account</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.email}>
+                {m.email}
+              </option>
+            ))}
+          </NativeSelect>
+          <Button size="sm" onClick={generateLink} disabled={busy} type="button">
+            Generate link
+          </Button>
+        </div>
+
+        {pairing?.pairing_url && (
+          <div className="rounded-md border bg-background p-3 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-mono text-muted-foreground break-all">
+                {pairing.pairing_url}
+              </span>
+              <Button asChild size="xs" variant="default">
+                <a href={pairing.pairing_url} target="_blank" rel="noopener noreferrer">
+                  Open in Telegram
+                </a>
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Link expires in 10 minutes. Click &ldquo;Check updates&rdquo; above once you tap Start in Telegram.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <details className="text-xs text-muted-foreground">
+        <summary className="cursor-pointer font-medium hover:text-foreground">
+          Or link manually with numeric Chat ID
+        </summary>
+        <form
+          className="mt-3 space-y-3 border-t pt-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const element = event.currentTarget;
+            const data = new FormData(element);
+            setSaved(false);
+            void submit(async () => {
+              await write("/integrations/telegram/recipients", Object.fromEntries(data));
+              element.reset();
+              setSaved(true);
+              router.refresh();
+            });
+          }}
+        >
+          <label className="grid gap-1.5 font-medium text-foreground">
+            Staff account
+            <NativeSelect required name="email" defaultValue="">
+              <option value="">Select staff</option>
+              {members.map((member) => (
+                <option key={member.id} value={member.email}>
+                  {member.email}
+                </option>
+              ))}
+            </NativeSelect>
+          </label>
+          <label className="grid gap-1.5 font-medium text-foreground">
+            Private chat ID
+            <Input name="chat_id" required inputMode="numeric" pattern="[1-9][0-9]{0,19}" />
+          </label>
+          {error && <p className="field-error" role="alert">{error}</p>}
+          {saved && <p className="text-success" role="status">Recipient linked.</p>}
+          <Button size="sm" disabled={busy}>
+            Link recipient manually
+          </Button>
+        </form>
+      </details>
+    </div>
+  );
 }
 
 export function UnlinkTelegram({ id, name }: { id: string; name: string }) {
@@ -132,30 +227,65 @@ export function QuickDecisionForm({ caseId, revision, reviewId, reject }: {
 }) {
   const router = useRouter();
   const { error, busy, submit } = useWrite();
+  const { isTelegram, hapticSuccess, hapticError, close } = useTelegramWebApp();
+  const [completed, setCompleted] = useState<string | null>(null);
+
   return <form className="space-y-3" onSubmit={(event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     const notes = reject ? String(form.get("notes") ?? "").trim() : "Confirmed through the draft quick approval link.";
     const payload = { expected_revision: revision, review_id: reviewId, notes };
     void submit(async () => {
-      if (reject) {
-        await write(`/intakes/${caseId}/quick-rejection`, payload);
-        router.push(`/review/${caseId}`);
-      } else {
-        const { import_id: id } = await write<{ import_id: string }>(`/intakes/${caseId}/quick-approval`, payload);
-        router.push(`/imports/${id}`);
+      try {
+        if (reject) {
+          await write(`/intakes/${caseId}/quick-rejection`, payload);
+          hapticSuccess();
+          if (isTelegram) {
+            setCompleted("Draft rejected. Returning to Telegram...");
+            setTimeout(() => close(), 1200);
+          } else {
+            router.push(`/review/${caseId}`);
+          }
+        } else {
+          const { import_id: id } = await write<{ import_id: string }>(`/intakes/${caseId}/quick-approval`, payload);
+          hapticSuccess();
+          if (isTelegram) {
+            setCompleted("Import approved. Returning to Telegram...");
+            setTimeout(() => close(), 1200);
+          } else {
+            router.push(`/imports/${id}`);
+          }
+        }
+      } catch (err) {
+        hapticError();
+        throw err;
       }
     });
   }}>
-    {reject && <label className="grid gap-1.5 text-label-md">Rejection reason
-      <Textarea name="notes" required maxLength={1000} />
-    </label>}
-    <label className="flex items-start gap-2"><input type="checkbox" required className="mt-1" />
-      {reject ? "Confirm rejection of this draft revision." : "Confirm this exact revision for the approved import register."}
-    </label>
-    <Button size="sm" variant={reject ? "destructive" : "default"} disabled={busy}>
-      {reject ? "Reject draft" : "Approve import"}
-    </Button>
+    {completed ? (
+      <div className="rounded-lg bg-emerald-100/80 p-3 text-sm text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300" role="status">
+        {completed}
+      </div>
+    ) : (
+      <>
+        {reject && <label className="grid gap-1.5 text-label-md">Rejection reason
+          <Textarea name="notes" required maxLength={1000} />
+        </label>}
+        <label className="flex items-start gap-2"><input type="checkbox" required className="mt-1" />
+          {reject ? "Confirm rejection of this draft revision." : "Confirm this exact revision for the approved import register."}
+        </label>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant={reject ? "destructive" : "default"} disabled={busy}>
+            {reject ? "Reject draft" : "Approve import"}
+          </Button>
+          {isTelegram && (
+            <Button size="sm" variant="outline" type="button" onClick={close} disabled={busy}>
+              Close
+            </Button>
+          )}
+        </div>
+      </>
+    )}
     {error && <p role="alert" className="field-error">{error}</p>}
   </form>;
 }

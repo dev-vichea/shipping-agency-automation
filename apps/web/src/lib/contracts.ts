@@ -298,7 +298,18 @@ export type Integrations = {
     configured: boolean; connected: boolean; enabled: boolean; mailbox: string | null;
     senders: string[]; company_id: string | null; last_synced_at: string | null; error: string | null;
   };
-  telegram: { configured: boolean; mini_app: boolean; recipients: { id: string; email: string; display_name: string }[] };
+  telegram: {
+    configured: boolean;
+    bot_username?: string | null;
+    mini_app: boolean;
+    recipients: { id: string; email: string; display_name: string }[];
+  };
+};
+export type TelegramPairing = {
+  token: string;
+  bot_username: string | null;
+  pairing_url: string | null;
+  expires_in: number;
 };
 export type TelegramPreview = {
   configured: boolean; revision: number; payload_hash: string; message: string; quick: boolean;

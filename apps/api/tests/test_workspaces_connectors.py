@@ -432,3 +432,161 @@ def test_consolidated_approval_revalidates_and_is_idempotent(staff):
                 ).status_code
                 == 409
             )
+
+
+def test_telegram_pairing_token_and_update_processing(staff, monkeypatch):
+    from pydantic import SecretStr
+    from redis import Redis
+
+    from shipping_ai.core.config import settings
+    from shipping_ai.core.db import session_factory
+    from shipping_ai.integrations import telegram
+    from shipping_ai.models import TelegramRecipient
+
+    workspace(staff, "Telegram pairing workspace")
+    company = new_company(staff, COMPANY)
+    path = archive(staff, company_id=company)
+    _case_id = UUID(path.split("/")[-1])
+
+    config = settings()
+    monkeypatch.setattr(config, "telegram_bot_token", SecretStr("1234:synthetic_key"))
+    sent = []
+
+    def fake_call(method, payload):
+        if method == "getMe":
+            return {"username": "HarborwayBot", "first_name": "Harborway Bot"}
+        if method == "getChat":
+            return {
+                "id": int(payload["chat_id"]),
+                "type": "private",
+                "first_name": "Test User",
+            }
+        sent.append(payload)
+        return {"message_id": 99}
+
+    monkeypatch.setattr(telegram, "api", fake_call)
+
+    # 1. Generate pairing token
+    res = staff.post(f"{API}/integrations/telegram/pairing-token", json={})
+    assert res.status_code == 200, res.text
+    pairing = res.json()
+    assert pairing["token"] and pairing["bot_username"] == "HarborwayBot"
+    assert f"https://t.me/HarborwayBot?start=harborway_{pairing['token']}" == pairing["pairing_url"]
+
+    # 2. Process /start with pairing token
+    redis = Redis.from_url(str(settings().redis_url), socket_timeout=2)
+    update = {
+        "update_id": 1,
+        "message": {
+            "chat": {
+                "id": 987654321,
+                "type": "private",
+                "first_name": "Vichea",
+                "last_name": "Staff",
+            },
+            "text": f"/start harborway_{pairing['token']}",
+        },
+    }
+    with session_factory().begin() as db:
+        processed = telegram.process_update(db, redis, update)
+        assert processed is True
+
+    assert any("Account Linked Successfully" in s.get("text", "") for s in sent)
+
+    with session_factory().begin() as db:
+        recipient = db.scalar(select(TelegramRecipient).where(TelegramRecipient.chat_id == "987654321"))
+        assert recipient is not None
+        assert recipient.display_name == "Vichea Staff"
+
+    # 3. Replay with same token should report expired
+    sent.clear()
+    with session_factory().begin() as db:
+        processed = telegram.process_update(db, redis, update)
+        assert processed is True
+    assert len(sent) == 1
+    assert "expired or was already used" in sent[-1]["text"]
+
+    # 4. /whoami check
+    sent.clear()
+    whoami_update = {
+        "update_id": 2,
+        "message": {
+            "chat": {"id": 987654321, "type": "private"},
+            "text": "/whoami",
+        },
+    }
+    with session_factory().begin() as db:
+        processed = telegram.process_update(db, redis, whoami_update)
+        assert processed is True
+    assert len(sent) == 1
+    assert "987654321" in sent[-1]["text"]
+
+    # 5. /status check
+    sent.clear()
+    status_update = {
+        "update_id": 3,
+        "message": {
+            "chat": {"id": 987654321, "type": "private"},
+            "text": "/status INV-FIXTURE-101",
+        },
+    }
+    with session_factory().begin() as db:
+        processed = telegram.process_update(db, redis, status_update)
+        assert processed is True
+    assert len(sent) == 1
+    assert "Shipping draft" in sent[-1]["text"]
+    assert "INV-FIXTURE-101" in sent[-1]["text"]
+    buttons = sent[-1].get("reply_markup", {}).get("inline_keyboard", [])
+    btn_texts = [b["text"] for row in buttons for b in row]
+    assert "📄 Invoice" in btn_texts
+    assert "📦 Packing List" in btn_texts
+    assert "🚢 B/L" in btn_texts
+
+    # 6. Interactive callback queries for documents
+    sent.clear()
+    inv_cb = {
+        "update_id": 4,
+        "callback_query": {
+            "id": "cb1",
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 987654321, "type": "private"},
+            },
+            "data": "doc:inv:INV-FIXTURE-101",
+        },
+    }
+    with session_factory().begin() as db:
+        assert telegram.process_update(db, redis, inv_cb) is True
+    assert any("Commercial Invoice Details" in s.get("text", "") for s in sent)
+
+    sent.clear()
+    pl_cb = {
+        "update_id": 5,
+        "callback_query": {
+            "id": "cb2",
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 987654321, "type": "private"},
+            },
+            "data": "doc:pl:INV-FIXTURE-101",
+        },
+    }
+    with session_factory().begin() as db:
+        assert telegram.process_update(db, redis, pl_cb) is True
+    assert any("Packing List Details" in s.get("text", "") for s in sent)
+
+    sent.clear()
+    bl_cb = {
+        "update_id": 6,
+        "callback_query": {
+            "id": "cb3",
+            "message": {
+                "message_id": 42,
+                "chat": {"id": 987654321, "type": "private"},
+            },
+            "data": "doc:bl:INV-FIXTURE-101",
+        },
+    }
+    with session_factory().begin() as db:
+        assert telegram.process_update(db, redis, bl_cb) is True
+    assert any("Bill of Lading Details" in s.get("text", "") for s in sent)

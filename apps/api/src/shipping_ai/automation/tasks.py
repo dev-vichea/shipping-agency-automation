@@ -43,6 +43,11 @@ celery.conf.update(
             "schedule": 60.0,
             "options": {"expires": 55},
         },
+        "sync-telegram-updates": {
+            "task": "shipping.sync_telegram",
+            "schedule": 5.0,
+            "options": {"expires": 8},
+        },
     },
 )
 
@@ -222,3 +227,20 @@ def drain() -> None:
 @celery.task(name="shipping.sync_gmail")
 def sync_gmail() -> None:
     sync_all()
+
+
+@celery.task(name="shipping.sync_telegram")
+def sync_telegram() -> None:
+    token = settings().telegram_bot_token
+    if not token or not token.get_secret_value():
+        return
+    try:
+        from redis import Redis
+
+        from shipping_ai.integrations import telegram
+
+        redis = Redis.from_url(str(settings().redis_url), socket_timeout=2)
+        with session_factory().begin() as db:
+            telegram.sync_updates(db, redis)
+    except Exception as exc:
+        log.exception("telegram_sync_error: %s", exc)

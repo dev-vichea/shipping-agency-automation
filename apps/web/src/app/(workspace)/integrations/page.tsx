@@ -29,7 +29,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
         <div className="space-y-3 p-4">
           <h3 className="flex items-center gap-2 text-label-lg"><Send size={18} className="text-primary" aria-hidden /> Telegram</h3>
           {telegram.configured
-            ? <TelegramLinkForm members={members} />
+            ? <TelegramLinkForm members={members} botUsername={telegram.bot_username} />
             : <p className="text-muted-foreground">Configure the agency bot token on the server before linking private chats.</p>}
           {telegram.configured && !telegram.mini_app && <p className="text-xs text-muted-foreground">
             Telegram Mini App buttons require a reachable HTTPS workspace address.

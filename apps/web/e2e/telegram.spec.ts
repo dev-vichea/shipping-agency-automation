@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { expect, test } from "@playwright/test";
 
-test("a Telegram rejection link keeps the exact review and workspace through sign-in", async ({ page }) => {
+test("a Telegram rejection link keeps the exact review and workspace through sign-in and initializes the Mini App", async ({ page }) => {
   const caseId = randomUUID();
   const workspaceId = randomUUID();
   const reviewId = randomUUID();
@@ -13,4 +13,8 @@ test("a Telegram rejection link keeps the exact review and workspace through sig
   const signIn = new URL(page.url());
   expect(signIn.pathname).toBe("/login");
   expect(signIn.searchParams.get("next")).toBe(deepLink);
+
+  await expect.poll(async () => {
+    return page.evaluate(() => (window as unknown as { Telegram?: { WebApp?: { isExpanded?: boolean } } }).Telegram?.WebApp?.isExpanded);
+  }).toBe(true);
 });
