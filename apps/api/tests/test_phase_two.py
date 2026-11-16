@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from functools import lru_cache
+from io import BytesIO
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -9,6 +10,8 @@ import pymupdf
 import pytest
 from fastapi.testclient import TestClient
 from fixtures.build_samples import COMPANY, REFERENCE, XLSX, draft_bill, master, supplier
+from openpyxl import load_workbook
+from openpyxl.styles import Font
 from sqlalchemy import func, select
 
 from shipping_ai.ai.provider import InvalidAdvisory, OllamaProvider, review_context
@@ -49,7 +52,8 @@ def test_extract_and_compare_sanitized_supplier_and_bill():
     )
 
 
-def test_scan_locates_values_in_their_printed_columns():
+@pytest.mark.parametrize("partial_text_layer", [False, True])
+def test_scan_locates_values_in_their_printed_columns(partial_text_layer):
     with pymupdf.open() as pdf:
         page = pdf.new_page()
         for x, y, text in (
@@ -60,6 +64,7 @@ def test_scan_locates_values_in_their_printed_columns():
             (45, 118, "Sample Trading Limited"),
             (45, 143, "CONSIGNEE"),
             (45, 162, "Sample Import Company"),
+            (45, 211, "Ocean Vessel"),
             (45, 232, "PORT OF LOADING"),
             (264, 232, "PORT OF DISCHARGE"),
             (45, 250, "Harbor Alpha"),
@@ -70,14 +75,19 @@ def test_scan_locates_values_in_their_printed_columns():
             (450, 348, "KGS"),
             (305, 363, "5,480.25"),
             (450, 363, "3200"),
-            (45, 362, "55 PACKAGES"),
+            (45, 362, "55PACKAGES/5480.25KGS"),
         ):
             page.insert_text((x, y), text, fontsize=10)
         pix = page.get_pixmap(dpi=150, colorspace=pymupdf.csGRAY)
         with pymupdf.open() as scan:
-            scan.new_page(width=page.rect.width, height=page.rect.height).insert_image(
-                page.rect, pixmap=pix
-            )
+            scanned = scan.new_page(width=page.rect.width, height=page.rect.height)
+            scanned.insert_image(page.rect, pixmap=pix)
+            if partial_text_layer:
+                scanned.insert_text(
+                    (20, 20),
+                    "Draft conditions of carriage. The merchant must check the printed document.",
+                    render_mode=3,
+                )
             data = scan.tobytes()
 
     [bill] = extract(data, "scanned.pdf", uuid4(), "other")
@@ -96,6 +106,33 @@ def test_scan_locates_values_in_their_printed_columns():
         assert citation.page == 1 and all(0 < coordinate < 1 for coordinate in citation.bbox)
     assert bill.fields["gross_weight"].unit == "KG"
     assert bill.fields.get("net_weight") is None
+    assert bill.fields.get("vessel") is None
+
+
+@pytest.mark.parametrize("outside_data_area", [None, "IV35", "K9000"])
+def test_supplier_workbook_bounds_apply_to_values_and_formulas(outside_data_area):
+    workbook = load_workbook(BytesIO(supplier()))
+    sheet = workbook.active
+    sheet["IV9001"].font = Font(bold=True)
+    if outside_data_area:
+        sheet[outside_data_area] = "=1+2"
+    content = BytesIO()
+    workbook.save(content)
+    workbook.close()
+
+    results = extract(content.getvalue(), "supplier.xlsx", uuid4(), "other")
+    if outside_data_area:
+        [result] = results
+        assert (result.status, result.error) == ("failed", "workbook_limit")
+        findings, _ = review_documents(results)
+        context = review_context(findings)
+        assert context[0]["group"] == "extraction"
+        assert "worksheet or file limits" in context[0]["issue"]
+    else:
+        invoice = next(result for result in results if result.role == "invoice")
+        assert invoice.status == "extracted"
+        assert invoice.fields["invoice_no"].value == REFERENCE
+        assert invoice.fields["invoice_no"].evidence[0].cell == "B3"
 
 
 def test_scan_joins_fragments_of_a_printed_label():
@@ -543,6 +580,7 @@ def test_ollama_schema_rejects_unknown_finding(monkeypatch):
             json={
                 "done": True,
                 "done_reason": "stop",
+                "model": config.ollama_model,
                 "response": json.dumps(output),
             },
         )
@@ -553,7 +591,7 @@ def test_ollama_schema_rejects_unknown_finding(monkeypatch):
         lambda url, **kwargs: httpx.Response(
             200,
             request=httpx.Request("GET", url),
-            json={"models": [{"name": config.ollama_model}]},
+            json={"models": [{"name": config.ollama_model, "digest": "a" * 64}]},
         ),
     )
     monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: response("unrelated"))
@@ -581,7 +619,7 @@ def test_cdc_price_discrepancy_in_comparable_units():
     price = next(f for f in findings if f.field == "unit_price")
     assert price.outcome == "MISMATCH"
     assert price.left == "2.50 USD PCS" and price.right == "3.00 USD PCS"
-    assert {e.cell for e in price.evidence} == {"F10", "H3"}
+    assert {e.cell for e in price.evidence} == {"E10", "F10", "H3"}
 
 
 def test_cdc_detect_categories():

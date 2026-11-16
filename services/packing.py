@@ -18,9 +18,9 @@ def _same_number(left, right):
     return left is not None and right is not None and math.isclose(left, right, rel_tol=0, abs_tol=0.01)
 
 
-def extract_packing(data, filename):
+def extract_packing(data, filename, *, workbook=None):
     """Return packing metadata and item rows from a PackingList/PL sheet."""
-    for sheet_name, rows in rows_from_workbook(data, filename):
+    for sheet_name, rows in rows_from_workbook(data, filename) if workbook is None else workbook:
         if not rows:
             continue
         is_packing = bool(re.search(r'pack|^pl$', sheet_name, re.I)) or any(

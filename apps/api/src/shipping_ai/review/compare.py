@@ -16,6 +16,16 @@ NUMERIC = {"quantity", "packages", "gross_weight", "net_weight", "unit_price", "
 CONTAINER_LETTERS = dict(
     zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", (n for n in range(10, 39) if n % 11), strict=True)
 )
+EXTRACTION_ISSUES = {
+    "multiple_workbook_sections": "This workbook has different sections for the same role. Compare the original sheets and supply the confirmed section as a separate source.",
+    "workbook_limit": "Workbook data exceeds the supported worksheet or file limits.",
+    "unsupported_cell_coordinates": "The workbook has cell coordinates that cannot be read safely.",
+    "unreadable_workbook": "The workbook could not be read. Open the original and check the file.",
+    "unreadable_pdf": "No usable PDF text could be read. Check the scan or request a clearer copy.",
+    "unrecognized_pdf": "The PDF could not be identified as a bill of lading. Check the original.",
+    "unrecognized_workbook": "The workbook has no recognized invoice or packing-list layout.",
+    "ocr_page_limit": "The scanned PDF exceeds the OCR page limit. Inspect the original.",
+}
 
 
 def finding(group, name, outcome, message, left=None, right=None, *, key=None):
@@ -272,6 +282,7 @@ def transport(invoice: Extraction | None, packing: Extraction | None, bill: Extr
             "bl_no",
             "origin",
             "destination",
+            "port",
             "vessel",
             "voyage",
             "shipping_mode",
@@ -279,7 +290,9 @@ def transport(invoice: Extraction | None, packing: Extraction | None, bill: Extr
             left = doc.fields.get(name)
             if name == "shipper" and not usable(left):
                 left = doc.fields.get("supplier")
-            right = bill.fields.get(name)
+            right = bill.fields.get(
+                "delivery" if name == "destination" and bill.document_kind else name
+            )
             # Only overlapping fields. An OCR candidate is surfaced as uncertain.
             if not (left and left.value is not None and right and right.value is not None):
                 continue
@@ -421,13 +434,26 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
     result = []
     active = {}
     for item in extractions:
+        for key, value in item.fields.items():
+            if value.review_reason == "conflicting_source_values":
+                result.append(finding(
+                    "extraction", key, "NEEDS_REVIEW",
+                    "Source regions disagree. Check the cited values and enter the confirmed value.",
+                    value,
+                    key=f"extraction.conflict.{key}.{item.document_id}",
+                ))
         if item.status != "extracted":
             result.append(
                 finding(
                     "extraction",
                     item.role,
-                    "WARNING" if item.role == "other" else "NEEDS_REVIEW",
-                    "This document could not be fully extracted. Inspect the source and missing fields.",
+                    "NEEDS_REVIEW" if item.role in {"invoice", "packing_list", "draft_bl"} else "WARNING",
+                    EXTRACTION_ISSUES.get(
+                        item.error,
+                        "Check the highlighted values against the printed scan."
+                        if item.method == "tesseract"
+                        else "This document could not be fully extracted. Inspect the source and missing fields.",
+                    ),
                     key=f"extraction.{item.role}.{item.document_id}",
                 ).model_copy(
                     update={"evidence": [item.source_excerpt[0]] if item.source_excerpt else []}
@@ -436,7 +462,9 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
     counts = Counter(item.role for item in extractions)
     for role in ("invoice", "packing_list", "draft_bl"):
         if counts[role] == 1:
-            active[role] = next(item for item in extractions if item.role == role)
+            selected = next(item for item in extractions if item.role == role)
+            if selected.error != "multiple_workbook_sections":
+                active[role] = selected
         elif counts[role] > 1:
             result.append(
                 finding(

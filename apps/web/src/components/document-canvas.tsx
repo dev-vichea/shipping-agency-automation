@@ -25,6 +25,7 @@ import { location } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 type PageInfo = { pages: number; width: number; height: number; box: [number, number, number, number] | null };
+type Box = NonNullable<PageInfo["box"]>;
 type Worksheet = {
   sheets: string[];
   sheet: string;
@@ -54,6 +55,15 @@ function revealCitation(target: HTMLElement, viewport: HTMLElement) {
       top: vertical ? scrollDelta(item.top - top, item.bottom - top, parent.clientHeight) : 0,
       behavior: "instant",
     });
+  }
+}
+
+function rotateBox([x, y, width, height]: Box, rotation: number): Box {
+  switch (rotation) {
+    case 90: return [1 - y - height, x, height, width];
+    case 180: return [1 - x - width, 1 - y - height, width, height];
+    case 270: return [y, 1 - x - width, height, width];
+    default: return [x, y, width, height];
   }
 }
 
@@ -194,16 +204,10 @@ export function DocumentCanvas({
   const hasPdfError = pdfError || (pdfImageUrl ? brokenPdfImage === pdfImageUrl : false);
   const pdfLoading = isPdf && !pdfInfo && !hasPdfError;
   const citedBox = page === evidence?.page ? evidence.bbox : undefined;
-  const box = useMemo(() => {
-    if (!citedBox) return currentPdf?.info?.box;
-    const [x, y, width, height] = citedBox;
-    switch (rotation) {
-      case 90: return [1 - y - height, x, height, width];
-      case 180: return [1 - x - width, 1 - y - height, width, height];
-      case 270: return [y, 1 - x - width, height, width];
-      default: return citedBox;
-    }
-  }, [citedBox, currentPdf?.info?.box, rotation]);
+  const fallbackBox = currentPdf?.info?.box;
+  const box = useMemo(() => citedBox ? rotateBox(citedBox, rotation) : fallbackBox,
+    [citedBox, rotation, fallbackBox]);
+  const segments = citedBox && evidence?.boxes?.length ? evidence.boxes.map((span) => rotateBox(span, rotation)) : [];
   const totalPages = isPdf ? pdfInfo?.pages ?? 1 : worksheet?.total ?? 1;
   const citationKey = evidence && sourceKey(evidence);
   const excerptLines = currentOption?.lines ?? [];
@@ -482,8 +486,8 @@ export function DocumentCanvas({
                       bottom: `max(0px, calc(${(1 - box[1] - box[3]) * 100}% - 3px))`,
                     }}
                   >
-                    <span role="img" aria-label="Source citation bounding box"
-                      className="absolute inset-0 rounded-xs border-2 border-primary bg-primary/20" />
+                    {!segments.length && <span role="img" aria-label="Source citation bounding box"
+                      className="absolute inset-0 rounded-xs border-2 border-primary bg-primary/20" />}
 
                     <div
                       className={cn(
@@ -516,6 +520,11 @@ export function DocumentCanvas({
                     </div>
                   </div>
                 )}
+                {segments.map(([x, y, width, height], index) => (
+                  <span key={index} role="img" aria-label="Source citation bounding box"
+                    className="pointer-events-none absolute rounded-xs border-2 border-primary bg-primary/20"
+                    style={{ left: `${x * 100}%`, top: `${y * 100}%`, width: `${width * 100}%`, height: `${height * 100}%` }} />
+                ))}
               </div>
             )}
           </div>

@@ -46,6 +46,8 @@ def extract_bill(pdf_bytes: bytes, filename: str = '') -> Dict[str, Any]:
         'issue_date': '',
         'raw_date': '',
         'shipping_mode': 'BY SEA',
+        'port': '',
+        'route_legs': '2_legs',
         'container_seal': '',
         'container': '',
         'seal': '',
@@ -140,6 +142,11 @@ def extract_bill(pdf_bytes: bytes, filename: str = '') -> Dict[str, Any]:
         meta['container_seal'] = _extract_container_seal(full_text, meta['bl_no'])
     if not meta['container'] and meta['container_seal']:
         meta['container'] = meta['container_seal'].split('/')[0].strip()
+
+    m_type = re.search(r'\b(\d+\s*[xX*]\s*(?:20|40|45)\s*(?:HC|HQ|GP|OT|FR|RF|RH))\b', full_text, re.I)
+    meta['container_type'] = re.sub(r'\s+', '', m_type.group(1)).upper().replace('X', 'x').replace('*', 'x') if m_type else ''
+    if not meta['container'] and meta['container_type']:
+        meta['container'] = meta['container_type']
 
     # Seal extraction if not populated
     if not meta['seal']:
@@ -378,6 +385,41 @@ def _extract_quantities(text: str, meta: Dict[str, Any]) -> None:
             pass
 
 
+DISALLOWED_LOCATIONS = {
+    'PORT OF LOADING', 'PORT OF DISCHARGE', 'PLACE OF DELIVERY', 'PLACE OF LOADING',
+    'PLACE OF RECEIPT', 'PLACE OF DISCHARGE', 'FINAL DESTINATION', 'FINAL PLACE OF DELIVERY',
+    'TYPE OF SHIPMENT', 'TERM OF SERVICE', 'PORT', 'PLACE', 'DELIVERY', 'DISCHARGE', 'LOADING',
+    'RECEIPT', 'FINAL', 'DESTINATION', 'PORT OF', 'PLACE OF', 'BY SEA', 'BY TRUCK', 'BY AIR',
+    'PRE CARRIAGE', 'OCEAN VESSEL', 'VOYAGE NO', 'VESSEL', 'DOCUMENT', 'ENDORSED'
+}
+
+
+def is_valid_location(val: str) -> bool:
+    if not val:
+        return False
+    v = val.strip().strip(':').upper()
+    if v in DISALLOWED_LOCATIONS or len(v) <= 2 or len(v) > 50:
+        return False
+    if any(kw in v for kw in [
+        'CLAUSE', 'DEMURRAGE', 'DETENTION', 'CARRIER', 'TARIFF', 'WHICHEVER',
+        'FREIGHT', 'DOCUMENT', 'ENDORSED', 'BILL OF LADING', 'BILLS OF LADING',
+        'UNLESS', 'OTHERWISE', 'STATED', 'ISSUED', 'ACCOMPLISHED', 'VOID',
+        'LIABILITY', 'CONDITION', 'MERCHANT', 'APPLICABLE', 'CONSIGNEE',
+        'NOTIFY', 'SHIPPER'
+    ]):
+        return False
+    if any(v.startswith(kw) for kw in ['PORT OF', 'PLACE OF', 'FINAL PLACE', 'TYPE OF', 'TERM OF', 'NUMBER OF']):
+        return False
+    return True
+
+
+def is_origin_location(val: str) -> bool:
+    if not val:
+        return False
+    v = val.strip().upper()
+    return any(kw in v for kw in ['CHINA', 'SHANGHAI', 'JIANGSU', 'NINGBO', 'SHENZHEN', 'GUANGZHOU', 'QINGDAO', 'XIAMEN', 'TIANJIN', 'ZHEJIANG', 'BEIJING'])
+
+
 def _extract_parties(text: str, blocks: list, meta: Dict[str, Any]) -> None:
     """Extract shipper, consignee, route, and carrier for both Chinese and English B/Ls."""
     # 1. Chinese Draft B/L scan
@@ -466,12 +508,21 @@ def _extract_parties(text: str, blocks: list, meta: Dict[str, Any]) -> None:
                 m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', '\n'.join(clean_val_lines))
                 if m_vat:
                     meta['vat'] = m_vat.group(1).strip()
+        elif any(kw in b_lower for kw in ['place of discharge', 'port of discharge', '卸货港', '卸货口岸']) and i + 1 < len(blocks):
+            if not meta.get('port') or not is_valid_location(meta.get('port')):
+                p_cand = blocks[i+1][4].strip().split('\n')[0]
+                if is_valid_location(p_cand) and not is_origin_location(p_cand):
+                    meta['port'] = p_cand
         elif 'place of delivery' in b_lower and i + 1 < len(blocks):
-            if not meta['destination']:
-                meta['destination'] = blocks[i+1][4].strip().split('\n')[0]
-        elif 'place of loading' in b_lower and i + 1 < len(blocks):
-            if not meta['origin']:
-                meta['origin'] = blocks[i+1][4].strip().split('\n')[0]
+            if not meta['destination'] or not is_valid_location(meta['destination']):
+                d_cand = blocks[i+1][4].strip().split('\n')[0]
+                if is_valid_location(d_cand) and not is_origin_location(d_cand):
+                    meta['destination'] = d_cand
+        elif any(kw in b_lower for kw in ['place of loading', 'port of loading', '装货港', '起运港']) and i + 1 < len(blocks):
+            if not meta['origin'] or not is_valid_location(meta['origin']):
+                o_cand = blocks[i+1][4].strip().split('\n')[0]
+                if is_valid_location(o_cand):
+                    meta['origin'] = o_cand
         elif any(w in b_lower for w in ['supply chain', 'lines', 'logistics', 'carrier']) and not any(kw in b_lower for kw in ['not to be responsible', 'failure to notify']):
             if not meta['carrier'] and len(b_txt) < 80:
                 meta['carrier'] = b_txt.split('\n')[0]
@@ -584,29 +635,64 @@ def _extract_parties(text: str, blocks: list, meta: Dict[str, Any]) -> None:
         if m_vat:
             meta['vat'] = m_vat.group(1).strip()
 
-    if not meta['origin'] or any(kw in meta['origin'].lower() for kw in ['clause', 'demurrage', 'detention', 'carrier', 'tariff']) or len(meta['origin']) <= 2:
-        m_orig = re.search(r'(?:PORT OF LOADING|PLACE OF RECEIPT|装货港|起运港)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:PORT OF DISCHARGE|FREIGHT|VESSEL|\n|\|)', text, re.I)
+    if not meta['origin'] or not is_valid_location(meta['origin']):
+        m_orig = re.search(r'(?:PORT OF LOADING|PLACE OF LOADING|PLACE OF RECEIPT|装货港|起运港)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:PORT OF DISCHARGE|FREIGHT|VESSEL|\n|\|)', text, re.I)
         if m_orig:
             o_cand = m_orig.group(1).strip()
-            if o_cand.upper() not in ['PORT', 'PLACE', 'LOADING', 'RECEIPT', 'I', 'A'] and 2 < len(o_cand) < 40 and not any(kw in o_cand.lower() for kw in ['clause', 'demurrage', 'carrier', 'tariff', 'whichever', 'freight']):
+            if is_valid_location(o_cand):
                 meta['origin'] = o_cand
-        if not meta['origin'] or any(kw in meta['origin'].lower() for kw in ['clause', 'demurrage', 'detention']) or len(meta['origin']) <= 2:
-            for port in ['SHANGHAI', 'NINGBO', 'SHENZHEN', 'GUANGZHOU', 'QINGDAO', 'XIAMEN', 'TIANJIN', 'HO CHI MINH', 'BANGKOK', 'JAKARTA', 'SINGAPORE', 'BUSAN', 'HONG KONG']:
+        if not meta['origin'] or not is_valid_location(meta['origin']):
+            for port in ['JIANGSU, CHINA', 'JIANGSU,CHINA', 'JIANGSU', 'SHANGHAI, CHINA', 'SHANGHAI', 'NINGBO', 'SHENZHEN', 'GUANGZHOU', 'QINGDAO', 'XIAMEN', 'TIANJIN', 'HO CHI MINH', 'BANGKOK', 'JAKARTA', 'SINGAPORE', 'BUSAN', 'HONG KONG']:
                 if port in text.upper():
                     meta['origin'] = port
                     break
 
-    if not meta['destination'] or any(kw in meta['destination'].lower() for kw in ['clause', 'demurrage', 'detention', 'carrier', 'tariff']) or len(meta['destination']) <= 2:
-        m_dest = re.search(r'(?:PORT OF DISCHARGE|FINAL PLACE OF DELIVERY|PLACE OF DELIVERY|卸货港|目的港)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:FINAL PLACE|\n|\|)', text, re.I)
+    if not meta['destination'] or not is_valid_location(meta['destination']):
+        m_dest = re.search(r'(?:FINAL PLACE OF DELIVERY|FINAL DESTINATION|PLACE OF DELIVERY|PORT OF DISCHARGE|目的港|目的地)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:FINAL PLACE|\n|\|)', text, re.I)
         if m_dest:
             d_cand = m_dest.group(1).strip()
-            if d_cand.upper() not in ['PORT', 'DISCHARGE', 'DELIVERY', 'FINAL', 'I', 'A'] and 2 < len(d_cand) < 40 and not any(kw in d_cand.lower() for kw in ['clause', 'demurrage', 'carrier', 'tariff', 'whichever', 'freight']):
+            if is_valid_location(d_cand) and not is_origin_location(d_cand):
                 meta['destination'] = d_cand
-        if not meta['destination'] or any(kw in meta['destination'].lower() for kw in ['clause', 'demurrage', 'detention']) or len(meta['destination']) <= 2:
-            for dest in ['SIHANOUKVILLE', 'PHNOM PENH']:
+        if not meta['destination'] or not is_valid_location(meta['destination']):
+            for dest in ['SIHANOUKVILLE', 'PHNOM PENH, CAMBODIA', 'PHNOM PENH,CAMBODIA', 'PHNOM PENH']:
                 if dest in text.upper():
                     meta['destination'] = dest
                     break
+
+    if not meta.get('port') or not is_valid_location(meta.get('port')):
+        m_port = re.search(r'(?:PORT OF DISCHARGE|PLACE OF DISCHARGE|卸货港|卸货口岸)\s*[:：|]?\s*([A-Za-z\s,]+?)(?:FINAL PLACE|PLACE OF DELIVERY|PORT OF LOADING|\n|\|)', text, re.I)
+        if m_port:
+            p_cand = m_port.group(1).strip()
+            if is_valid_location(p_cand) and not is_origin_location(p_cand):
+                meta['port'] = p_cand
+    if not meta.get('port') or not is_valid_location(meta.get('port')):
+        for cp in ['PREY VOR BORDER', 'PREY VOR', 'BAVET BORDER', 'BAVET', 'POIPET BORDER', 'POIPET', 'CHAM YEAM BORDER', 'CHAM YEAM', 'TRAPEANG SRE', 'SIHANOUKVILLE', 'PHNOM PENH']:
+            if cp in text.upper():
+                if 'PREY VOR' in cp:
+                    meta['port'] = 'Prey Vor border'
+                elif 'BAVET' in cp:
+                    meta['port'] = 'Bavet border'
+                elif 'POIPET' in cp:
+                    meta['port'] = 'Poipet border'
+                elif 'CHAM YEAM' in cp:
+                    meta['port'] = 'Cham Yeam border'
+                elif 'TRAPEANG' in cp:
+                    meta['port'] = 'Trapeang Sre border'
+                elif cp == 'SIHANOUKVILLE':
+                    meta['port'] = 'SIHANOUKVILLE'
+                elif cp == 'PHNOM PENH':
+                    meta['port'] = 'Phnom Penh'
+                break
+    if not meta.get('port') and meta.get('destination') and is_valid_location(meta.get('destination')):
+        meta['port'] = meta['destination']
+
+    # Route legs: 2_legs vs 3_legs
+    p_str = (meta.get('port') or '').strip().upper()
+    d_str = (meta.get('destination') or '').strip().upper()
+    if p_str and d_str and p_str != d_str and not ('SIHANOUK' in p_str and 'SIHANOUK' in d_str):
+        meta['route_legs'] = '3_legs'
+    else:
+        meta['route_legs'] = '2_legs'
 
 
 def _extract_goods_descriptions(text: str, blocks: list) -> List[str]:

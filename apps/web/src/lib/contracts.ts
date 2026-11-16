@@ -112,6 +112,7 @@ export type Evidence = {
   line: number | null;
   raw: string | null;
   bbox?: [number, number, number, number] | null;
+  boxes?: [number, number, number, number][];
 };
 
 export type ExtractedField = {
@@ -120,6 +121,8 @@ export type ExtractedField = {
   currency: string | null;
   status: "present" | "missing" | "uncertain";
   evidence: Evidence[];
+  review_reason?: string | null;
+  alternatives?: { value: string; unit: string | null; currency: string | null; evidence: Evidence[] }[];
 };
 
 export type Extraction = {
@@ -132,6 +135,7 @@ export type Extraction = {
   fields: Record<string, ExtractedField>;
   items: { row: number; fields: Record<string, ExtractedField> }[];
   source_excerpt: Evidence[];
+  sections?: Extraction[];
 };
 
 export type Finding = {

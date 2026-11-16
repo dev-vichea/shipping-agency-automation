@@ -158,6 +158,75 @@ class OllamaHandler(BaseHTTPRequestHandler):
                 self.send_json(response_payload)
                 return
 
+            is_transport_analysis = (
+                isinstance(req_format, dict)
+                and (
+                    req_format.get("title") == "TransportAnalysis"
+                    or "route_legs" in req_format.get("properties", {})
+                    or "port_or_border" in req_format.get("properties", {})
+                )
+            )
+            if is_transport_analysis or "border crossing" in prompt_text.lower():
+                prompt_lower = prompt_text.lower()
+                is_truck = "truck" in prompt_lower or "by truck" in prompt_lower
+                is_3legs = "prey vor" in prompt_lower or "bavet" in prompt_lower or is_truck
+
+                orig = "SHANGHAI"
+                if "jiangsu" in prompt_lower:
+                    orig = "JIANGSU, CHINA"
+                elif "ningbo" in prompt_lower:
+                    orig = "NINGBO, CHINA"
+                elif "shenzhen" in prompt_lower:
+                    orig = "SHENZHEN, CHINA"
+
+                port = "SIHANOUKVILLE"
+                if "prey vor" in prompt_lower:
+                    port = "Prey Vor border"
+                elif "bavet" in prompt_lower:
+                    port = "Bavet border"
+                elif "poipet" in prompt_lower:
+                    port = "Poipet border"
+
+                dest = "SIHANOUKVILLE" if not is_3legs else "Phnom Penh, Cambodia"
+                if "phnom penh" in prompt_lower:
+                    dest = "Phnom Penh, Cambodia"
+
+                container = ""
+                m_iso = re.search(r'\b([A-Z]{3,4}\s*\d{7})\b', prompt_text)
+                m_type = re.search(r'\b(\d+\s*[xX*]\s*(?:20|40|45)\s*(?:HC|HQ|GP))\b', prompt_text, re.I)
+                c_num = m_iso.group(1).replace(" ", "") if m_iso else ""
+                c_t = m_type.group(1).replace(" ", "").upper() if m_type else ""
+                if c_num and c_t:
+                    container = f"{c_num} / {c_t}"
+                elif c_num:
+                    container = c_num
+                elif c_t:
+                    container = c_t
+
+                m_seal = re.search(r'\b(?:seal|封条号)[\s:：#]*([A-Za-z0-9\-]{6,12})\b', prompt_text, re.I)
+                seal = m_seal.group(1) if m_seal else ""
+
+                payload_data = {
+                    "route_legs": "3_legs" if is_3legs else "2_legs",
+                    "transport_mode": "BY TRUCK" if is_truck else "BY SEA",
+                    "origin": orig,
+                    "port_or_border": port,
+                    "destination": dest,
+                    "container": container or None,
+                    "seal": seal or None,
+                    "explanation": f"{'3-leg multimodal' if is_3legs else '2-leg direct sea'} route via {port} to {dest}",
+                }
+                logger.info("Generated transport analysis: %s", payload_data)
+                response_payload = {
+                    "model": req.get("model", MODEL_NAME),
+                    "created_at": "2026-11-13T12:00:00Z",
+                    "response": json.dumps(payload_data),
+                    "done": True,
+                    "done_reason": "stop",
+                }
+                self.send_json(response_payload)
+                return
+
             context_list = parsed_prompt if isinstance(parsed_prompt, list) else []
             logger.info("Generating AI advisory suggestions for %d findings", len(context_list))
             suggestions = generate_suggestions(context_list)

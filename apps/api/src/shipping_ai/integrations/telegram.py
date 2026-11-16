@@ -2,6 +2,7 @@ import html
 import json
 import logging
 import re
+from datetime import date, datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -161,13 +162,168 @@ def safe_edit_or_send(
 
 def field_value(documents, roles, keys):
     for role in roles:
-        entries = [item for item in documents if item.role == role]
+        entries = [item for item in documents if getattr(item, "role", None) == role]
         if len(entries) != 1:
             continue
         for key in keys:
             field = entries[0].fields.get(key)
-            if field and field.status == "present" and field.value:
-                return " ".join(part for part in (field.value, field.currency, field.unit) if part)
+            if field and field.value:
+                return " ".join(part for part in (str(field.value), getattr(field, "currency", None), getattr(field, "unit", None)) if part)
+    return "Pending"
+
+
+def format_date_readable(val) -> str:
+    if not val:
+        return "Pending"
+    val_str = str(val).strip()
+    try:
+        f = float(val_str)
+        if 35000 <= f <= 55000:
+            d = date(1899, 12, 30) + timedelta(days=int(f))
+            return d.strftime("%d-%b-%Y")
+    except (ValueError, TypeError):
+        pass
+    for fmt in ("%d-%b-%Y", "%d %b %Y", "%d %B %Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y"):
+        try:
+            d = datetime.strptime(val_str, fmt)
+            return d.strftime("%d-%b-%Y")
+        except ValueError:
+            pass
+    return val_str
+
+
+def resolve_bl_no(documents, excerpts=None) -> str:
+    for doc in documents:
+        if getattr(doc, "role", None) == "draft_bl":
+            f = doc.fields.get("bl_no") if hasattr(doc, "fields") else None
+            if f and getattr(f, "value", None):
+                return str(f.value).strip()
+    if excerpts:
+        for ex in excerpts:
+            raw = ex if isinstance(ex, str) else getattr(ex, "raw", None) or (ex.get("raw") if isinstance(ex, dict) else "")
+            m = re.search(r"\b(RCLY\d+(?:\+RCLY\d+)?|CPL[0-9O]\d+|OOLU\d+|SITP[A-Z0-9]+|SIH\d+)\b", raw or "", re.I)
+            if m:
+                val = m.group(1).upper()
+                if val.startswith("CPLO"):
+                    val = "CPL0" + val[4:]
+                return val
+    return "Pending"
+
+
+def resolve_issue_date(documents, excerpts=None) -> str:
+    for doc in documents:
+        if getattr(doc, "role", None) == "draft_bl":
+            f = doc.fields.get("issue_date") if hasattr(doc, "fields") else None
+            if f and getattr(f, "value", None):
+                return format_date_readable(f.value)
+    for doc in documents:
+        if getattr(doc, "role", None) == "invoice":
+            f = doc.fields.get("invoice_date") if hasattr(doc, "fields") else None
+            if f and getattr(f, "value", None):
+                return format_date_readable(f.value)
+    if excerpts:
+        for ex in excerpts:
+            raw = ex if isinstance(ex, str) else getattr(ex, "raw", None) or (ex.get("raw") if isinstance(ex, dict) else "")
+            m = re.search(r"(?:Date\s+of\s+Invoice|Invoice\s*Date|Issue\s*Date|Date\s*:)[\s|:：]*([A-Za-z0-9\-/\.]+)", raw or "", re.I)
+            if m:
+                cand = m.group(1).strip()
+                res = format_date_readable(cand)
+                if res != "Pending":
+                    return res
+    return "Pending"
+
+
+def resolve_port(documents, excerpts=None) -> str:
+    raw_val = ""
+    dest_val = ""
+    for doc in documents:
+        if getattr(doc, "role", None) == "draft_bl":
+            if hasattr(doc, "fields"):
+                p = doc.fields.get("port")
+                if p and getattr(p, "value", None):
+                    raw_val = str(p.value).strip()
+                d = doc.fields.get("destination")
+                if d and getattr(d, "value", None):
+                    dest_val = str(d.value).strip()
+
+    ex_texts = []
+    if excerpts:
+        for ex in excerpts:
+            raw = ex if isinstance(ex, str) else getattr(ex, "raw", None) or (ex.get("raw") if isinstance(ex, dict) else "")
+            if raw:
+                ex_texts.append(raw)
+
+    all_text = " ".join([raw_val, dest_val] + ex_texts)
+
+    m_dis = re.search(r"(?:Place|Port)\s+of\s+Discharge\s*[:：]?\s*([^\n\r]+)", all_text, re.I)
+    if m_dis:
+        candidate = m_dis.group(1).strip()
+        if "PREY VOR" in candidate.upper():
+            return "Prey Vor border"
+        if "BAVET" in candidate.upper():
+            return "Bavet border"
+        if "SIHANOUKVILLE" in candidate.upper():
+            return "SIHANOUKVILLE"
+        if "PHNOM PENH" in candidate.upper():
+            return "Phnom Penh"
+        if 2 < len(candidate) < 40 and not any(kw in candidate.lower() for kw in ["tariff", "clause", "carrier", "demurrage"]):
+            return candidate
+
+    for pat, name in [
+        (r"PREY\s+VOR", "Prey Vor border"),
+        (r"BAVET", "Bavet border"),
+        (r"POIPET", "Poipet border"),
+        (r"CHAM\s+YEAM", "Cham Yeam border"),
+        (r"TRAPEANG\s+SRE", "Trapeang Sre border"),
+        (r"SIHANOUKVILLE", "SIHANOUKVILLE"),
+        (r"PHNOM\s+PENH", "Phnom Penh"),
+    ]:
+        if re.search(pat, all_text, re.I):
+            return name
+
+    if raw_val and raw_val not in ("", "None", "Pending"):
+        return raw_val
+    if dest_val and dest_val not in ("", "None", "Pending"):
+        return dest_val
+    return "Pending"
+
+
+def resolve_container(documents, excerpts=None) -> str:
+    raw_val = ""
+    for doc in documents:
+        if getattr(doc, "role", None) == "draft_bl":
+            if hasattr(doc, "fields"):
+                c = doc.fields.get("container")
+                if c and getattr(c, "value", None):
+                    raw_val = str(c.value).strip()
+
+    c_num = ""
+    c_type = ""
+    ex_texts = []
+    if excerpts:
+        for ex in excerpts:
+            raw = ex if isinstance(ex, str) else getattr(ex, "raw", None) or (ex.get("raw") if isinstance(ex, dict) else "")
+            if raw:
+                ex_texts.append(raw)
+
+    all_text = " ".join([raw_val] + ex_texts)
+
+    m_iso = re.search(r"\b([A-Z]{3}[UJZ]\s*\d{7}|[A-Z]{4}\s*\d{7})\b", all_text, re.I)
+    if m_iso:
+        c_num = re.sub(r"\s+", "", m_iso.group(1).upper())
+
+    m_t = re.search(r"\b(\d+\s*[xX*]\s*(?:20|40|45)\s*(?:HC|HQ|GP|OT|FR|RF|RH))\b", all_text, re.I)
+    if m_t:
+        c_type = re.sub(r"\s+", "", m_t.group(1)).upper().replace("X", "x").replace("*", "x")
+
+    if c_num and c_type:
+        return f"{c_num} / {c_type}"
+    if c_num:
+        return c_num
+    if c_type:
+        return c_type
+    if raw_val and raw_val not in ("", "None", "Pending"):
+        return raw_val
     return "Pending"
 
 
@@ -310,7 +466,52 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
     )
     company_name = company or "Unassigned"
     inv_val = invoice_value(documents)
-    bl_val = field_value(documents, ("draft_bl",), ("bl_no",))
+
+    excerpts = []
+    for doc in documents:
+        excerpts.extend(getattr(doc, "source_excerpt", []))
+
+    bl_val = resolve_bl_no(documents, excerpts)
+    issue_date_val = resolve_issue_date(documents, excerpts)
+    port_val = resolve_port(documents, excerpts)
+    container_val = resolve_container(documents, excerpts)
+    origin_val = field_value(documents, ("draft_bl", "invoice", "packing_list"), ("origin",))
+    dest_val = field_value(documents, ("draft_bl", "packing_list", "invoice"), ("destination",))
+    legs_val = field_value(documents, ("draft_bl",), ("route_legs",))
+    mode_val = field_value(documents, ("draft_bl",), ("shipping_mode",))
+
+    p_up = (port_val or "").strip().upper()
+    d_up = (dest_val or "").strip().upper()
+    is_3leg = legs_val == "3_legs" or (
+        p_up
+        and d_up
+        and p_up != d_up
+        and not ("SIHANOUK" in p_up and "SIHANOUK" in d_up)
+        and d_up not in ("", "PENDING")
+    )
+
+    route_type_desc = (
+        "3-Leg (Cross-Border Truck)"
+        if (is_3leg and "TRUCK" in mode_val.upper())
+        else ("3-Leg (Multimodal)" if is_3leg else "2-Leg (Direct Sea)")
+    )
+
+    transport_lines = [
+        "📑 <b>B/L & Transport Details:</b>",
+        f"• <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
+        f"• <b>Issue Date:</b> {html.escape(issue_date_val)}",
+        f"• <b>Route:</b> {route_type_desc}",
+    ]
+    if origin_val and origin_val != "Pending":
+        transport_lines.append(f"• <b>Origin:</b> {html.escape(origin_val[:80])}")
+    if is_3leg:
+        transport_lines.append(f"• <b>Port / Border:</b> {html.escape(port_val)}")
+        if dest_val and dest_val != "Pending":
+            transport_lines.append(f"• <b>Destination:</b> {html.escape(dest_val[:80])}")
+    else:
+        transport_lines.append(f"• <b>Port / Discharge:</b> {html.escape(port_val)}")
+    transport_lines.append(f"• <b>Container:</b> {html.escape(container_val)}")
+
     pkg_val = field_value(documents, ("draft_bl", "packing_list", "invoice"), ("packages",))
     gw_val = field_value(documents, ("draft_bl", "packing_list", "invoice"), ("gross_weight",))
     shipper_val = field_value(documents, ("draft_bl", "invoice"), ("shipper", "supplier"))
@@ -336,7 +537,8 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
         f"• <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
         f"• <b>Packages:</b> {html.escape(pkg_val)}",
         f"• <b>Gross Weight:</b> {html.escape(gw_val)}",
-        f"• <b>Bill of Lading:</b> <code>{html.escape(bl_val)}</code>",
+        "",
+        *transport_lines,
         "",
         "📋 <b>Parties:</b>",
         f"• <b>Shipper:</b> {html.escape(shipper_val[:120])}",
@@ -354,7 +556,9 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
 def format_invoice_card(case, company_name: str | None, payload: dict) -> tuple[str, list[list[dict]]]:
     ref = case.detected_reference or str(case.id)[:8]
     fields = payload.get("fields", {})
+    excerpts = payload.get("source_excerpt", [])
     inv_no = fields.get("invoice_no", {}).get("value") or ref
+    inv_date = resolve_issue_date([], excerpts) if not fields.get("invoice_date", {}).get("value") else format_date_readable(fields.get("invoice_date", {}).get("value"))
     total_amt = fields.get("amount", {}).get("value") or "Pending"
     currency = fields.get("amount", {}).get("currency") or "USD"
     supplier = fields.get("supplier", {}).get("value") or fields.get("shipper", {}).get("value") or "Pending"
@@ -368,6 +572,7 @@ def format_invoice_card(case, company_name: str | None, payload: dict) -> tuple[
         "",
         "💰 <b>Financial Summary:</b>",
         f"• <b>Invoice No:</b> <code>{html.escape(str(inv_no))}</code>",
+        f"• <b>Invoice Date:</b> {html.escape(str(inv_date))}",
         f"• <b>Total Amount:</b> <code>{html.escape(str(total_amt))} {currency}</code>",
         f"• <b>Supplier:</b> {html.escape(str(supplier)[:100])}",
         f"• <b>Consignee:</b> {html.escape(str(consignee)[:100])}",
@@ -487,16 +692,37 @@ def format_packing_list_card(case, company_name: str | None, payload: dict) -> t
     return "\n".join(lines), buttons
 
 
-def format_bl_card(case, company_name: str | None, payload: dict) -> tuple[str, list[list[dict]]]:
+def format_bl_card(case, company_name: str | None, payload: dict, all_docs: dict | None = None) -> tuple[str, list[list[dict]]]:
     ref = case.detected_reference or str(case.id)[:8]
     fields = payload.get("fields", {})
-    bl_no = fields.get("bl_no", {}).get("value") or "Pending"
+    excerpts = payload.get("source_excerpt", [])
+
+    doc_dummy = Extraction(
+        document_id=case.id,
+        role="draft_bl",
+        status="extracted",
+        method="extract",
+        fields=fields,
+        source_excerpt=excerpts,
+    )
+    bl_no = resolve_bl_no([doc_dummy], excerpts)
+    issue_date = resolve_issue_date([doc_dummy], excerpts)
+    if issue_date == "Pending" and all_docs:
+        inv_doc = all_docs.get("invoice", {})
+        inv_f = inv_doc.get("fields", {}).get("invoice_date", {}).get("value")
+        if inv_f:
+            issue_date = format_date_readable(inv_f)
+        else:
+            issue_date = resolve_issue_date([], inv_doc.get("source_excerpt", []))
+
+    port_val = resolve_port([doc_dummy], excerpts)
+    container_val = resolve_container([doc_dummy], excerpts)
+
     destination = fields.get("destination", {}).get("value") or "Pending"
     origin = fields.get("origin", {}).get("value") or "Pending"
     vessel = fields.get("vessel", {}).get("value")
     voyage = fields.get("voyage", {}).get("value")
     carrier = fields.get("carrier", {}).get("value")
-    container = fields.get("container", {}).get("value")
     seal = fields.get("seal", {}).get("value")
     pkgs = fields.get("packages", {}).get("value") or fields.get("package_count", {}).get("value") or "Pending"
     cargo = fields.get("cargo_summary", {}).get("value") or "Pending"
@@ -504,27 +730,58 @@ def format_bl_card(case, company_name: str | None, payload: dict) -> tuple[str, 
     consignee = fields.get("consignee", {}).get("value") or company_name or "Pending"
     url = draft_url(case)
 
+    p_up = (port_val or "").strip().upper()
+    d_up = (destination or "").strip().upper()
+    legs = fields.get("route_legs", {}).get("value")
+    mode_str = str(fields.get("shipping_mode", {}).get("value") or "").upper()
+    is_3leg = legs == "3_legs" or (
+        p_up
+        and d_up
+        and p_up != d_up
+        and not ("SIHANOUK" in p_up and "SIHANOUK" in d_up)
+        and d_up not in ("", "PENDING")
+    )
+    route_type_desc = (
+        "3-Leg (Cross-Border Truck)"
+        if (is_3leg and "TRUCK" in mode_str)
+        else ("3-Leg (Multimodal)" if is_3leg else "2-Leg (Direct Sea)")
+    )
+
+    info_lines = [
+        "📑 <b>B/L Information:</b>",
+        f"• <b>B/L Number:</b> <code>{html.escape(str(bl_no))}</code>",
+        f"• <b>Issue Date:</b> {html.escape(str(issue_date))}",
+        f"• <b>Route:</b> {route_type_desc}",
+    ]
+    if origin and origin != "Pending":
+        info_lines.append(f"• <b>Origin:</b> {html.escape(str(origin)[:80])}")
+    if is_3leg:
+        info_lines.append(f"• <b>Port / Border:</b> {html.escape(str(port_val))}")
+        if destination and destination != "Pending":
+            info_lines.append(f"• <b>Destination:</b> {html.escape(str(destination)[:80])}")
+    else:
+        info_lines.append(f"• <b>Port / Discharge:</b> {html.escape(str(port_val))}")
+
+    info_lines.append(f"• <b>Container:</b> {html.escape(str(container_val))}")
+    if seal:
+        info_lines.append(f"• <b>Seal No:</b> {html.escape(str(seal))}")
+    info_lines.extend([
+        f"• <b>Packages:</b> {html.escape(str(pkgs))}",
+        f"• <b>Cargo:</b> {html.escape(str(cargo)[:120])}",
+    ])
+
     lines = [
         "🚢 <b>Bill of Lading Details</b>",
         f"🚢 <b>Reference:</b> <code>{html.escape(ref)}</code>",
         f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
         "",
-        "📑 <b>B/L Information:</b>",
-        f"• <b>B/L Number:</b> <code>{html.escape(str(bl_no))}</code>",
-        f"• <b>Destination:</b> {html.escape(str(destination))}",
-        f"• <b>Origin:</b> {html.escape(str(origin))}",
-        f"• <b>Packages:</b> {html.escape(str(pkgs))}",
-        f"• <b>Cargo:</b> {html.escape(str(cargo)[:120])}",
+        *info_lines,
     ]
     if vessel or voyage:
         vv = " / ".join(p for p in (vessel, voyage) if p)
-        lines.append(f"• <b>Vessel/Voyage:</b> {html.escape(vv)}")
+        lines.append(f"• <b>Vessel / Voyage:</b> {html.escape(vv)}")
     if carrier:
-        lines.append(f"• <b>Carrier:</b> {html.escape(carrier)}")
-    if container or seal:
-        cs = " / ".join(p for p in (container, seal) if p)
-        lines.append(f"• <b>Container/Seal:</b> <code>{html.escape(cs)}</code>")
-
+        lines.append(f"• <b>Carrier:</b> {html.escape(str(carrier)[:80])}")
     lines.extend([
         "",
         "📋 <b>Parties:</b>",
@@ -645,7 +902,7 @@ def handle_document_command(
             card_text = f"🚢 <b>Bill of Lading</b>\n\nNo B/L document extracted for <code>{html.escape(query_ref)}</code>."
             buttons = [[{"text": "🔙 Back to Summary", "callback_data": f"status:{query_ref}"}]]
         else:
-            card_text, buttons = format_bl_card(case, company_name, bl_payload)
+            card_text, buttons = format_bl_card(case, company_name, bl_payload, docs_by_role)
     else:
         return False
 

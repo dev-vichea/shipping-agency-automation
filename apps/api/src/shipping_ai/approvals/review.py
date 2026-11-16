@@ -24,7 +24,7 @@ Value = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=350), SafeText
 ]
 Role = Literal["invoice", "packing_list", "draft_bl"]
-NUMBERS = {"quantity", "packages", "gross_weight", "net_weight", "unit_price", "amount"}
+NUMBERS = {"quantity", "packages", "gross_weight", "net_weight", "unit_price", "amount", "measurement"}
 DATES = {"invoice_date", "issue_date", "etd", "eta"}
 
 
@@ -217,6 +217,8 @@ def blockers_for(docs, resolutions):
         elif check.group == "transport":
             if check.outcome == "NEEDS_REVIEW" and check.key in resolutions:
                 continue
+        elif check.group == "extraction" and check.key.startswith("extraction.conflict."):
+            pass  # The existing field correction flow can resolve the conflict.
         else:
             continue
         blockers.append(f"{check.key}: {check.explanation}")

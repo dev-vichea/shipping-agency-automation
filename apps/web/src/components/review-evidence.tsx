@@ -15,7 +15,7 @@ type InspectProps = { names: Map<string, string>; onInspect: (evidence: Evidence
 type ReviewProps = InspectProps & { analysis: ReviewAnalysis };
 
 export function sourceKey(item: Evidence) {
-  return [item.document_id, item.sheet, item.cell, item.page, item.line, item.row].join(":");
+  return [item.document_id, item.sheet, item.cell, item.page, item.line, item.row, item.bbox?.join(",")].join(":");
 }
 
 function EvidenceLinks({ items, names, onInspect }: InspectProps & { items: Evidence[] }) {
@@ -124,6 +124,12 @@ function FieldTable({ fields, names, onInspect, activeEvidence }: InspectProps &
           <TableCell><Status value={value.status} /></TableCell>
           <TableCell className="min-w-32 max-w-56 whitespace-normal relative">
             <EvidenceLinks items={value.evidence.slice(0, 6)} names={names} onInspect={onInspect} />
+            {value.alternatives?.map((candidate, index) => (
+              <div key={index} className="mt-1 text-muted-foreground">
+                {[candidate.value, candidate.currency, candidate.unit].filter(Boolean).join(" ")}
+                <EvidenceLinks items={candidate.evidence} names={names} onInspect={onInspect} />
+              </div>
+            ))}
             {isRowActive && (
               <span aria-hidden className="pointer-events-none absolute -right-1.5 top-1/2 -translate-y-1/2 z-20 flex items-center justify-center">
                 <span className="size-3 rounded-full bg-primary ring-4 ring-primary/20 animate-pulse" />
@@ -144,6 +150,12 @@ export function ExtractedFields({ analysis, names, onInspect, activeEvidence }: 
     <summary className="bg-muted px-3 py-2 text-label-md focus-visible:outline-offset-[-2px]">{label(item.role)} · {item.sheet ?? names.get(item.document_id)}{" "}<Status value={item.status} /></summary>
     {item.error && <p className="px-3 py-2 text-body-sm text-muted-foreground">{label(item.error)}</p>}
     <FieldTable fields={item.fields} names={names} onInspect={onInspect} activeEvidence={activeEvidence} />
+    {item.sections?.map((section, index) => (
+      <details key={index}>
+        <summary className="px-3 py-2 text-body-sm">{section.sheet ?? label(section.role)}</summary>
+        <FieldTable fields={section.fields} names={names} onInspect={onInspect} activeEvidence={activeEvidence} />
+      </details>
+    ))}
   </details>)}</div>;
 }
 
@@ -151,7 +163,7 @@ const documentRoles = ["invoice", "packing_list", "draft_bl"] as const;
 const headerFields = [
   ["invoice_no", "Invoice no."], ["bl_no", "B/L no."], ["supplier", "Supplier"], ["shipper", "Shipper"],
   ["consignee", "Consignee"], ["vessel", "Vessel"], ["voyage", "Voyage"], ["container", "Container"],
-  ["seal", "Seal"], ["origin", "Port of loading"], ["destination", "Port of discharge"],
+  ["seal", "Seal"], ["origin", "Port of loading"], ["destination", "Port of discharge"], ["port", "Port / Border"],
   ["packages", "Packages"], ["gross_weight", "Gross weight"], ["net_weight", "Net weight"],
   ["amount", "Amount"], ["etd", "ETD"], ["eta", "ETA"],
 ] as const;

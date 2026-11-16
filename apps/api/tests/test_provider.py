@@ -13,6 +13,8 @@ from shipping_ai.core.config import Settings
         ("invalid", "unavailable"),
         ("missing", "model_missing"),
         ("ok", "ready"),
+        ("demo", "unavailable"),
+        ("wrong_digest", "unavailable"),
     ],
 )
 def test_ollama_availability_is_optional(monkeypatch, outcome, status):
@@ -22,6 +24,7 @@ def test_ollama_availability_is_optional(monkeypatch, outcome, status):
         web_origin="http://localhost:3000",
         environment="test",
         ollama_enabled=outcome != "disabled",
+        ollama_model_digest="a" * 64,
     )
 
     def get(url, **kwargs):
@@ -34,8 +37,9 @@ def test_ollama_availability_is_optional(monkeypatch, outcome, status):
             request=httpx.Request("GET", url),
             json={
                 "models": (
-                    [{"name": cfg.ollama_model}]
-                    if outcome == "ok"
+                    [{"name": cfg.ollama_model, "digest": "a" * 64 if outcome == "ok" else
+                      "b" * 64 if outcome == "wrong_digest" else "demo-bridge"}]
+                    if outcome in {"ok", "demo", "wrong_digest"}
                     else "bad"
                     if outcome == "invalid"
                     else []
@@ -47,3 +51,5 @@ def test_ollama_availability_is_optional(monkeypatch, outcome, status):
     result = OllamaProvider(cfg).health()
     assert result.state == status
     assert result.context == 4096 and result.max_concurrency == 1
+
+    assert result.model_digest == ("a" * 64 if outcome == "ok" else None)

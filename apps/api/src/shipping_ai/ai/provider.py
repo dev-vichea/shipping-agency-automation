@@ -17,6 +17,7 @@ class ProviderStatus(BaseModel):
     state: Literal["disabled", "unavailable", "model_missing", "ready"]
     context: int
     max_concurrency: int
+    model_digest: str | None = None
 
 
 class ModelProvider(Protocol):
@@ -27,6 +28,7 @@ class ModelProvider(Protocol):
 
 class ModelTag(BaseModel):
     name: str
+    digest: str | None = None
 
 
 class ModelList(BaseModel):
@@ -40,6 +42,7 @@ class OllamaProvider:
     def health(self) -> ProviderStatus:
         cfg = self.config
         state = "disabled"
+        digest = None
         if cfg.ollama_enabled:
             try:
                 response = httpx.get(
@@ -49,11 +52,16 @@ class OllamaProvider:
                 )
                 response.raise_for_status()
                 models = ModelList.model_validate_json(response.content)
-                state = (
-                    "ready"
-                    if any(tag.name == cfg.ollama_model for tag in models.models)
-                    else "model_missing"
-                )
+                model = next((tag for tag in models.models if tag.name == cfg.ollama_model), None)
+                if model is None:
+                    state = "model_missing"
+                else:
+                    reported = (model.digest or "").removeprefix("sha256:")
+                    valid = re.fullmatch(r"[a-f0-9]{64}", reported)
+                    expected = cfg.ollama_model_digest
+                    state = "ready" if valid and (not expected or reported == expected) else "unavailable"
+                    if state == "ready":
+                        digest = reported
             except (httpx.HTTPError, ValueError):
                 state = "unavailable"
         return ProviderStatus(
@@ -62,6 +70,7 @@ class OllamaProvider:
             state=state,
             context=cfg.ollama_context,
             max_concurrency=cfg.ollama_max_concurrency,
+            model_digest=digest,
         )
 
     def advise(self, context: list[dict]) -> Advisory:
@@ -95,6 +104,8 @@ class OllamaProvider:
                         "suggestion per supplied finding_key. "
                         "When analyzing descriptions, compare the meaning of multilingual product terms; "
                         "for equivalent terms choose possibly_equivalent and verify_translation. "
+                        "For extraction findings, use compare_source and explain the specific "
+                        "manual check suggested by the issue. Treat missing fields as unknown. "
                         "For party findings, use confirm_party_role. "
                         "For quantity, package count, weight or unit findings, use check_quantity_or_unit. "
                         "For transport, container, seal, voyage or route findings, choose different or unclear and compare_source. "
@@ -116,7 +127,8 @@ class OllamaProvider:
             raise ProviderUnavailable() from None
         try:
             envelope = response.json()
-            if envelope.get("done") is not True or envelope.get("done_reason") != "stop":
+            if (envelope.get("done") is not True or envelope.get("done_reason") != "stop"
+                or envelope.get("model") != cfg.ollama_model):
                 raise ValueError()
             output = Advisory.model_validate_json(envelope["response"])
             keys = {item["finding_key"] for item in context}
@@ -133,8 +145,10 @@ class OllamaProvider:
 
     def choose_tool(self, context: dict, deadline: float, decision_type: type[BaseModel]):
         cfg = self.config
+        if not cfg.ollama_enabled or self.health().state != "ready":
+            raise ProviderUnavailable()
         remaining = min(20.0, deadline - monotonic())
-        if not cfg.ollama_enabled or remaining <= 0:
+        if remaining <= 0:
             raise ProviderUnavailable()
         schema = decision_type.model_json_schema()
         schema["properties"]["tool"]["enum"] = [action["tool"] for action in context["available"]]
@@ -171,7 +185,8 @@ class OllamaProvider:
             raise ProviderUnavailable()
         try:
             envelope = response.json()
-            if envelope["done"] is not True or envelope["done_reason"] != "stop":
+            if (envelope.get("done") is not True or envelope.get("done_reason") != "stop"
+                or envelope.get("model") != cfg.ollama_model):
                 raise ValueError()
             payload = envelope["response"]
             if not isinstance(payload, str) or len(payload) > 512:
@@ -181,7 +196,7 @@ class OllamaProvider:
             raise InvalidAdvisory() from None
 
 
-PROMPT_VERSION = "review-2.2"
+PROMPT_VERSION = "review-2.3"
 
 
 class Suggestion(BaseModel):
@@ -219,6 +234,10 @@ def review_context(findings):
         (item for item in findings if item.outcome != "PASS"),
         key=lambda item: (
             not (item.field == "description" and item.left and item.right),
+            not (
+                item.group == "extraction"
+                and (item.field == "invoice_no" or item.key.count(".") == 2)
+            ),
             item.outcome != "MISMATCH",
         ),
     )
@@ -226,11 +245,13 @@ def review_context(findings):
     for item in targets[:4]:
         entry = {
             "finding_key": item.key,
+            "group": item.group,
             "field": item.field,
             "outcome": item.outcome,
             "issue": item.explanation[:160],
         }
-        if any(source.bbox for source in item.evidence):
+        if any(source.method in {"ocr", "ocr_retry"} or (source.bbox and source.method is None)
+               for source in item.evidence):
             entry["source_kind"] = "scanned"
         if item.group in {"invoice_packing", "cdc"} and item.field == "description":
             for key, value in (("description_a", item.left), ("description_b", item.right)):

@@ -32,7 +32,7 @@ function tabToRole(tab: DocumentTab): "draft_bl" | "invoice" | "packing_list" {
 }
 
 const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
-const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "destination"];
+const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share }: {
   item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
@@ -58,8 +58,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       url: `/api/v1/cdc/versions/${master.id}/download`, received: null, checksum: null, previousId: null}] : []),
   ];
   const names = new Map(sources.map(({id, name}) => [id, name]));
-  const excerpts = analysis.extractions.map((extraction) => ({
-    key: `${extraction.document_id}:${extraction.sheet ?? ""}:${extraction.role}`, id: extraction.document_id,
+  const extractionSources = analysis.extractions.flatMap((entry) => [entry, ...(entry.sections ?? [])]);
+  const excerpts = extractionSources.map((extraction, index) => ({
+    key: `${extraction.document_id}:${extraction.sheet ?? ""}:${index}:${extraction.role}`, id: extraction.document_id,
     title: label(extraction.role), sheet: extraction.sheet,
     lines: extraction.source_excerpt,
   }));
@@ -69,10 +70,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   });
   const activeDocTab = chosenDocTab ?? documentTabs.find((tab) => analysis.extractions.some((doc) => doc.role === tabToRole(tab))) ?? "B/L";
   const activeRole = tabToRole(activeDocTab);
+  const classifiedSources = item.documents.filter((doc) => doc.classification === activeRole);
+  const compatibleSources = sources.filter((doc) => doc.fileType === (activeRole === "draft_bl" ? "PDF" : "Excel"));
+  const fallbackSource = classifiedSources.length === 1 ? classifiedSources[0].id
+    : compatibleSources.length === 1 ? compatibleSources[0].id : undefined;
   const current = options.find((option) => option.key === selectedKey)
     ?? options.find((option) => option.key.endsWith(`:${activeRole}`))
+    ?? options.find((option) => option.id === fallbackSource)
     ?? (!chosenDocTab ? options[0] : undefined);
-  const activeDocument = analysis.extractions.find((doc, index) => doc.role === activeRole && excerpts[index].key === current?.key);
+  const activeDocument = extractionSources.find((doc, index) => doc.role === activeRole && excerpts[index].key === current?.key);
   const file = sources.find((entry) => entry.id === current?.id);
   const selectedEvidence = selection?.document_id === file?.id ? selection : undefined;
   const tally: Record<Finding["outcome"], number> = { PASS: 0, WARNING: 0, MISMATCH: 0, NEEDS_REVIEW: 0 };
@@ -118,7 +124,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     } else {
       let found: InspectedField | undefined;
       const citation = sourceKey(evidence);
-      for (const ext of analysis.extractions) {
+      for (const ext of extractionSources) {
         for (const [k, f] of Object.entries(ext.fields)) {
           if (f.value && f.evidence.some((e) => sourceKey(e) === citation)) {
             found = { id: `field:${k}`, name: documentFieldLabel(k), value: sourceValue(f), uncertain: f.status === "uncertain" };
@@ -202,7 +208,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           {analysis.rules_version && <p className="flex items-center gap-1.5 font-mono text-code-badge text-intelligence"><Sparkles size={13} aria-hidden /> Rule Engine v{analysis.rules_version}</p>}
         </div>
         {!item.company_id && !item.import_id && !["approved", "rejected"].includes(item.state) && <AssignCompanyForm companies={companies} caseId={item.id} revision={analysis.revision} />}
-        {metadata.length > 0 && <dl className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-3 xl:grid-cols-7">
+        {metadata.length > 0 && <dl className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-4 xl:grid-cols-8">
           {metadata.map(({ key, title, field }) => <div key={key} className="min-w-0 bg-background px-3 py-2">
             <dt className="panel-label">{title}</dt>
             <dd className={cn("mt-0.5 min-w-0 truncate text-label-md", ["bl_no", "container", "seal"].includes(key) && "font-mono text-code-tabular")} title={field.value ?? undefined}>

@@ -20,6 +20,8 @@ const documentFields: Record<string, string> = {
   invoice_date: "Invoice Date",
   issue_date: "Issue Date",
   origin: "Origin",
+  port: "Port / Border",
+  route_legs: "Route",
   destination: "Destination",
   shipping_mode: "Transport Mode",
   cargo_summary: "Description of Goods",

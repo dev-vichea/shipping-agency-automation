@@ -17,7 +17,7 @@ import { companyParam, scopedPath } from "@/lib/scope";
 import { cn } from "@/lib/utils";
 
 export type QueueParams = { offset?: string | string[]; filter?: string; q?: string; new?: string; company_id?: string; sort?: string; source?: string };
-const reviewStatuses = [["needs_review", "Review required"], ["ready_for_approval", "Ready for approval"]] as const;
+const reviewStatuses = [["needs_review", "Review"], ["ready_for_approval", "Ready"]] as const;
 const intakeStatuses = [["queued", "Queued"], ["processing", "Processing"], ...reviewStatuses, ["failed", "Failed"], ["approved", "Approved"], ["rejected", "Rejected"]] as const;
 const names = { inbox: "Inbox", review: "Intake cases", approvals: "Approvals", drafts: "Draft import records" };
 const sources = ["folder", "gmail", "manual"] as const;
@@ -42,7 +42,7 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
   if (draftView) query.set("queue", mode === "drafts" ? "draft" : "approval");
   query.set("limit", String(pageSize + 1));
   query.set("offset", String(offset));
-  query.set("include_checks", String(!inbox));
+  query.set("include_checks", "true");
   if (oldest) query.set("oldest_first", "true");
   if (filter) search.set("filter", filter);
   if (oldest) search.set("sort", "oldest");
@@ -108,26 +108,55 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
         </NativeSelect>
         <Button size="sm" type="submit" variant="outline">Apply</Button>
       </form>
-      {items.length ? <Table className="min-w-[650px]">
+      {items.length ? <Table className="min-w-[960px]">
         <TableHeader><TableRow>
-          <TableHead>{draftView ? "Invoice / reference" : "Reference"}</TableHead><TableHead>Company</TableHead>
-          {draftView && <TableHead>B/L number</TableHead>}
-          <TableHead>{inbox ? "Source" : "Verification"}</TableHead><TableHead>{inbox ? "Files" : "Findings"}</TableHead>
-          <TableHead>Received</TableHead><TableHead>Status</TableHead><TableHead><span className="sr-only">Details</span></TableHead>
+          <TableHead className="w-36">Reference</TableHead>
+          <TableHead className="min-w-36 max-w-56">Subject</TableHead>
+          <TableHead className="w-32 font-mono">B/L Number</TableHead>
+          <TableHead className="w-36">Company</TableHead>
+          <TableHead className="w-32">{inbox ? "Source" : "Verification"}</TableHead>
+          <TableHead className="w-20 text-center">{inbox ? "Files" : "Findings"}</TableHead>
+          <TableHead className="w-40">Received</TableHead>
+          <TableHead className="w-24 text-center">Status</TableHead>
+          <TableHead className="w-20 text-right"><span className="sr-only">Details</span></TableHead>
         </TableRow></TableHeader>
         <TableBody>{items.map((item) => {
           const href = scopedPath(`/review/${item.id}`, companyId);
+          const refText = item.detected_reference ?? item.id.slice(0, 8);
+          const subjectText = item.subject ?? item.sender ?? "—";
           return <TableRow key={item.id}>
-            <TableCell className="max-w-60"><Link href={href} className="data-link block truncate">{item.detected_reference ?? item.subject ?? item.id.slice(0, 8)}</Link>
-              {(inbox ? item.sender ?? item.subject : item.subject) && <p className="truncate text-xs text-muted-foreground">{inbox ? item.sender ?? item.subject : item.subject}</p>}
+            <TableCell className="max-w-36 truncate font-mono text-code-tabular font-medium">
+              <Link href={href} className="data-link block truncate" title={refText}>
+                {refText}
+              </Link>
             </TableCell>
-            <TableCell className="max-w-38 truncate" title={item.company ?? undefined}>{item.company ?? "Unassigned"}</TableCell>
-            {draftView && <TableCell>{item.bill_of_lading ?? "—"}</TableCell>}
-            <TableCell>{inbox ? label(item.channel) : item.analysis_outcome ? <Status value={item.analysis_outcome} /> : "—"}</TableCell>
-            <TableCell>{inbox ? item.attachment_count : typeof item.issue_count === "number" ? item.issue_count : "—"}</TableCell>
-            <TableCell className="text-muted-foreground">{timestamp(item.received_at ?? item.created_at)}</TableCell>
-            <TableCell><Status value={item.state} /></TableCell>
-            <TableCell className="text-right"><Link href={href} aria-label={draftView ? "Review draft" : "Open case"} className="inline-flex p-1 text-primary"><ArrowRight size={16} aria-hidden /></Link></TableCell>
+            <TableCell className="max-w-56 truncate text-muted-foreground" title={subjectText}>
+              {subjectText}
+            </TableCell>
+            <TableCell className="max-w-32 truncate font-mono text-code-tabular">
+              {item.bill_of_lading ?? "—"}
+            </TableCell>
+            <TableCell className="max-w-36 truncate" title={item.company ?? undefined}>
+              {item.company ?? "Unassigned"}
+            </TableCell>
+            <TableCell className="whitespace-nowrap text-muted-foreground">
+              {inbox ? label(item.channel) : item.analysis_outcome ? <Status value={item.analysis_outcome} /> : "—"}
+            </TableCell>
+            <TableCell className="text-center tabular-nums whitespace-nowrap">
+              {inbox ? item.attachment_count : typeof item.issue_count === "number" ? item.issue_count : "—"}
+            </TableCell>
+            <TableCell className="whitespace-nowrap font-mono text-code-tabular text-muted-foreground">
+              {timestamp(item.received_at ?? item.created_at)}
+            </TableCell>
+            <TableCell className="text-center whitespace-nowrap">
+              <Status value={item.state} />
+            </TableCell>
+            <TableCell className="text-right whitespace-nowrap">
+              <Link href={href} aria-label={draftView ? "Review draft" : "Open case"} className="data-link inline-flex items-center gap-1 text-xs">
+                <span>Open</span>
+                <ArrowRight size={13} aria-hidden />
+              </Link>
+            </TableCell>
           </TableRow>;
         })}</TableBody>
       </Table> : <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>}

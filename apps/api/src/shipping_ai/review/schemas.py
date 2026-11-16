@@ -5,7 +5,11 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 
 Outcome = Literal["PASS", "WARNING", "MISMATCH", "NEEDS_REVIEW"]
-Role = Literal["invoice", "packing_list", "draft_bl", "other"]
+Role = Literal[
+    "invoice", "packing_list", "draft_bl", "arrival_notice", "release_order",
+    "freight_invoice", "debit_note", "fee_statement", "other",
+]
+Box = tuple[float, float, float, float]
 
 
 class Evidence(BaseModel):
@@ -16,7 +20,17 @@ class Evidence(BaseModel):
     page: int | None = None
     line: int | None = None
     raw: str | None = None
-    bbox: tuple[float, float, float, float] | None = None
+    bbox: Box | None = None
+    boxes: list[Box] = Field(default_factory=list)
+    method: Literal["pdf_text", "ocr", "ocr_retry", "workbook"] | None = None
+    confidence: float | None = None
+
+
+class FieldCandidate(BaseModel):
+    value: str
+    unit: str | None = None
+    currency: str | None = None
+    evidence: list[Evidence] = Field(default_factory=list)
 
 
 class ExtractedField(BaseModel):
@@ -25,6 +39,8 @@ class ExtractedField(BaseModel):
     currency: str | None = None
     status: Literal["present", "missing", "uncertain"] = "missing"
     evidence: list[Evidence] = Field(default_factory=list)
+    alternatives: list[FieldCandidate] = Field(default_factory=list)
+    review_reason: str | None = None
 
 
 class Item(BaseModel):
@@ -42,6 +58,9 @@ class Extraction(BaseModel):
     fields: dict[str, ExtractedField] = Field(default_factory=dict)
     items: list[Item] = Field(default_factory=list)
     source_excerpt: list[Evidence] = Field(default_factory=list)
+    document_kind: str | None = None
+    sections: list["Extraction"] = Field(default_factory=list)
+    recovery: list[dict[str, str | int | None]] = Field(default_factory=list)
 
 
 class Finding(BaseModel):

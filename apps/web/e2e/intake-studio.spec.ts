@@ -58,23 +58,18 @@ test("intake review shows detected fields and links goods to their source", asyn
   await page.getByRole("region", { name: "Goods", exact: true })
     .getByRole("button", { name: /Description of Goods Woven label/i }).click();
   await expect(source.getByRole("img", { name: "Source citation bounding box" })).toBeVisible();
-  await expect(source.getByText(/Page 1 · Line \d+/)).toBeVisible();
+  await expect(source.getByText("Page 1", { exact: true })).toBeVisible();
   await expect(source.getByText("99% match")).toHaveCount(0);
   await expectConnectorAtTarget();
-  const pendingCitation = Promise.withResolvers<void>();
-  await page.route(/\/pages\/1\?.*&line=\d+$/, async (route) => {
-    await Promise.all([pendingCitation.promise, new Promise((resolve) => setTimeout(resolve, 900))]);
-    await route.continue();
-  }, { times: 1 });
   const billNumber = details.getByRole("button", { name: "B/L Number DEMOBL0001" });
-  try {
-    await billNumber.click();
-    await expect(connector).toBeHidden();
-    await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1" })).toBeVisible();
-  } finally {
-    pendingCitation.resolve();
-  }
+  const legacyLineRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\/pages\/1\?.*&line=\d+$/.test(request.url())) legacyLineRequests.push(request.url());
+  });
+  await billNumber.click();
+  await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1" })).toBeVisible();
   await expectConnectorAtTarget();
+  expect(legacyLineRequests).toHaveLength(0);
   await expect(source.getByText("DEMOBL0001", { exact: true })).toBeVisible();
   await source.getByRole("button", { name: "Zoom In" }).click();
   await expectConnectorAtTarget();
@@ -84,15 +79,11 @@ test("intake review shows detected fields and links goods to their source", asyn
   await billNumber.click();
   await expectConnectorAtTarget();
 
-  await page.route(/\/pages\/1\?.*&line=\d+$/, async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({ response, json: { ...(await response.json()), box: null } });
-  }, { times: 1 });
   await details.getByRole("button", { name: /^Shipper/ }).click();
+  await expectConnectorAtTarget();
   await expect(source.getByRole("button", { name: "Raw Excerpt", exact: true })).toBeVisible();
-  await expect(target).toHaveCount(0);
   await source.getByRole("button", { name: "Raw Excerpt", exact: true }).click();
-  await expect(target).toContainText("Shipper");
+  await expect(target).toContainText("Fabric Demo Co., Ltd.");
   await expectConnectorAtTarget();
   await billNumber.click();
   await expect(target).toContainText("DEMOBL0001");

@@ -72,6 +72,10 @@ def test_malformed_ollama_envelope_becomes_staff_review(monkeypatch):
         environment="test",
         ollama_enabled=True,
     )
+    monkeypatch.setattr(httpx, "get", lambda url, **kw: httpx.Response(
+        200, request=httpx.Request("GET", url),
+        json={"models": [{"name": config.ollama_model, "digest": "a" * 64}]},
+    ))
     monkeypatch.setattr(
         httpx,
         "post",
@@ -80,6 +84,7 @@ def test_malformed_ollama_envelope_becomes_staff_review(monkeypatch):
             json={
                 "done": True,
                 "done_reason": "stop",
+                "model": config.ollama_model,
                 "response": "{incomplete",
             },
         ),
@@ -135,15 +140,15 @@ def test_rechecks_bad_initial_ocr_with_two_real_ocr_passes(staff, monkeypatch):
     from shipping_ai.automation.tasks import drain
     from shipping_ai.documents import extract as adapter
 
-    original_scan = adapter.scan_bill
+    original_extract = adapter.extract_positioned_pdf
 
     # Inject a recognition error in the initial extraction only.
-    def initial_ocr(pdf, document_id):
-        fields, excerpts, is_bill = original_scan(pdf, document_id)
-        packages = fields["packages"]
+    def initial_ocr(*args, **kwargs):
+        result = original_extract(*args, **kwargs)
+        packages = result.fields["packages"]
         assert packages.value == "531"
         packages.value = "513"
-        return fields, excerpts, is_bill
+        return result
 
     calls = []
 
@@ -151,7 +156,7 @@ def test_rechecks_bad_initial_ocr_with_two_real_ocr_passes(staff, monkeypatch):
         calls.append(context)
         return {"tool": context["available"][0]["tool"]}
 
-    monkeypatch.setattr(adapter, "scan_bill", initial_ocr)
+    monkeypatch.setattr(adapter, "extract_positioned_pdf", initial_ocr)
     monkeypatch.setattr(OllamaProvider, "choose_tool", choose)
     monkeypatch.setattr(
         OllamaProvider,

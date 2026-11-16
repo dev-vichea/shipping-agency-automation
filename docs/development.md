@@ -273,16 +273,46 @@ locally installed model. Refresh the Review Center to see the advice. A failed
 advisory remains retryable in Automation while the findings stay available.
 
 The worker supports the existing supplier XLS/XLSX layouts and English or
-Simplified Chinese B/L OCR. Excel sources are displayed as text excerpts with
-cell evidence. PDF sources show page and line excerpts where available, and OCR
-text is marked uncertain. Unsupported layouts, grouped or split lines,
-unconfirmed units and currencies, and ambiguous document versions remain for
-staff review. Missing ETD/ETA is displayed without adding a blocking finding.
+Simplified Chinese B/L OCR. For supplier XLSX files, the worksheet limits apply
+to populated cells and formulas. The reader skips formatting outside that area.
+The PDF reader classifies the primary form and keeps B/L references on arrival
+notices, release orders, and freight invoices as linked references. It uses
+positioned text and table boundaries to bind values, including separate loading,
+discharge, and delivery fields. A bounded OCR pass retains readable native
+text and can retry fields in automatically located regions. PDF highlights
+show the cited value spans, including separate lines and printed units.
+
+Workbook extraction preserves original cell addresses across side-by-side
+panels and alternative worksheets. When two sections for one role differ,
+inspect both and supply the confirmed section as a separate source before
+approval. Conflicting PDF candidates remain visible for staff correction.
+After upgrading, use **Reprocess documents** to run the updated readers against
+the archived originals.
+
+For Qwen advice and investigation, point `SHIPPING_OLLAMA_URL` at a real local
+Ollama server. The provider requires a valid installed model digest and checks
+the model name in generate responses. Set `SHIPPING_OLLAMA_MODEL_DIGEST` to the
+64-character digest reported by the trusted local installation to pin the
+model. The rule-based demo bridge reports a synthetic digest and is treated as
+unavailable by this provider. Document extraction continues with the local
+Python readers when model advice is unavailable.
+
+Unsupported layouts, grouped or split lines, unconfirmed units and currencies,
+and ambiguous document versions remain for staff review. The advisory job uses
+the stored findings to suggest specific checks when a document could only be
+partially read. Missing ETD/ETA is displayed without adding a blocking finding.
 
 Generated fictional supplier, B/L, and CDC test files are under
 `apps/api/tests/fixtures/`. The spreadsheet layouts reproduce the relevant
 legacy headers and merged cells. Use these files to run the Review Center
 example without agency records.
+
+The private corpus regression tests are opt-in. Point `SHIPPING_REFERENCE_ROOT`
+at the source directory and `SHIPPING_REFERENCE_AUDIT` at the completed audit
+directory, then run `pytest apps/api/tests/test_reference_document_reliability.py -q`.
+The replay checks stored SHA-256 values and reads ZIP members in memory. Keep
+the sources and resulting field-level reports outside Git. Use separate,
+staff-labelled shipment and layout families for the independent holdout.
 
 ## Phase 3 staff approval and reporting
 

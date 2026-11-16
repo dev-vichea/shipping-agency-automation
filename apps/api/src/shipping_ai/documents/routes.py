@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Path, Query
 from fastapi.responses import FileResponse
 from openpyxl.utils import get_column_letter
 from pydantic import BaseModel
-from services.extraction import rows_from_workbook
 from sqlalchemy import select
 from starlette.responses import Response
 
@@ -17,7 +16,7 @@ from shipping_ai.core.config import settings
 from shipping_ai.models import Document, IntakeCase
 from shipping_ai.review.values import clean, folded
 
-from .extract import PDF_LOCK, guarded_workbook
+from .extract import PDF_LOCK, read_supplier_workbook
 from .storage import LocalStorage
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -162,8 +161,7 @@ def workbook_preview(
     if len(data) > settings().max_file_bytes:
         raise HTTPException(422, "Workbook exceeds the preview limit")
     try:
-        guarded_workbook(data, doc.original_filename)
-        workbook = dict(rows_from_workbook(data, doc.original_filename))
+        workbook = read_supplier_workbook(data, doc.original_filename)
     except Exception:
         raise HTTPException(422, "This workbook cannot be previewed") from None
     selected = sheet or next(iter(workbook), None)

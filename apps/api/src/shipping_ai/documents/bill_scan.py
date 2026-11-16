@@ -76,6 +76,10 @@ def read_lines(page, doc: UUID, deadline: float, *, threshold: int, start: int, 
         )
     except (OSError, subprocess.SubprocessError):
         return []
+    return scan_lines(page, doc, words, start=start)
+
+
+def scan_lines(page, doc: UUID, words, *, start=0):
     lines = []
     for group in words.values():
         parts: list[list] = []
@@ -237,6 +241,9 @@ def read_fields(lines: list[ScanLine]) -> dict[str, ExtractedField]:
             ] + candidates
         unit_text = ""
         for item in candidates:
+            if key == "vessel" and any(item is neighbor for neighbor in neighbors):
+                # A blank vessel box can sit directly above the loading port.
+                break
             if re.fullmatch(rf"{WEIGHT_UNIT}|cbm|m³|m3", item.text, re.I):
                 unit_text = item.text
                 continue
@@ -274,14 +281,15 @@ def read_fields(lines: list[ScanLine]) -> dict[str, ExtractedField]:
             fields["seal"] = field(seal[1], item.evidence, uncertain=True)
 
     # Explicit count plus unit can be printed in the description column.
-    counts = {
-        parsed[0]: (parsed, item.evidence)
-        for item in lines
-        if re.fullmatch(
-            rf"{NUMBER}\s+(?:package[s]?\s*(?:\(s\))?|pkg[s]?|ctns?|cartons?)", item.text, re.I
+    counts = {}
+    for item in lines:
+        match = re.match(
+            rf"^({NUMBER})\s*(?:packages?\s*(?:\(s\))?|pkgs?|ctns?|cartons?)(?=\s*(?:/|$))",
+            item.text,
+            re.I,
         )
-        and (parsed := read_value("packages", item.text))
-    }
+        if match and (parsed := read_value("packages", match[1])):
+            counts[parsed[0]] = parsed, item.evidence
     if len(counts) == 1:
         parsed, citation = next(iter(counts.values()))
         fields["packages"] = field(parsed[0], citation, unit=parsed[1], uncertain=True)

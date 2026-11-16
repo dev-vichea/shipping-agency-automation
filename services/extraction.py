@@ -23,7 +23,7 @@ def _identifier(v):
     return _value(v)
 
 
-def rows_from_workbook(data, filename):
+def rows_from_workbook(data, filename, *, bounds=None):
     """Yield (sheet_name, [(excel_row_num, [cell values])])."""
     if filename.lower().endswith('.xls'):
         try:
@@ -38,7 +38,12 @@ def rows_from_workbook(data, filename):
         book = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
         try:
             for sheet in book.worksheets:
-                yield sheet.title, list(enumerate(sheet.values, start=1))
+                if bounds is None:
+                    values = sheet.values
+                else:
+                    max_row, max_col = bounds
+                    values = sheet.iter_rows(max_row=max_row, max_col=max_col, values_only=True)
+                yield sheet.title, list(enumerate(values, start=1))
         finally:
             book.close()
     else:
@@ -64,7 +69,7 @@ def _format_date(val):
     return s
 
 
-def extract_shipping(data, filename):
+def extract_shipping(data, filename, *, workbook=None):
     items = []
     metadata = {
         'invoice_no': '', 'invoice_date': '', 'consignee': '', 'consignee_address': '', 'vat': '',
@@ -72,7 +77,7 @@ def extract_shipping(data, filename):
         'shipping_mode': 'BY SEA', 'country_of_origin': 'CHINA', 'category': '', 'sheet': ''
     }
 
-    all_sheets = list(rows_from_workbook(data, filename))
+    all_sheets = list(rows_from_workbook(data, filename) if workbook is None else workbook)
     if not all_sheets:
         return metadata, items
 

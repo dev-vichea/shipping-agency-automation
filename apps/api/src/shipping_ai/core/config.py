@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     ollama_enabled: bool = False
     ollama_url: AnyHttpUrl = AnyHttpUrl("http://127.0.0.1:11434")
     ollama_model: str = Field(default="qwen3.5:4b-q4_K_M", min_length=1, max_length=120)
+    ollama_model_digest: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
     ollama_context: int = Field(default=4096, ge=1024, le=4096)
     ollama_max_concurrency: int = Field(default=1, ge=1, le=1)
 

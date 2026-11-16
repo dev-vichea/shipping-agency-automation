@@ -1,13 +1,31 @@
 """Read text and word positions from one bounded local OCR pass."""
 
-import csv
 import os
 import subprocess
 from collections import defaultdict
-from io import StringIO
 from time import monotonic
 
 import pymupdf
+
+
+def tsv_words(payload: bytes, x_offset: int, y_offset: int, scale: float):
+    """Tesseract writes literal TSV. Quotes in recognized text are ordinary characters."""
+    lines = defaultdict(list)
+    for line in payload.decode(errors="replace").split("\n"):
+        columns = line.rstrip("\r").split("\t", 11)
+        if len(columns) != 12 or columns[0] != "5" or not columns[11].strip():
+            continue
+        try:
+            left, top, width, height = map(int, columns[6:10])
+            confidence = float(columns[10])
+        except ValueError:
+            continue
+        if min(left, top) < 0 or min(width, height) <= 0 or not 0 <= confidence <= 100:
+            continue
+        x, y = left + x_offset, top + y_offset
+        rect = pymupdf.Rect(x / scale, y / scale, (x + width) / scale, (y + height) / scale)
+        lines[tuple(columns[2:5])].append((rect, columns[11].strip(), confidence))
+    return lines
 
 
 def ocr_words(page, clip, *, scale, segmentation, deadline, threshold=0, language="eng"):
@@ -44,13 +62,4 @@ def ocr_words(page, clip, *, scale, segmentation, deadline, threshold=0, languag
         timeout=min(8.0, remaining),
         env={**os.environ, "OMP_THREAD_LIMIT": "1"},
     )
-    lines = defaultdict(list)
-    for row in csv.DictReader(StringIO(result.stdout.decode(errors="replace")), delimiter="\t"):
-        if row["level"] != "5" or not row["text"].strip():
-            continue
-        x, y = int(row["left"]) + pix.x, int(row["top"]) + pix.y
-        width, height = int(row["width"]), int(row["height"])
-        rect = pymupdf.Rect(x / scale, y / scale, (x + width) / scale, (y + height) / scale)
-        key = row["block_num"], row["par_num"], row["line_num"]
-        lines[key].append((rect, row["text"].strip(), float(row["conf"])))
-    return lines
+    return tsv_words(result.stdout, pix.x, pix.y, scale)
