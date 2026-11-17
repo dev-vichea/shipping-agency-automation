@@ -79,6 +79,8 @@ export type DocumentSourceOption = {
   name: string;
   url: string;
   lines: Evidence[];
+  version_number?: number;
+  classification?: string;
 };
 
 export function DocumentCanvas({
@@ -90,7 +92,14 @@ export function DocumentCanvas({
   editor,
   className,
 }: {
-  file?: { id: string; name: string; fileType: "PDF" | "Excel" | "CDC"; url: string };
+  file?: {
+    id: string;
+    name: string;
+    fileType: "PDF" | "Excel" | "CDC";
+    url: string;
+    version_number?: number;
+    classification?: string;
+  };
   options: DocumentSourceOption[];
   currentKey?: string;
   onChooseSource?: (key: string) => void;
@@ -260,6 +269,18 @@ export function DocumentCanvas({
           {file?.fileType && (
             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono font-medium text-muted-foreground uppercase">
               {file.fileType}
+            </span>
+          )}
+          {file?.version_number != null && (
+            <span
+              className={cn(
+                "rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold",
+                file.classification === "final_bl"
+                  ? "bg-purple-100 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300"
+                  : "bg-blue-100 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300"
+              )}
+            >
+              {file.classification === "final_bl" ? "Final B/L" : `v${file.version_number}`}
             </span>
           )}
         </div>

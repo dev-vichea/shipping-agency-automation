@@ -28,7 +28,10 @@ TITLES = (
         r"(?:bill of lading|b/?l) (?:confirmation|draft)|提单确认(?:样本|件)?|提单样本",
     ),
     ("waybill", r"(?:truck |air |sea )?way\s*bill(?: of lading)?"),
-    ("bill_of_lading", r"(?:draft |original |copy |ocean |house )?bill of lading|提单"),
+    (
+        "bill_of_lading",
+        r"(?:draft |original |copy |ocean |house |combined transport |multimodal transport |port to port |marine |sea |express release |telex release |memo )?bill of lading|sea waybill|telex release|提单",
+    ),
 )
 TITLES = tuple((key, localized(pattern, *LOCAL_TITLES.get(key, ()))) for key, pattern in TITLES)
 BILLS = {"bill_of_lading", "bill_confirmation", "waybill"}
@@ -420,6 +423,7 @@ class Observations:
 
     def fields(self):
         output = {}
+        bl_values = {cand.value for _, cand in self.values.get("bl_no", ())}
         for key, ranked in self.values.items():
             if not ranked:
                 continue
@@ -433,6 +437,17 @@ class Observations:
                     value.currency,
                 )
                 options.setdefault(canonical, (rank, value))
+            if key == "container" and len(options) > 1:
+                filtered = {k: v for k, v in options.items() if v[1].value not in bl_values}
+                if filtered:
+                    iso_options = {
+                        k: (v[0] + 15, v[1])
+                        for k, v in filtered.items()
+                        if re.match(r"^[A-Z]{3}[UJZ]\d{7}$", v[1].value, re.I)
+                    }
+                    if iso_options:
+                        filtered.update(iso_options)
+                    options = dict(sorted(filtered.items(), key=lambda item: -item[1][0]))
             best, primary = next(iter(options.values()))
             alternatives = [
                 option for rank, option in list(options.values())[1:] if rank >= best - 8
@@ -606,7 +621,13 @@ def collect_fields(layout: Layout, doc, obs: Observations, kind, *, rank=90):
             elif key in {"bl_no", "invoice_no", "contract_no", "booking_no", "seal", "voyage"}:
                 value = raw if REF.fullmatch(raw) or (key != "seal" and reference_text(raw)) else None
             elif key == "container":
-                value = re.sub(r"[ -]", "", raw) if CONTAINER.fullmatch(raw) else None
+                cleaned = re.sub(r"[ -]", "", raw)
+                value = (
+                    cleaned
+                    if CONTAINER.fullmatch(raw)
+                    and not any(cand.value == cleaned for _, cand in obs.values.get("bl_no", ()))
+                    else None
+                )
             elif key == "container_type":
                 value = raw if EQUIPMENT.search(raw) else None
             elif key in ROUTES | {"vessel", "vessel_voyage"}:
@@ -653,10 +674,12 @@ def collect_cargo(layout, doc, obs, rank):
         text = line.text
         if container := CONTAINER.search(text):
             evidence = layout.evidence(doc, [line])
-            obs.add("container", re.sub(r"[ -]", "", container[0]), evidence, rank)
-            after = re.match(r"\s*/\s*([A-Z0-9-]{4,22})(?=\s*/|$)", text[container.end() :], re.I)
+            c_val = re.sub(r"[ -]", "", container[0])
+            is_iso = bool(re.match(r"^[A-Z]{3}[UJZ]\d{7}$", c_val, re.I))
+            obs.add("container", c_val, evidence, rank + (15 if is_iso else 0))
+            after = re.match(r"\s*/\s*([A-Z0-9-]{4,22})(?=\s|/|$)", text[container.end() :], re.I)
             if after and REF.fullmatch(after[1]) and not EQUIPMENT.fullmatch(after[1]):
-                obs.add("seal", after[1], evidence, rank)
+                obs.add("seal", after[1], evidence, rank + 5)
         if equipment := EQUIPMENT.search(text):
             obs.add(
                 "container_type",

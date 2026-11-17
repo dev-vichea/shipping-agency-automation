@@ -407,7 +407,7 @@ def extract_positioned_pdf(data, name, doc, classification, legacy):
                 layout = combined
             layouts.append(layout)
         kind = next((kind for layout in layouts if (kind := title_role(layout))), kind)
-        if not kind and classification == "draft_bl" and any(layout.words for layout in layouts):
+        if not kind and classification in ("draft_bl", "final_bl") and any(layout.words for layout in layouts):
             # A staff/inbound hint is useful once there is evidence of a bill form.
             available = {anchor.key for layout in layouts for anchor in anchors(layout)}
             if {"bl_no", "shipper", "consignee"} <= available:
@@ -416,7 +416,7 @@ def extract_positioned_pdf(data, name, doc, classification, legacy):
             unreadable = not any(layout.words for layout in layouts)
             return Extraction(
                 document_id=doc,
-                role="draft_bl" if unreadable else "other",
+                role=classification if (unreadable and classification in ("draft_bl", "final_bl")) else ("draft_bl" if unreadable else "other"),
                 status="failed" if unreadable else "unsupported_layout",
                 error="unreadable_pdf" if unreadable else "unrecognized_pdf",
                 method="tesseract" if attempts else "pdf_layout",
@@ -517,7 +517,7 @@ def extract_positioned_pdf(data, name, doc, classification, legacy):
                 fields["destination"] = fields["destination_port"]
             complete = bool(items) and (kind == "packing_list" or fields["invoice_no"].status == "present")
             complete &= all(item.fields["description"].status == item.fields["quantity"].status == "present" for item in items)
-        role = "draft_bl" if kind in BILLS else kind
+        role = "final_bl" if (kind in BILLS and classification == "final_bl") else ("draft_bl" if kind in BILLS else kind)
         return Extraction(
             document_id=doc,
             role=role,
@@ -526,7 +526,7 @@ def extract_positioned_pdf(data, name, doc, classification, legacy):
             items=items,
             method="tesseract" if ocr_pages else "pdf_layout",
             status="extracted"
-            if complete or role not in {"draft_bl", "invoice", "packing_list"}
+            if complete or role not in {"draft_bl", "final_bl", "invoice", "packing_list"}
             else "partial",
             source_excerpt=[
                 e

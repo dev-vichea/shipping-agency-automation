@@ -48,6 +48,7 @@ const statusStyle: Record<string, string> = {
 const statusTone: Record<string, keyof typeof statusStyle> = {
   pass: "success", succeeded: "success", ready: "success", extracted: "intelligence",
   warning: "warning", uncertain: "warning", needs_review: "warning", partial: "warning",
+  awaiting_updated_document: "warning", manual_matching: "warning",
   approved: "success", ready_for_approval: "success", reviewed: "success", authorized: "success",
   rejected: "danger",
   mismatch: "danger", failed: "danger", invalid_output: "danger",
@@ -63,6 +64,8 @@ const singleWordLabel: Record<string, string> = {
   succeeded: "Succeeded",
   ready: "Ready",
   ready_for_approval: "Ready",
+  awaiting_updated_document: "Awaiting Doc",
+  manual_matching: "Manual Match",
   approved: "Approved",
   reviewed: "Reviewed",
   authorized: "Authorized",

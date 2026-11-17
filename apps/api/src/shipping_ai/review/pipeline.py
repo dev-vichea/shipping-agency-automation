@@ -21,6 +21,7 @@ from shipping_ai.core.db import session_factory
 from shipping_ai.documents.extract import extract
 from shipping_ai.documents.storage import LocalStorage
 from shipping_ai.documents.text_representation import apply_company_aliases
+from shipping_ai.documents.versions import compute_snapshot_version_diff
 from shipping_ai.investigation.jobs import eligible
 from shipping_ai.investigation.schemas import Investigation
 from shipping_ai.models import (
@@ -50,6 +51,7 @@ class Analysis:
     reference: str | None
     master_id: UUID | None
     detected_company_id: UUID | None = None
+    version_diff: dict | None = None
 
 
 def enqueue(db, case_id: UUID, revision: int, stage: str = "analysis"):
@@ -190,8 +192,16 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
     reference = usable(invoice.fields.get("invoice_no")) if invoice else None
     if reference and len(reference) > 160:
         reference = None
+    with session_factory()() as db:
+        version_diff = compute_snapshot_version_diff(db, case.id, extractions)
     return Analysis(
-        extractions, findings, candidates, reference, master.id if master else None, company_id
+        extractions,
+        findings,
+        candidates,
+        reference,
+        master.id if master else None,
+        company_id,
+        version_diff,
     )
 
 
@@ -210,6 +220,7 @@ def save_analysis(db, run: AutomationRun, case: IntakeCase, result: Analysis) ->
         findings=[item.model_dump(mode="json") for item in result.findings],
         candidates=[item.model_dump(mode="json") for item in result.candidates],
         ai_state="disabled",
+        version_diff=result.version_diff,
     )
     cfg = settings()
     blockers, roles, _ = blockers_for(result.extractions, {})
@@ -247,7 +258,40 @@ def save_analysis(db, run: AutomationRun, case: IntakeCase, result: Analysis) ->
     if result.detected_company_id and not case.company_id:
         case.company_id = result.detected_company_id
     case.detected_reference = result.reference
-    if not blockers and not document_limit:
+
+    def has_field_val(ext, field_name):
+        fld = ext.fields.get(field_name) if ext and ext.fields else None
+        return bool(fld and fld.value and str(fld.value).strip())
+
+    has_final_bl = bool(result.version_diff and result.version_diff.get("is_final_bl"))
+    has_transport = any(
+        ext.role in ("draft_bl", "final_bl")
+        and (
+            has_field_val(ext, "bl_no")
+            or has_field_val(ext, "container")
+            or has_field_val(ext, "booking_no")
+            or has_field_val(ext, "packages")
+            or has_field_val(ext, "gross_weight")
+        )
+        for ext in result.extractions
+    )
+    has_invoice = any(
+        ext.role == "invoice"
+        and (has_field_val(ext, "invoice_no") or len(ext.items) > 0)
+        for ext in result.extractions
+    )
+    has_shipping_doc = has_transport or has_invoice
+    incomplete = has_shipping_doc and (not has_transport or not has_invoice)
+    if case.state == "manual_matching":
+        # Preserve manual_matching state until staff links it to a shipment
+        pass
+    elif incomplete:
+        case.state = "awaiting_updated_document"
+        case.review_reason = "Document is incomplete. Awaiting updated document."
+    elif has_final_bl:
+        case.state = "needs_review"
+        case.review_reason = "Final B/L arrived. Verify final transport details against approved draft before marking confirmed."
+    elif not blockers and not document_limit:
         case.state = "ready_for_approval"
         case.review_reason = "Required checks passed. Save and confirm the staff review."
     else:

@@ -109,7 +109,7 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
     saved = latest_review(db, case)
     issues = []
     consignees = []
-    if case.state in {"needs_review", "ready_for_approval", "approved"}:
+    if case.state in {"needs_review", "ready_for_approval", "approved", "awaiting_updated_document"}:
         snapshot, docs = analysis(db, case)
         issues = guided_queue(snapshot, docs, saved)
         consignees = consignee_options(docs)
@@ -214,8 +214,13 @@ def save_review(case_id: UUID, request: SaveReview, db: DB, user: Staff):
 
 def stage_review(db, case, request, user, *, approval_request=None):
     previous = latest_review(db, case)
+    if case.analysis_revision > request.expected_revision:
+        raise HTTPException(
+            409,
+            f"This review has been superseded by document revision {case.analysis_revision}. Refresh before saving.",
+        )
     if (
-        case.state not in {"needs_review", "ready_for_approval"}
+        case.state not in {"needs_review", "ready_for_approval", "awaiting_updated_document"}
         or case.analysis_revision != request.expected_revision
         or request.expected_review_id != (previous.id if previous else None)
     ):
@@ -273,6 +278,11 @@ def locked_review(db, case_id, request, decision):
     if prior:
         return case, prior, None
     review = latest_review(db, case)
+    if case.analysis_revision > request.expected_revision:
+        raise HTTPException(
+            409,
+            f"This review has been superseded by document revision {case.analysis_revision}. Refresh before making a decision.",
+        )
     if (
         case.analysis_revision != request.expected_revision
         or request.review_id != (review.id if review else None)
@@ -334,7 +344,7 @@ def approve(case_id: UUID, request: Decision, db: DB, user: Staff):
     docs = [Extraction.model_validate(doc) for doc in payload["documents"]]
     invoice = next(doc for doc in docs if doc.role == "invoice")
     packing = next(doc for doc in docs if doc.role == "packing_list")
-    bills = [doc for doc in docs if doc.role == "draft_bl"]
+    bills = [doc for doc in docs if doc.role in ("draft_bl", "final_bl")]
     bill = bills[0] if len(bills) == 1 else None
     master = db.get(CdcMasterVersion, UUID(payload["master_id"])) if payload["master_id"] else None
     arguments, pending = prepare(invoice, packing, master, payload["mappings"])

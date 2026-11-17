@@ -31,6 +31,7 @@ export type Document = {
   sha256: string;
   size_bytes: number;
   received_at: string;
+  version_number?: number;
 };
 
 export type CaseDetail = CaseSummary & {
@@ -212,6 +213,30 @@ export type ReviewAnalysis = {
     explanation: string;
     suggested_action: string;
   }[];
+  version_diff?: VersionDiffSummary | null;
+};
+
+export type DocumentDiff = {
+  document_id: string;
+  classification: string;
+  original_filename: string;
+  version_number: number;
+  parent_version_id: string | null;
+  parent_filename: string | null;
+  parent_version_number: number | null;
+  added: Record<string, any>;
+  modified: Record<string, { old: any; new: any }>;
+  missing: Record<string, any>;
+  unchanged: Record<string, any>;
+  has_changes: boolean;
+};
+
+export type VersionDiffSummary = {
+  has_revisions: boolean;
+  is_final_bl: boolean;
+  requires_final_confirmation: boolean;
+  diffs: DocumentDiff[];
+  summary: string;
 };
 
 export type MasterItems = { internally_reserved: Record<number, string>;

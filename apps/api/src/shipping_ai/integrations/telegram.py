@@ -373,6 +373,7 @@ def format_summary(case, company, snapshot, extracted, review):
     documents = [Extraction.model_validate(item) for item in source]
     findings = snapshot.findings
     issues = sum(finding.get("outcome") != "PASS" for finding in findings)
+    v_diff = getattr(snapshot, "version_diff", None) or {}
     quick = bool(
         case.state == "ready_for_approval"
         and case.company_id
@@ -382,13 +383,22 @@ def format_summary(case, company, snapshot, extracted, review):
         and review.ready
         and not review.payload.get("corrections")
         and not review.payload.get("permit_pending")
+        and not v_diff.get("requires_final_confirmation")
     )
     approval = {
         "approved": "Approved",
         "rejected": "Rejected",
         "ready_for_approval": "Ready for approval",
+        "awaiting_updated_document": "Awaiting Updated Document",
+        "manual_matching": "Manual Matching",
     }.get(case.state, "Review required")
     lines = ["Shipping draft", f"Company: {company or 'Unassigned'}"]
+    if v_diff.get("has_revisions"):
+        desc = v_diff.get("summary", {}).get("description")
+        if desc:
+            lines.append(f"Revision updates: {desc}")
+        if v_diff.get("is_final_bl"):
+            lines.append("Final B/L received - confirmation required")
     for label, keys, roles in SHIPMENT_FIELDS:
         value = " ".join(field_value(documents, roles, keys).split())[:240]
         lines.append(f"{label}: {value}")
@@ -448,6 +458,7 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
     documents = [Extraction.model_validate(item) for item in source]
     findings = snapshot.findings
     issues = sum(finding.get("outcome") != "PASS" for finding in findings)
+    v_diff = getattr(snapshot, "version_diff", None) or {}
     quick = bool(
         case.state == "ready_for_approval"
         and case.company_id
@@ -457,6 +468,7 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
         and review.ready
         and not review.payload.get("corrections")
         and not review.payload.get("permit_pending")
+        and not v_diff.get("requires_final_confirmation")
     )
 
     ref = (
@@ -524,14 +536,27 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
         "approved": "✅ Approved",
         "rejected": "❌ Rejected",
         "ready_for_approval": "🟢 Ready for Approval",
+        "awaiting_updated_document": "⏳ Awaiting Updated Document",
+        "manual_matching": "🔍 Manual Matching Required",
     }
     approval_text = approval_map.get(case.state, "🟡 Review Required")
 
     url = draft_url(case, review if quick else None)
 
+    revision_lines: list[str] = []
+    if v_diff.get("has_revisions"):
+        revision_lines.append("")
+        revision_lines.append("🔄 <b>Document Revision Updates:</b>")
+        if v_diff.get("is_final_bl"):
+            revision_lines.append("• 🚢 <b>Final B/L (Telex / Original) received</b>")
+        desc = v_diff.get("summary", {}).get("description")
+        if desc:
+            revision_lines.append(f"• {html.escape(desc)}")
+
     lines = [
         f"🚢 <b>Shipping draft:</b> <code>{html.escape(ref)}</code>",
         f"🏢 <b>Company:</b> {html.escape(company_name)}",
+        *revision_lines,
         "",
         "📦 <b>Cargo & Value:</b>",
         f"• <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",

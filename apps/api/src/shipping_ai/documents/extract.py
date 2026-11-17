@@ -52,7 +52,10 @@ CONTAINER_VALUE_RE = re.compile(
     r"^(?:[A-Z]{3,4}\s?[0-9]{6,7}[ -]?[0-9]?|\d+\s*[xX*]\s*(?:20|40|45)\s*(?:HC|HQ|GP|OT|FR|RF|RH)|[A-Z]{3,4}\s?[0-9]{6,7}[ -]?[0-9]?\s*/\s*\d+\s*[xX*]\s*(?:20|40|45)\s*(?:HC|HQ|GP|OT|FR|RF|RH))",
     re.I,
 )
-BILL_MARKER = re.compile(r"bill of lading|\bwaybill\b|\bB\s*/\s*L\b|提单", re.I)
+BILL_MARKER = re.compile(
+    r"bill of lading|\bwaybill\b|\bB\s*/\s*L\b|提单|提單|ប័ណ្ណដឹកជញ្ជូន|\btelex release\b|\bsea waybill\b",
+    re.I,
+)
 BILL_LABELS = (
     re.compile(r"(?:\bB\s*/?\s*L|bill of lading)\s*(?:no\.?|number)|提单号", re.I),
     re.compile(r"(?m)^\s*(?:shipper\b|发货人)", re.I),
@@ -911,7 +914,7 @@ def extract_pdf_legacy(data: bytes, name: str, doc: UUID, classification: str):
             for i, value in enumerate(text.splitlines(), 1)
             if clean(value)
         ]
-    if classification != "draft_bl" and not BILL_MARKER.search(text):
+    if classification not in ("draft_bl", "final_bl") and not BILL_MARKER.search(text):
         return Extraction(
             document_id=doc,
             role="other",
@@ -1139,7 +1142,9 @@ def _extract(data: bytes, name: str, doc: UUID, classification: str) -> list[Ext
         # Parser diagnostics can contain document contents. Persist a fixed code.
         error = "unreadable_pdf" if suffix == ".pdf" else "unreadable_workbook"
     role = (
-        "draft_bl"
+        classification
+        if classification in ("draft_bl", "final_bl")
+        else "draft_bl"
         if suffix == ".pdf"
         else classification
         if classification in {"invoice", "packing_list"}

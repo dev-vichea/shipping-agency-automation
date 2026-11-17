@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from sqlalchemy import column, func, or_, select, true
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from starlette.concurrency import run_in_threadpool
@@ -34,10 +34,25 @@ from shipping_ai.models import (
     User,
 )
 
+from shipping_ai.intakes.matching import (
+    ExtractedIdentifiers,
+    detect_document_relationship,
+    extract_context_identifiers,
+    extract_file_identifiers,
+    match_shipment,
+)
+from shipping_ai.review.pipeline import enqueue
+
 from .schemas import Arrival, CaseDetail, CaseSummary, Receipt
 
 router = APIRouter(prefix="/intakes", tags=["intakes"])
 CHANNEL = "simulated"
+mutation = [Depends(browser_origin)]
+
+
+class MatchShipment(BaseModel):
+    target_case_id: UUID | None = None
+    notes: str | None = None
 PageSize = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100_000)]
 
@@ -395,16 +410,73 @@ def archive_arrival(
         ).encode()
     ).hexdigest()
 
+    # Extract identifiers from stored files and incoming message
+    store = LocalStorage(settings().storage_dir)
+    file_idents_map: dict[str, ExtractedIdentifiers] = {}
+    combined_idents = extract_context_identifiers(arrival.subject, arrival.body, arrival.thread_id)
+
+    for file in files.values():
+        try:
+            f_path = store.path(file.sha256)
+            if f_path.exists():
+                data = f_path.read_bytes()
+                f_idents = extract_file_identifiers(data, file.name)
+                file_idents_map[file.sha256] = f_idents
+                combined_idents.invoice_refs.update(f_idents.invoice_refs)
+                combined_idents.bl_numbers.update(f_idents.bl_numbers)
+                combined_idents.booking_numbers.update(f_idents.booking_numbers)
+                combined_idents.container_numbers.update(f_idents.container_numbers)
+                combined_idents.seal_numbers.update(f_idents.seal_numbers)
+                if not combined_idents.shipper and f_idents.shipper:
+                    combined_idents.shipper = f_idents.shipper
+                if not combined_idents.consignee and f_idents.consignee:
+                    combined_idents.consignee = f_idents.consignee
+                if not combined_idents.vessel and f_idents.vessel:
+                    combined_idents.vessel = f_idents.vessel
+                if not combined_idents.port and f_idents.port:
+                    combined_idents.port = f_idents.port
+                if f_idents.gross_weight is not None:
+                    combined_idents.gross_weight = f_idents.gross_weight
+                if f_idents.packages is not None:
+                    combined_idents.packages = f_idents.packages
+                if f_idents.is_final_bl:
+                    combined_idents.is_final_bl = True
+                if f_idents.has_invoice_doc:
+                    combined_idents.has_invoice_doc = True
+                if f_idents.has_transport_doc:
+                    combined_idents.has_transport_doc = True
+        except Exception:
+            pass
+
     if arrival.intake_case_id:
         case = visible_case(db, arrival.intake_case_id, lock=True)
         if arrival.company_id and arrival.company_id != case.company_id:
             raise HTTPException(422, "Use the company assigned to this intake")
     else:
-        if arrival.company_id:
-            visible_company(db, arrival.company_id)
-        case = IntakeCase(channel=channel, workspace_id=workspace, company_id=arrival.company_id)
-        db.add(case)
-        db.flush()
+        # Multi-identifier matching across active shipments
+        decision = match_shipment(
+            db, workspace, combined_idents, arrival.thread_id, arrival.company_id
+        )
+        if decision.status == "matched" and decision.case_id:
+            arrival.intake_case_id = decision.case_id
+            case = visible_case(db, decision.case_id, lock=True)
+        elif decision.status == "uncertain":
+            # Requirement 12: send the document to manual matching instead of creating/modifying automatically
+            case = IntakeCase(
+                channel=channel,
+                workspace_id=workspace,
+                company_id=arrival.company_id,
+                state="manual_matching",
+                review_reason=decision.reason,
+            )
+            db.add(case)
+            db.flush()
+        else:
+            if arrival.company_id:
+                visible_company(db, arrival.company_id)
+            case = IntakeCase(channel=channel, workspace_id=workspace, company_id=arrival.company_id)
+            db.add(case)
+            db.flush()
 
     if arrival.parent_version_id:
         parent = db.get(Document, arrival.parent_version_id)
@@ -451,8 +523,68 @@ def archive_arrival(
         )
         return Receipt(case_id=existing.intake_case_id, run_id=run_id, replayed=True)
 
+    # Detect document version relationships (duplicate, revision, final BL, new)
+    doc_entries = []
+    has_non_duplicate = False
+
+    for file in files.values():
+        f_ident = file_idents_map.get(file.sha256, ExtractedIdentifiers())
+        if arrival.parent_version_id:
+            parent_id = arrival.parent_version_id
+            parent_doc = db.get(Document, parent_id)
+            ver_num = (parent_doc.version_number + 1) if parent_doc else 1
+            classification = arrival.classification
+            rel_kind = "updated_revision"
+        else:
+            rel = detect_document_relationship(db, case.id, file.sha256, file.name, f_ident)
+            rel_kind = rel.kind
+            parent_id = rel.parent_version_id
+            ver_num = rel.version_number
+            classification = (
+                arrival.classification
+                if arrival.classification and arrival.classification != "other"
+                else (rel.classification or "other")
+            )
+
+        if rel_kind != "duplicate":
+            has_non_duplicate = True
+
+        doc_entries.append({
+            "file": file,
+            "parent_id": parent_id,
+            "version_number": ver_num,
+            "classification": classification,
+            "is_duplicate": rel_kind == "duplicate",
+        })
+
+    if not has_non_duplicate and files:
+        # All incoming documents are exact duplicates of documents already present in this case.
+        # Preserve existing state and snapshot without creating duplicate processing runs.
+        latest_run_id = db.scalar(
+            select(AutomationRun.id)
+            .where(AutomationRun.intake_case_id == case.id)
+            .order_by(AutomationRun.created_at.desc())
+            .limit(1)
+        )
+        if not latest_run_id:
+            latest_run_id = uuid4()
+        db.add(
+            ActivityEvent(
+                actor_type="staff",
+                actor_id=user.id,
+                intake_case_id=case.id,
+                automation_run_id=None,
+                event_type="arrival_archived",
+                before_state=case.state,
+                after_state=case.state,
+            )
+        )
+        db.commit()
+        return Receipt(case_id=case.id, run_id=latest_run_id, replayed=True)
+
     previous = case.state
-    case.state = "queued"
+    if case.state != "manual_matching":
+        case.state = "queued"
     case.analysis_revision += 1
     case.detected_reference = None
     case.review_reason = None
@@ -461,15 +593,17 @@ def archive_arrival(
             Document(
                 intake_case_id=case.id,
                 source_message_id=message_id,
-                parent_version_id=arrival.parent_version_id,
-                original_filename=file.name,
-                classification=arrival.classification,
-                mime=file.mime,
-                sha256=file.sha256,
-                storage_key=file.sha256,
-                size_bytes=file.size,
+                parent_version_id=entry["parent_id"],
+                version_number=entry["version_number"],
+                original_filename=entry["file"].name,
+                classification=entry["classification"],
+                mime=entry["file"].mime,
+                sha256=entry["file"].sha256,
+                storage_key=entry["file"].sha256,
+                size_bytes=entry["file"].size,
             )
-            for file in files.values()
+            for entry in doc_entries
+            if not entry["is_duplicate"]
         ]
     )
     run = AutomationRun(
@@ -490,11 +624,131 @@ def archive_arrival(
             automation_run_id=run.id,
             event_type="arrival_archived",
             before_state=previous if arrival.intake_case_id else None,
-            after_state="queued",
+            after_state=case.state,
         )
     )
     db.commit()
     return Receipt(case_id=case.id, run_id=run.id, replayed=False)
+
+
+@router.post("/{case_id}/match-shipment", dependencies=mutation)
+def match_shipment_endpoint(case_id: UUID, request: MatchShipment, db: DB, user: Staff):
+    case = visible_case(db, case_id, lock=True)
+    if case.state != "manual_matching":
+        raise HTTPException(400, "Only cases awaiting manual matching can be matched.")
+
+    if request.target_case_id:
+        target = visible_case(db, request.target_case_id, lock=True)
+        if target.id == case.id:
+            raise HTTPException(422, "Target shipment cannot be the same case.")
+
+        # To satisfy composite FK (source_message_id, intake_case_id) on documents,
+        # copy incoming message to the target shipment first, then reassign documents to target case and new message.
+        docs = db.scalars(select(Document).where(Document.intake_case_id == case.id)).all()
+        msgs = db.scalars(select(IncomingMessage).where(IncomingMessage.intake_case_id == case.id)).all()
+
+        msg_target_map = {}
+        for msg in msgs:
+            new_msg = IncomingMessage(
+                workspace_id=msg.workspace_id,
+                intake_case_id=target.id,
+                channel=msg.channel,
+                provider_message_id=f"{msg.provider_message_id}:merged:{uuid4().hex[:8]}",
+                thread_id=msg.thread_id,
+                sender=msg.sender,
+                subject=msg.subject,
+                body=msg.body,
+                payload_hash=msg.payload_hash,
+            )
+            db.add(new_msg)
+            db.flush()
+            msg_target_map[msg.id] = new_msg.id
+
+        for doc in docs:
+            doc.intake_case_id = target.id
+            if doc.source_message_id in msg_target_map:
+                doc.source_message_id = msg_target_map[doc.source_message_id]
+            rel = detect_document_relationship(
+                db,
+                target.id,
+                doc.sha256,
+                doc.original_filename,
+                ExtractedIdentifiers(doc_type=doc.classification),
+            )
+            doc.parent_version_id = rel.parent_version_id
+            doc.version_number = rel.version_number
+            if rel.classification != "other":
+                doc.classification = rel.classification
+        db.flush()
+
+        target.analysis_revision += 1
+        target.state = "queued"
+        target.review_reason = None
+        enqueue(db, target.id, target.analysis_revision)
+
+        case.state = "rejected"
+        case.review_reason = f"Manually matched and merged into shipment {target.id}."
+        db.add(
+            ActivityEvent(
+                actor_type="staff",
+                actor_id=user.id,
+                intake_case_id=target.id,
+                event_type="shipment_manually_matched",
+                before_state="manual_matching",
+                after_state="queued",
+            )
+        )
+        db.commit()
+        return {"status": "matched", "target_case_id": target.id}
+    else:
+        # Confirm as new independent shipment
+        case.state = "queued"
+        case.review_reason = "Manual match confirmed as independent new shipment."
+        enqueue(db, case.id, case.analysis_revision)
+        db.add(
+            ActivityEvent(
+                actor_type="staff",
+                actor_id=user.id,
+                intake_case_id=case.id,
+                event_type="manual_matching_confirmed_new",
+                before_state="manual_matching",
+                after_state="queued",
+            )
+        )
+        db.commit()
+        return {"status": "confirmed_new", "case_id": case.id}
+
+
+@router.post("/{case_id}/confirm-final-bl", dependencies=mutation)
+def confirm_final_bl(case_id: UUID, db: DB, user: Staff):
+    case = visible_case(db, case_id, lock=True)
+    all_docs = db.scalars(select(Document).where(Document.intake_case_id == case.id)).all()
+    superseded = {d.parent_version_id for d in all_docs if d.parent_version_id}
+    active_docs = [d for d in all_docs if d.id not in superseded]
+
+    final_bl_doc = next((d for d in active_docs if d.classification == "final_bl"), None)
+    if not final_bl_doc:
+        raise HTTPException(422, "No active Final B/L document found for confirmation.")
+
+    record = db.scalar(select(ImportRecord).where(ImportRecord.intake_case_id == case.id))
+    if record:
+        record.etd_status = "confirmed" if record.etd else "pending"
+        record.eta_status = "confirmed" if record.eta else "pending"
+    case.state = "approved" if record else "ready_for_approval"
+    case.review_reason = "Final B/L confirmed by staff."
+
+    db.add(
+        ActivityEvent(
+            actor_type="staff",
+            actor_id=user.id,
+            intake_case_id=case.id,
+            event_type="final_bl_confirmed",
+            before_state="needs_review",
+            after_state=case.state,
+        )
+    )
+    db.commit()
+    return {"status": "confirmed", "case_id": case.id}
 
 
 @router.get("/{case_id}/activity")

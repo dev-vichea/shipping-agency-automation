@@ -80,13 +80,13 @@ class IntakeCase(Identified, Created, Base):
     __tablename__ = "intake_cases"
     __table_args__ = (
         CheckConstraint(
-            "state IN ('queued','needs_review','ready_for_approval','approved','rejected','failed')",
+            "state IN ('queued','needs_review','ready_for_approval','approved','rejected','failed','awaiting_updated_document','manual_matching')",
             name="state",
         ),
         Index("ix_intake_cases_recent", "created_at", "id"),
     )
 
-    state: Mapped[str] = mapped_column(String(24), server_default="queued")
+    state: Mapped[str] = mapped_column(String(32), server_default="queued")
     channel: Mapped[str] = mapped_column(String(24))
     workspace_id: Mapped[UUID] = mapped_column(
         ForeignKey("workspaces.id"), index=True, server_default=str(DEFAULT_WORKSPACE)
@@ -202,7 +202,7 @@ class Document(Identified, Base):
             ["import_records.id", "import_records.intake_case_id"],
         ),
         CheckConstraint(
-            "classification IN ('invoice','packing_list','draft_bl','other')",
+            "classification IN ('invoice','packing_list','draft_bl','final_bl','other')",
             name="classification",
         ),
         CheckConstraint("size_bytes > 0", name="size"),
@@ -212,6 +212,7 @@ class Document(Identified, Base):
     source_message_id: Mapped[UUID] = mapped_column(index=True)
     import_record_id: Mapped[UUID | None] = mapped_column(index=True)
     parent_version_id: Mapped[UUID | None] = mapped_column(index=True)
+    version_number: Mapped[int] = mapped_column(Integer, server_default="1")
     original_filename: Mapped[str] = mapped_column(String(255))
     mime: Mapped[str] = mapped_column(String(96))
     classification: Mapped[str] = mapped_column(String(24), server_default="other")
@@ -307,8 +308,8 @@ class ActivityEvent(Identified, Created, Base):
         ForeignKey("automation_runs.id"), index=True
     )
     event_type: Mapped[str] = mapped_column(String(48))
-    before_state: Mapped[str | None] = mapped_column(String(24))
-    after_state: Mapped[str | None] = mapped_column(String(24))
+    before_state: Mapped[str | None] = mapped_column(String(32))
+    after_state: Mapped[str | None] = mapped_column(String(32))
 
 
 class CdcMasterVersion(Identified, Created, Base):
@@ -365,6 +366,7 @@ class ReviewSnapshot(Identified, Created, Base):
     ai_trace_id: Mapped[UUID | None] = mapped_column()
     ai_suggestions: Mapped[list] = mapped_column(JSONB, default=list)
     translations: Mapped[dict | None] = mapped_column(JSONB)
+    version_diff: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class DocumentExtraction(Identified, Created, Base):

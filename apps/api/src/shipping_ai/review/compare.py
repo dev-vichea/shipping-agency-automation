@@ -478,7 +478,10 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
                 )
             )
     counts = Counter(item.role for item in extractions)
-    for role in ("invoice", "packing_list", "draft_bl"):
+    transport_candidates = [
+        item for item in extractions if item.role in {"draft_bl", "final_bl"}
+    ]
+    for role in ("invoice", "packing_list"):
         if counts[role] == 1:
             selected = next(item for item in extractions if item.role == role)
             if selected.error != "multiple_workbook_sections":
@@ -497,10 +500,44 @@ def review_documents(extractions: list[Extraction]) -> tuple[list[Finding], dict
                 finding(
                     "extraction",
                     role,
-                    "WARNING" if role == "draft_bl" else "NEEDS_REVIEW",
+                    "NEEDS_REVIEW",
                     "No document with this role is available.",
                 )
             )
+
+    if len(transport_candidates) == 1:
+        active["draft_bl"] = transport_candidates[0]
+        if (
+            transport_candidates[0].role == "final_bl"
+            or transport_candidates[0].document_kind in ("final_bl", "telex_release", "original_bl")
+        ):
+            result.append(
+                finding(
+                    "transport",
+                    "final_bl_confirmation",
+                    "NEEDS_REVIEW",
+                    "Final B/L arrived. Verify final transport details and confirm before completing import record.",
+                    transport_candidates[0].fields.get("bl_no"),
+                )
+            )
+    elif len(transport_candidates) > 1:
+        result.append(
+            finding(
+                "extraction",
+                "draft_bl",
+                "NEEDS_REVIEW",
+                "Multiple current documents have transport role. Link a revision or confirm which applies.",
+            )
+        )
+    else:
+        result.append(
+            finding(
+                "extraction",
+                "draft_bl",
+                "WARNING",
+                "No document with this role is available.",
+            )
+        )
     invoice, packing, bill = (active.get(role) for role in ("invoice", "packing_list", "draft_bl"))
     if invoice and not usable(invoice.fields.get("invoice_no")):
         result.append(

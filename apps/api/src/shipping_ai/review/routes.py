@@ -165,6 +165,7 @@ def review(case_id: UUID, db: DB, _user: Staff):
         "ai_prompt_version": snapshot.ai_prompt_version,
         "ai_trace_id": snapshot.ai_trace_id,
         "ai_suggestions": snapshot.ai_suggestions,
+        "version_diff": snapshot.version_diff,
     }
 
 

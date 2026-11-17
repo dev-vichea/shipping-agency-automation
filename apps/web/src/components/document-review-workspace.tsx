@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ReactNode } from "react";
-import { Check, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FileText, Folder, GitCompare, ScanSearch, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -74,9 +74,12 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       id: document.id, name: document.original_filename, fileType: document.mime === "application/pdf" ? "PDF" : "Excel",
       url: `/api/v1/documents/${document.id}/download`, received: document.received_at,
       checksum: document.sha256, previousId: document.parent_version_id,
+      version_number: document.version_number ?? 1,
+      classification: document.classification,
     })),
-    ...(master ? [{id: master.source_id, name: master.original_filename, fileType: "CDC",
-      url: `/api/v1/cdc/versions/${master.id}/download`, received: null, checksum: null, previousId: null}] : []),
+    ...(master ? [{id: master.source_id, name: master.original_filename, fileType: "CDC" as const,
+      url: `/api/v1/cdc/versions/${master.id}/download`, received: null, checksum: null, previousId: null,
+      version_number: undefined, classification: undefined}] : []),
   ];
   const names = new Map(sources.map(({id, name}) => [id, name]));
   const extractionSources = analysis.extractions.flatMap((entry) => [entry, ...(entry.sections ?? [])]);
@@ -89,9 +92,11 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     const matches = excerpts.filter((excerpt) => excerpt.id === file.id);
     return matches.length ? matches : [{key: file.id, id: file.id, title: file.name, sheet: null, lines: []}];
   });
-  const activeDocTab = chosenDocTab ?? documentTabs.find((tab) => analysis.extractions.some((doc) => doc.role === tabToRole(tab))) ?? "B/L";
+  const activeDocTab = chosenDocTab ?? documentTabs.find((tab) => analysis.extractions.some((doc) => doc.role === tabToRole(tab) || (tab === "B/L" && doc.role === "final_bl"))) ?? "B/L";
   const activeRole = tabToRole(activeDocTab);
-  const classifiedSources = item.documents.filter((doc) => doc.classification === activeRole);
+  const classifiedSources = item.documents.filter((doc) =>
+    activeRole === "draft_bl" ? (doc.classification === "draft_bl" || doc.classification === "final_bl") : doc.classification === activeRole
+  );
   const compatibleSources = sources.filter((doc) => doc.fileType === (activeRole === "draft_bl" ? "PDF" : "Excel"));
   const fallbackSource = classifiedSources.length === 1 ? classifiedSources[0].id
     : compatibleSources.length === 1 ? compatibleSources[0].id : undefined;
@@ -822,6 +827,35 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     }
   }
 
+  const hasFinalBL = Boolean(
+    analysis.version_diff?.is_final_bl ||
+    item.documents.some((d) => d.classification === "final_bl")
+  );
+  const requiresFinalConfirmation = Boolean(
+    analysis.version_diff?.requires_final_confirmation ||
+    (hasFinalBL && item.state !== "approved")
+  );
+
+  async function handleConfirmFinalBL() {
+    setActionError("");
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/v1/intakes/${item.id}/confirm-final-bl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { detail?: string };
+        throw new Error(data.detail || "Failed to confirm Final B/L");
+      }
+      startRefresh(() => router.refresh());
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to confirm Final B/L");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function caseAction(kind: "approve" | "processed") {
     setActionError("");
     if (kind === "approve") {
@@ -928,6 +962,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       name: optFile?.name ?? opt.title,
       url: optFile?.url ?? "",
       lines: opt.lines,
+      version_number: optFile?.version_number,
+      classification: optFile?.classification,
     };
   });
 
@@ -973,6 +1009,17 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   <Check aria-hidden /> Approve
                 </Button>
               </>
+            )}
+            {requiresFinalConfirmation && (
+              <Button
+                type="button"
+                size="sm"
+                disabled={busy}
+                onClick={handleConfirmFinalBL}
+                className="bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs text-xs"
+              >
+                <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
+              </Button>
             )}
             {item.state === "approved" && approval && !workflow.processed && <Button type="button" size="sm"
               disabled={busy} onClick={() => caseAction("processed")}><Check aria-hidden /> Add to Processed</Button>}
@@ -1026,14 +1073,110 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
         {/* Left Column: Review & Extractions Panel */}
         <div className="min-w-0 space-y-2 xl:col-span-5">
+          {item.state === "awaiting_updated_document" && (
+            <div className="rounded-md border border-amber-500/30 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-500/20 dark:bg-amber-950/30 dark:text-amber-200">
+              <div className="flex items-center gap-2 font-semibold">
+                <AlertCircle className="size-4 text-amber-600 shrink-0" />
+                <span>Awaiting Updated Document</span>
+              </div>
+              <p className="mt-1 text-amber-800 dark:text-amber-300">
+                This shipment is missing required transport or consignment documentation. When an updated version arrives, it will be automatically reprocessed and reconciled.
+              </p>
+            </div>
+          )}
+
+          {item.state === "manual_matching" && (
+            <div className="rounded-md border border-rose-500/30 bg-rose-50/70 p-3 text-xs text-rose-900 dark:border-rose-500/20 dark:bg-rose-950/30 dark:text-rose-200">
+              <div className="flex items-center gap-2 font-semibold">
+                <AlertCircle className="size-4 text-rose-600 shrink-0" />
+                <span>Manual Matching Required</span>
+              </div>
+              <p className="mt-1 text-rose-800 dark:text-rose-300">
+                Matching identifiers between this intake and active shipments were conflicting or uncertain. No records were modified automatically.
+              </p>
+            </div>
+          )}
+
+          {requiresFinalConfirmation && (
+            <div className="rounded-md border border-purple-500/30 bg-purple-50/70 p-3 text-xs text-purple-900 dark:border-purple-500/20 dark:bg-purple-950/30 dark:text-purple-200">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 font-semibold">
+                  <CheckCircle2 className="size-4 text-purple-600 shrink-0" />
+                  <span>Final B/L Confirmation Required</span>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy}
+                  onClick={handleConfirmFinalBL}
+                  className="bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs text-xs h-7"
+                >
+                  <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
+                </Button>
+              </div>
+              <p className="mt-1 text-purple-800 dark:text-purple-300">
+                A Final / Telex Release B/L has been attached to this shipment. Staff confirmation is required to verify container numbers, seal numbers, and shipping details before final clearance.
+              </p>
+            </div>
+          )}
+
+          {analysis.version_diff?.has_revisions && (
+            <div className="rounded-md border border-blue-500/30 bg-blue-50/70 p-3 text-xs text-blue-900 dark:border-blue-500/20 dark:bg-blue-950/30 dark:text-blue-200">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 font-semibold">
+                  <GitCompare className="size-4 text-blue-600 shrink-0" />
+                  <span>Document Revision Detected</span>
+                </div>
+                <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
+                  {analysis.version_diff.diffs.length} {analysis.version_diff.diffs.length === 1 ? "document updated" : "documents updated"}
+                </span>
+              </div>
+              <p className="mt-1 text-blue-800 dark:text-blue-300">
+                {analysis.version_diff.summary}
+              </p>
+              {analysis.version_diff.diffs.map((diff) => (
+                <div key={diff.document_id} className="mt-2 space-y-1 rounded border border-blue-200 bg-white/60 p-2 dark:border-blue-900/60 dark:bg-blue-950/40">
+                  <div className="flex items-center justify-between font-medium">
+                    <span>{diff.original_filename} (v{diff.version_number})</span>
+                    {diff.parent_filename && (
+                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
+                    )}
+                  </div>
+                  {Object.keys(diff.modified).length > 0 && (
+                    <div className="text-[11px]">
+                      <span className="font-semibold text-amber-700 dark:text-amber-400">Modified: </span>
+                      {Object.entries(diff.modified).map(([f, vals]) => (
+                        <span key={f} className="mr-2">
+                          <span className="font-medium">{documentFieldLabel(f)}</span>:{" "}
+                          <del className="text-muted-foreground">{String(vals.old)}</del> &rarr; <ins className="no-underline font-semibold text-foreground">{String(vals.new)}</ins>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {Object.keys(diff.added).length > 0 && (
+                    <div className="text-[11px]">
+                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">Added: </span>
+                      {Object.entries(diff.added).map(([f, val]) => (
+                        <span key={f} className="mr-2">
+                          <span className="font-medium">{documentFieldLabel(f)}</span>: <span className="font-semibold">{String(val)}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="panel overflow-hidden">
             {/* Exactly 3 Document Intake Tabs (matching simple flat tab style) */}
             <nav className="flex border-b bg-background px-2" aria-label="Document intake tabs">
               {documentTabs.map((tab) => {
                 const active = activeDocTab === tab;
                 const role = tabToRole(tab);
-                const doc = analysis.extractions.find((d) => d.role === role);
+                const doc = analysis.extractions.find((d) => role === "draft_bl" ? (d.role === "draft_bl" || d.role === "final_bl") : d.role === role);
                 const count = doc ? (doc.items?.length || Object.values(doc.fields).filter((f) => f?.value).length) : null;
+                const activeDocSource = item.documents.find((d) => role === "draft_bl" ? (d.classification === "draft_bl" || d.classification === "final_bl") : d.classification === role);
                 return (
                   <button
                     key={tab}
@@ -1048,6 +1191,16 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                     )}
                   >
                     <span>{tab}</span>
+                    {activeDocSource?.classification === "final_bl" && (
+                      <span className="rounded bg-purple-100 px-1 py-0.2 text-[9px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">
+                        FINAL
+                      </span>
+                    )}
+                    {activeDocSource && activeDocSource.classification !== "final_bl" && (activeDocSource.version_number ?? 1) > 1 && (
+                      <span className="rounded bg-blue-100 px-1 py-0.2 text-[9px] font-bold text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                        v{activeDocSource.version_number}
+                      </span>
+                    )}
                     {typeof count === "number" && count > 0 && (
                       <span
                         className={cn(
@@ -1120,7 +1273,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         <div ref={source} tabIndex={-1} role="region" aria-label="Source viewer" className="min-w-0 scroll-mt-20 xl:col-span-7 xl:sticky xl:top-4 outline-none">
           <DocumentCanvas
             key={activeFieldInfo?.target?.name === "consignee" ? reviewKey(activeFieldInfo.target) : current?.key}
-            file={file ? { id: file.id, name: file.name, fileType: file.fileType as "PDF" | "Excel" | "CDC", url: file.url } : undefined}
+            file={file ? { id: file.id, name: file.name, fileType: file.fileType as "PDF" | "Excel" | "CDC", url: file.url, version_number: file.version_number, classification: file.classification } : undefined}
             options={canvasOptions}
             currentKey={current?.key}
             onChooseSource={chooseSource}

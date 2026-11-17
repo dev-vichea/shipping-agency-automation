@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 Outcome = Literal["PASS", "WARNING", "MISMATCH", "NEEDS_REVIEW"]
 Role = Literal[
-    "invoice", "packing_list", "draft_bl", "arrival_notice", "release_order",
+    "invoice", "packing_list", "draft_bl", "final_bl", "arrival_notice", "release_order",
     "freight_invoice", "debit_note", "fee_statement", "other",
 ]
 Box = tuple[float, float, float, float]
@@ -169,3 +169,4 @@ class ReviewView(BaseModel):
     ai_prompt_version: str | None = None
     ai_trace_id: UUID | None = None
     ai_suggestions: list[dict] = Field(default_factory=list)
+    version_diff: dict | None = None

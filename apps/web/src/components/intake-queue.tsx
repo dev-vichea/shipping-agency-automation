@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 
 export type QueueParams = { offset?: string | string[]; filter?: string; q?: string; new?: string; company_id?: string; sort?: string; source?: string };
 const reviewStatuses = [["needs_review", "Review"], ["ready_for_approval", "Ready"]] as const;
-const intakeStatuses = [["queued", "Queued"], ["processing", "Processing"], ...reviewStatuses, ["failed", "Failed"], ["approved", "Approved"], ["rejected", "Rejected"]] as const;
+const intakeStatuses = [["queued", "Queued"], ["processing", "Processing"], ...reviewStatuses, ["awaiting_updated_document", "Awaiting Doc"], ["manual_matching", "Manual Match"], ["failed", "Failed"], ["approved", "Approved"], ["rejected", "Rejected"]] as const;
 const names = { inbox: "Inbox", review: "Intake cases", approvals: "Approvals", drafts: "Draft import records" };
 const sources = ["folder", "gmail", "manual"] as const;
 

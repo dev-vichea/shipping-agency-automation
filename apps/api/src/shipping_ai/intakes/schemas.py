@@ -40,7 +40,7 @@ class Arrival(BaseModel):
     company_id: UUID | None = None
     intake_case_id: UUID | None = None
     parent_version_id: UUID | None = None
-    classification: Literal["invoice", "packing_list", "draft_bl", "other"] = "other"
+    classification: Literal["invoice", "packing_list", "draft_bl", "final_bl", "other"] = "other"
 
 
 class MessageView(ORM):
@@ -58,6 +58,7 @@ class DocumentView(ORM):
     id: UUID
     source_message_id: UUID
     parent_version_id: UUID | None
+    version_number: int = 1
     original_filename: str
     classification: str
     mime: str
