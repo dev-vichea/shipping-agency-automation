@@ -36,15 +36,17 @@ export default async function ImportPage({ params, searchParams }: {
   ];
   return <div className="space-y-gutter lg:space-y-gutter-desktop">
     <PageHeading title={record.invoice_no} description={record.approved_at ? `Approved ${timestamp(record.approved_at)}` : "Import draft · pending approval"} code action={<Status value={record.state} />} />
-    <Section title="Overview" action={<Button asChild size="xs" variant="outline"><Link href={`/review/${record.intake_case_id}`}>Open source intake <ArrowUpRight aria-hidden /></Link></Button>}>
-      <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
-        {fields.map(([field, value], index) => <div key={field} className="min-w-0 bg-card px-3 py-2.5">
-          <dt className="panel-label">{field}</dt>
-          <dd className={`mt-1 break-words ${index >= 3 ? "font-mono text-code-tabular" : "text-body-md"}`}>{value}</dd>
-        </div>)}
-      </dl>
-    </Section>
-    <Section title="Original attachments"><Originals documents={record.documents} /></Section>
+    <div className="grid items-start gap-gutter lg:grid-cols-[minmax(0,1fr)_minmax(18rem,30%)] lg:gap-gutter-desktop">
+      <Section title="Overview" action={<Button asChild size="xs" variant="outline"><Link href={`/review/${record.intake_case_id}`}>Open source intake <ArrowUpRight aria-hidden /></Link></Button>}>
+        <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
+          {fields.map(([field, value], index) => <div key={field} className="min-w-0 bg-card px-3 py-2.5">
+            <dt className="panel-label">{field}</dt>
+            <dd className={`mt-1 break-words ${index >= 3 ? "font-mono text-code-tabular" : "text-body-md"}`}>{value}</dd>
+          </div>)}
+        </dl>
+      </Section>
+      <Section title="Original attachments"><Originals documents={record.documents} /></Section>
+    </div>
     {record.state === "approved" && <Section title="Permit drafts">
       {permitPending && <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-fill p-3 text-body-sm text-warning">
         <Status value="pending" /><p>{permitPending}</p>

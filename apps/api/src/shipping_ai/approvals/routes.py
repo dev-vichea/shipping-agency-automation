@@ -18,13 +18,24 @@ from shipping_ai.models import (
     PermitDraft,
     ReviewSnapshot,
     StaffReview,
+    User,
 )
 from shipping_ai.permits.drafts import PROFILE, prepare, render
 from shipping_ai.review.routes import get_case
 from shipping_ai.review.schemas import Extraction
 from shipping_ai.review.values import usable
 
-from .review import Note, Revision, SaveReview, analysis, digest, latest_review, review_payload
+from .consignee import consignee_options
+from .review import (
+    Note,
+    Revision,
+    SaveReview,
+    analysis,
+    digest,
+    guided_queue,
+    latest_review,
+    review_payload,
+)
 
 router = APIRouter(prefix="/intakes", tags=["staff approval"])
 mutation = [Depends(browser_origin)]
@@ -33,6 +44,30 @@ mutation = [Depends(browser_origin)]
 class Decision(Revision):
     review_id: UUID | None
     notes: Note
+
+
+class MarkProcessed(Revision):
+    approval_id: UUID
+
+
+def processed_event(db, approval):
+    if approval is None:
+        return None
+    return db.scalar(
+        select(ActivityEvent)
+        .where(
+            ActivityEvent.intake_case_id == approval.intake_case_id,
+            ActivityEvent.import_record_id == approval.import_id,
+            ActivityEvent.event_type == "intake_processed",
+            ActivityEvent.created_at >= approval.created_at,
+        )
+        .order_by(ActivityEvent.created_at)
+        .limit(1)
+    )
+
+
+def processed_view(event):
+    return {"at": event.created_at, "actor_id": event.actor_id} if event else None
 
 
 def review_view(review):
@@ -71,8 +106,42 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
         .where(Approval.intake_case_id == case_id)
         .order_by(Approval.created_at.desc(), Approval.id.desc())
     ).all()
+    saved = latest_review(db, case)
+    issues = []
+    consignees = []
+    if case.state in {"needs_review", "ready_for_approval", "approved"}:
+        snapshot, docs = analysis(db, case)
+        issues = guided_queue(snapshot, docs, saved)
+        consignees = consignee_options(docs)
+    approval = next(
+        (
+            event
+            for event in events
+            if event.scope == "intake"
+            and event.decision == "approved"
+            and event.revision == case.analysis_revision
+        ),
+        None,
+    )
+    history = db.execute(
+        select(
+            StaffReview.id,
+            StaffReview.actor_id,
+            User.email.label("actor_email"),
+            StaffReview.created_at,
+            StaffReview.ready,
+        )
+        .outerjoin(User, User.id == StaffReview.actor_id)
+        .where(StaffReview.intake_case_id == case.id)
+        .order_by(StaffReview.created_at.desc(), StaffReview.id.desc())
+        .limit(20)
+    )
     return {
-        "review": review_view(latest_review(db, case)),
+        "review": review_view(saved),
+        "issues": issues,
+        "consignee_options": consignees,
+        "history": [dict(row._mapping) for row in history],
+        "processed": processed_view(processed_event(db, approval)),
         "decisions": [
             {
                 "id": event.id,
@@ -83,6 +152,7 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
                 "created_at": event.created_at,
                 "snapshot_hash": event.snapshot_hash,
                 "review_id": event.staff_review_id,
+                "import_id": event.import_id,
                 "notes": event.payload.get("notes"),
                 "permit_pending": event.payload.get("permit_pending"),
                 "recipient": event.payload.get("recipient"),
@@ -90,6 +160,39 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
             for event in events
         ],
     }
+
+
+@router.post("/{case_id}/processed", dependencies=mutation)
+def mark_processed(case_id: UUID, request: MarkProcessed, db: DB, user: Staff):
+    case = get_case(db, case_id, lock=True)
+    approval = db.get(Approval, request.approval_id)
+    if (
+        case.state != "approved"
+        or case.analysis_revision != request.expected_revision
+        or approval is None
+        or approval.intake_case_id != case.id
+        or approval.revision != case.analysis_revision
+        or approval.scope != "intake"
+        or approval.decision != "approved"
+        or approval.import_id is None
+    ):
+        raise HTTPException(409, "Approve the current review before adding it to Processed.")
+    event = processed_event(db, approval)
+    if event is None:
+        event = ActivityEvent(
+            actor_type="staff",
+            actor_id=user.id,
+            intake_case_id=case.id,
+            import_record_id=approval.import_id,
+            event_type="intake_processed",
+            before_state=case.state,
+            after_state=case.state,
+        )
+        db.add(event)
+        db.flush()
+    response = processed_view(event)
+    db.commit()
+    return response
 
 
 @router.get("/{case_id}/review/{review_id}")
@@ -118,7 +221,7 @@ def stage_review(db, case, request, user, *, approval_request=None):
     ):
         raise HTTPException(409, "This review has changed. Refresh before saving.")
     snapshot, documents = analysis(db, case)
-    payload = review_payload(db, snapshot, documents, request)
+    payload = review_payload(db, snapshot, documents, request, previous)
     if approval_request:
         if payload["blockers"]:
             raise HTTPException(409, payload["blockers"][0])
@@ -270,7 +373,8 @@ def approve(case_id: UUID, request: Decision, db: DB, user: Staff):
         if evidence and evidence.page:
             locator = f"PDF page {evidence.page} · item {item.row}"
         description = (
-            arguments[2][line_no - 1]["english_provided"] if arguments
+            arguments[2][line_no - 1]["english_provided"]
+            if arguments
             else usable(fields.get("english_description")) or usable(fields["description"])
         )
         db.add(

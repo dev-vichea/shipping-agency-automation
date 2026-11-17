@@ -1,13 +1,14 @@
 "use client";
 
-import { useState } from "react";
-import { Anchor, Box, CheckCircle2, ChevronLeft, ChevronRight, DollarSign, Eye, FileText, Package, ShieldCheck, SkipForward, Trash2 } from "lucide-react";
+import { useId, useState } from "react";
+import { Anchor, Box, Check, DollarSign, FileText, Minus, Package, RotateCcw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Pagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { sourceKey } from "@/components/review-evidence";
-import type { CaseDetail, CdcItemName, Evidence, ExtractedField, Extraction, ReviewAnalysis } from "@/lib/contracts";
-import { documentFieldLabel, intakeField, invoiceReference, location, sourceValue } from "@/lib/format";
+import type { FieldEditor } from "@/components/evidence-field-card";
+import type { CaseDetail, CdcItemName, Evidence, ExtractedField, Extraction, ReviewAnalysis, ReviewField } from "@/lib/contracts";
+import { documentFieldLabel, intakeField, invoiceReference, location } from "@/lib/format";
 import { lastPageOffset, pageSize } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +17,7 @@ export type InspectedField = {
   value: string;
   id?: string;
   uncertain?: boolean;
+  target?: ReviewField;
 };
 
 const groups = [
@@ -33,58 +35,266 @@ const roleDetails = {
   packing_list: { name: "Packing List", icon: Package },
 };
 
-const languageNames: Record<string, string> = { en: "English", km: "Khmer", zh: "Chinese", und: "Unidentified" };
+const statuses = {
+  present: { icon: Check, label: "Source available", color: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30" },
+  problem: { icon: X, label: "Mismatch", color: "bg-rose-500/15 text-rose-700 dark:text-rose-400 border border-rose-500/30" },
+  review: { icon: Minus, label: "Needs review", color: "bg-amber-500/15 text-amber-700 dark:text-amber-400 border border-amber-500/30" },
+  missing: { icon: Minus, label: "Missing", color: "bg-muted text-muted-foreground border border-border" },
+};
 
-function GoodsItems({ document, active, inspect, names, candidates }: {
+export function IntakeStatusDot({ status }: { status: keyof typeof statuses }) {
+  const { icon: Icon, color } = statuses[status];
+  return <span aria-hidden="true" data-field-status={status} className={cn("inline-flex size-3.5 shrink-0 items-center justify-center rounded-full text-[10px]", color)}>
+    <Icon size={10} strokeWidth={2.4} />
+  </span>;
+}
+
+export function intakeStatus(field?: ExtractedField, needsReview = false) {
+  if (needsReview || field?.status === "uncertain" || (
+    field?.english && ["proposed", "pending", "ambiguous", "unavailable", "unsupported", "limit_reached"].includes(field.english.status)
+  )) return "review";
+  return field?.value ? "present" : "missing";
+}
+
+function InlineReviewDrawer({
+  editor,
+  name,
+  status,
+  isUncertain,
+  currentValue,
+  onDismiss,
+}: {
+  editor: FieldEditor;
+  name: string;
+  status?: keyof typeof statuses;
+  isUncertain?: boolean;
+  currentValue?: string;
+  onDismiss?: () => void;
+}) {
+  const [text, setText] = useState(editor.value ?? "");
+  const [dimension, setDimension] = useState(
+    editor.dimension ? (editor[editor.dimension] as string | undefined) ?? "" : ""
+  );
+  const [error, setError] = useState("");
+  const ValueInput = editor.multiline ? "textarea" : "input";
+  const dirty =
+    text.trim() !== (editor.value ?? "").trim() ||
+    (!!editor.dimension && dimension.trim() !== ((editor[editor.dimension] as string | undefined) ?? "").trim());
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (editor.busy || !text.trim() || (editor.reviewed && !dirty)) return;
+    setError("");
+    try {
+      const unit =
+        editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
+      const currency =
+        editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
+      await editor.onSave({ value: text.trim(), unit, currency });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save field");
+    }
+  }
+
+  return (
+    <div
+      className="border-t border-border/40 bg-muted/20 px-3 py-2 space-y-2 text-xs"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          {status === "problem" && (
+            <span className="text-[10px] font-medium text-rose-600 dark:text-rose-400">
+              Source values conflict
+            </span>
+          )}
+          {status === "review" && (
+            <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+              Needs confirmation
+            </span>
+          )}
+          {isUncertain && !editor.reviewed && currentValue && (
+            <button
+              type="button"
+              disabled={editor.busy}
+              onClick={() => void editor.onSave({
+                value: editor.value || currentValue,
+                unit: editor.unit,
+                currency: editor.currency,
+              })}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
+            >
+              <Check size={11} /> Confirm extracted
+            </button>
+          )}
+        </div>
+
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground ml-auto">
+          {editor.reviewed && (
+            <button
+              type="button"
+              disabled={editor.busy}
+              onClick={() => void editor.onUndo()}
+              className="inline-flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer"
+              title="Reset to original value"
+            >
+              <RotateCcw size={10} /> Reset
+            </button>
+          )}
+          {onDismiss && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="hover:text-foreground transition-colors p-0.5 rounded-sm cursor-pointer"
+              title="Close"
+            >
+              <X size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+
+      {editor.choices.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mr-0.5">
+            Sources:
+          </span>
+          {editor.choices.map((choice) => {
+            const isCurrent = choice.value.trim() === (editor.value ?? "").trim();
+            const sourceRole = choice.label.split("·")[0].trim().replace(" / ", "/");
+            return (
+              <button
+                key={choice.id}
+                type="button"
+                disabled={editor.busy}
+                onClick={() => {
+                  editor.onPreview(choice);
+                  void editor.onSave({
+                    value: choice.value,
+                    unit: choice.unit ?? editor.unit,
+                    currency: choice.currency ?? editor.currency,
+                    choice,
+                  });
+                }}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] transition-colors border cursor-pointer",
+                  isCurrent
+                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
+                    : "border-border/60 bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                )}
+                title={`Select ${choice.value} from ${sourceRole}`}
+              >
+                {isCurrent && <Check size={10} className="shrink-0 text-primary" />}
+                <span className="text-[10px] uppercase font-semibold opacity-70">{sourceRole}:</span>
+                <span className="truncate max-w-[200px]">{choice.value}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-1">
+        <div className="flex items-center gap-1.5">
+          <ValueInput
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            disabled={editor.busy}
+            rows={editor.multiline ? 1 : undefined}
+            className="flex-1 min-w-0 resize-none rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            placeholder={`Enter ${name.toLowerCase()}…`}
+          />
+          {editor.dimension && (
+            <input
+              value={dimension}
+              onChange={(e) => setDimension(e.target.value)}
+              disabled={editor.busy}
+              maxLength={editor.dimension === "unit" ? 24 : 3}
+              placeholder={editor.dimension === "unit" ? "Unit" : "CCY"}
+              className="w-16 rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono uppercase focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+            />
+          )}
+          {dirty && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setText(editor.value ?? "");
+                  setDimension(editor.dimension ? (editor[editor.dimension] as string | undefined) ?? "" : "");
+                }}
+                className="px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
+              >
+                Cancel
+              </button>
+              <Button
+                type="submit"
+                size="xs"
+                disabled={editor.busy || !text.trim()}
+                className="h-6 text-[11px] font-semibold px-2 shrink-0 cursor-pointer"
+              >
+                Save
+              </Button>
+            </>
+          )}
+        </div>
+        {error && <p className="text-[11px] text-destructive">{error}</p>}
+      </form>
+    </div>
+  );
+}
+
+function GoodsItems({ document, active, inspect, names, candidates, editable, viewedField, isReviewed, editor, activeField, onDismissField }: {
   names: CdcItemName[];
   candidates: ReviewAnalysis["candidates"];
   document: Extraction;
   active: (id: string, evidence?: Evidence) => boolean;
-  inspect: (evidence: Evidence, meta: InspectedField) => void;
+  inspect: (evidence: Evidence | undefined, meta: InspectedField) => void;
+  editable: boolean;
+  viewedField: (target: ReviewField, field: ExtractedField) => ExtractedField;
+  isReviewed: (target: ReviewField) => boolean;
+  editor?: FieldEditor;
+  activeField?: InspectedField;
+  onDismissField?: () => void;
 }) {
   const [requestedOffset, setOffset] = useState(0);
+  const descriptionId = useId();
   const { items } = document;
   const offset = Math.min(requestedOffset, lastPageOffset(items.length));
   const displayed = items.slice(offset, offset + pageSize);
-  const optionalColumns = document.role === "invoice" ? ["hs_code", "unit_price", "amount"] : ["hs_code", "gross_weight", "net_weight"];
+  const optionalColumns = document.role === "invoice" ? ["hs_code", "unit_price", "amount"] : ["hs_code", "gross_weight", "net_weight", "unit_price", "amount"];
   const columns = ["description", "quantity", ...optionalColumns.filter((key) => items.some(({ fields }) => fields[key]?.value))];
 
   function itemCell(field: ExtractedField | undefined, key: string, row: number) {
     const id = `item:${row}:${key}`;
+    const target: ReviewField = { document_id: document.document_id, role: document.role as ReviewField["role"], row, name: key };
+    const reviewed = isReviewed(target);
+    const visibleField = field && viewedField(target, field);
     const name = key === "description" ? names.find((entry) => document.role === "invoice"
       ? entry.invoice_document_id === document.document_id && entry.invoice_row === row
       : entry.packing_document_id === document.document_id && entry.packing_row === row) : undefined;
-    const suggestion = key === "description" && !name && document.role === "invoice"
-      ? candidates.find((entry) => entry.invoice_document_id === document.document_id && entry.invoice_row === row)
-      : undefined;
-    const text = intakeField(field);
-    const evidence = name?.evidence[0] ?? text.evidence;
-    const value = name?.description ?? text.value;
+    const matches = key === "description" && !name && !reviewed && document.role === "invoice"
+      ? candidates.filter((entry) => entry.invoice_document_id === document.document_id && entry.invoice_row === row)
+      : [];
+    const suggestion = matches[0] && matches[0].score >= 60 &&
+      (!matches[1] || matches[0].score - matches[1].score >= 8) ? matches[0] : undefined;
+    const text = intakeField(visibleField);
+    const evidence = editable ? text.evidence : name?.evidence[0] ?? suggestion?.evidence ?? text.evidence;
+    const value = name?.description ?? suggestion?.description ?? text.value;
     const selected = active(id, evidence);
-    const original = name ? sourceValue(field) : text.original;
-    const originalEvidence = field?.evidence[0];
-    const uncertainty = !name && (field?.status === "uncertain" || text.label === "English proposal");
-
-    return <>
-      {evidence ? <button type="button" data-connector-source={selected ? "true" : undefined}
-        aria-pressed={selected} title={location(evidence)}
-        onClick={() => inspect(evidence, { name: name ? "Verified CDC description" : documentFieldLabel(key), value, id, uncertain: uncertainty })}
-        className={cn("data-link block rounded-sm text-left tabular-nums", selected && "bg-primary/10")}>{value}</button> : value}
-      {name && <span className="block text-muted-foreground">Verified CDC description · Row {name.master_row}</span>}
-      {!name && text.label && <span className="block text-muted-foreground">{text.label}</span>}
-      {field?.status === "uncertain" && <span className="block text-warning">Uncertain</span>}
-      {original && originalEvidence ? <button type="button"
-        data-connector-source={active(`${id}:original`, originalEvidence) ? "true" : undefined}
-        title={location(originalEvidence)}
-        onClick={() => inspect(originalEvidence, { name: "Original goods description", value: original, id: `${id}:original`, uncertain: field?.status === "uncertain" })}
-        className="block text-left text-muted-foreground underline-offset-2 hover:underline">Original · {original}</button>
-        : original && <span className="block text-muted-foreground">Original · {original}</span>}
-      {suggestion && <button type="button" onClick={() => inspect(suggestion.evidence, {
-        name: "Suggested CDC description", value: suggestion.description, id: `${id}:cdc`, uncertain: true,
-      })} title={location(suggestion.evidence)}
-        data-connector-source={active(`${id}:cdc`, suggestion.evidence) ? "true" : undefined}
-        className="data-link mt-1 block text-left">CDC suggestion · {suggestion.description}</button>}
+    const status = name || reviewed ? "present" : intakeStatus(visibleField, !!suggestion);
+    const label = name ? "Verified CDC description" : suggestion ? "Suggested CDC description"
+      : text.label ?? documentFieldLabel(key);
+    const detail = `${label} · ${reviewed ? "Reviewed" : statuses[status].label}`;
+    const content = <>
+      {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
+      <span>{value}</span>
+      <span hidden id={`${descriptionId}-${id}`}>{detail}</span>
     </>;
+    return evidence || (editable && field) ? <button type="button"
+      data-connector-source={selected ? "true" : undefined}
+      aria-pressed={selected} aria-describedby={`${descriptionId}-${id}`} title={evidence ? `${detail} · ${location(evidence)}` : detail}
+      onClick={() => inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" })}
+      className={cn("data-link flex items-start gap-2 rounded-sm text-left tabular-nums", selected && "bg-primary/10")}>{content}</button>
+      : <span className="inline-flex items-start gap-2">{content}</span>;
   }
 
   return <section aria-label="Goods items" className="space-y-1">
@@ -107,12 +317,23 @@ function GoodsItems({ document, active, inspect, names, candidates }: {
     <Pagination label="Goods items" offset={offset} count={displayed.length} total={items.length}
       previous={offset > 0 ? () => setOffset(offset - pageSize) : undefined}
       next={offset + pageSize < items.length ? () => setOffset(offset + pageSize) : undefined} />
+    {activeField?.target?.row && editor && (
+      <InlineReviewDrawer
+        key={`${activeField.name}:${editor.value}`}
+        editor={editor}
+        name={`Row ${activeField.target.row}: ${activeField.name}`}
+        isUncertain={activeField.uncertain}
+        currentValue={activeField.value}
+        onDismiss={onDismissField}
+      />
+    )}
   </section>;
 }
 
 export function IntakeStudioPanel({
-  item, analysis, document, activeEvidence, activeField, activeRole, onInspect, onApprove, onReject,
-  cdcNames, cdcControls, intakeReference,
+  item, analysis, document, activeEvidence, activeField, activeRole, onInspect,
+  cdcNames, cdcControls, intakeReference, editable, hasConsigneeOptions, viewedField, isReviewed,
+  editor, onDismissField,
 }: {
   item: CaseDetail;
   intakeReference: string | null;
@@ -123,10 +344,15 @@ export function IntakeStudioPanel({
   activeEvidence?: Evidence;
   activeField?: InspectedField;
   activeRole: keyof typeof roleDetails;
-  onInspect: (evidence: Evidence, meta?: InspectedField) => void;
-  onApprove: () => void;
-  onReject?: () => void;
+  hasConsigneeOptions: boolean;
+  onInspect: (evidence?: Evidence, meta?: InspectedField) => void;
+  editable: boolean;
+  viewedField: (target: ReviewField, field: ExtractedField) => ExtractedField;
+  isReviewed: (target: ReviewField) => boolean;
+  editor?: FieldEditor;
+  onDismissField?: () => void;
 }) {
+  const descriptionId = useId();
   const candidates = analysis.candidates.filter((candidate) => candidate.invoice_document_id === document?.document_id);
   const cdcIssue = analysis.findings.find((finding) =>
     ["cdc.company", "cdc.version"].includes(finding.key) && finding.outcome !== "PASS");
@@ -134,8 +360,10 @@ export function IntakeStudioPanel({
   const DocumentIcon = details.icon;
   const fields = document?.fields ?? {};
   const extraKeys = Object.keys(fields).filter((key) => !knownFields.has(key)).sort();
+  const required = activeRole === "invoice" ? ["invoice_no", "supplier", "consignee"]
+    : activeRole === "packing_list" && hasConsigneeOptions ? ["consignee"] : [];
   const currentGroups = groups.map((group, index) => ({
-    ...group, keys: (index === 0 ? [...group.keys, ...extraKeys] : group.keys).filter((key) => fields[key]?.value),
+    ...group, keys: (index === 0 ? [...group.keys, ...extraKeys] : group.keys).filter((key) => fields[key]?.value || (editable && fields[key] && required.includes(key))),
   })).filter(({ keys }) => keys.length);
 
   function active(id: string, evidence?: Evidence) {
@@ -167,42 +395,84 @@ export function IntakeStudioPanel({
           <div className="divide-y divide-border/60 border-y border-border/60">
             {keys.map((key) => {
               const field = fields[key];
-              const text = intakeField(field);
+              const target: ReviewField = { document_id: document!.document_id, role: activeRole, row: null, name: key };
+              const reviewed = isReviewed(target);
+              const visibleField = viewedField(target, field);
+              const text = intakeField(visibleField);
               const evidence = text.evidence;
               const id = `field:${key}`;
               const selected = active(id, evidence);
               const name = documentFieldLabel(key);
-              const value = key === "invoice_no" && !invoiceReference(field.value) ? "Needs verification" : text.value;
-              const flag = analysis.findings.find((finding) => finding.field === key && finding.evidence.some((entry) =>
-                field.evidence.some((citation) => sourceKey(entry) === sourceKey(citation))) &&
-                ["MISMATCH", "WARNING"].includes(finding.outcome));
-              const Row = evidence ? "button" : "div";
-              return <Row key={key} type={evidence ? "button" : undefined} data-connector-source={selected ? "true" : undefined}
-                aria-pressed={evidence ? selected : undefined} title={evidence ? location(evidence) : undefined}
-                onClick={evidence ? () => onInspect(evidence, { id, name, value: sourceValue(field), uncertain: field.status === "uncertain" || text.label === "English proposal" }) : undefined}
-                className={cn("relative grid w-full grid-cols-[minmax(7rem,1fr)_minmax(0,2fr)] items-center gap-2 px-2 py-2 text-left text-xs transition-colors",
-                  evidence && "cursor-pointer hover:bg-muted/40", selected && "bg-primary/10 dark:bg-primary/20",
-                  flag?.outcome === "MISMATCH" && !selected && "bg-danger-fill/30")}>
-                <span className="flex items-center gap-2 font-medium">
-                  {evidence && <Eye size={12} className="shrink-0 text-primary" aria-hidden />}{name}
-                </span>
-                <span className="min-w-0 text-right">
-                  {flag && <span className="mr-1.5 rounded bg-warning-fill px-1.5 text-[10px] font-semibold text-warning"
-                    title={flag.explanation}>{flag.outcome === "MISMATCH" ? "Diff" : "Warning"}</span>}
-                  {field.status === "uncertain" && <span className="mr-1.5 text-[10px] text-warning">Uncertain</span>}
-                  <span className={cn("break-words whitespace-normal font-mono text-[11px]", selected && "font-bold text-primary")}>{value}</span>
-                  {text.label && <span className="block text-muted-foreground">{text.label}</span>}
-                  {text.original && <span className="block text-muted-foreground">Original · {text.original}</span>}
-                </span>
-              </Row>;
+              const value = key === "invoice_no" && !invoiceReference(visibleField.value) ? "Needs verification" : text.value;
+              const citations = [...field.evidence, ...(field.english?.evidence ?? [])];
+              const findings = analysis.findings.filter((finding) => finding.field === key && finding.evidence.some((entry) =>
+                citations.some((citation) => sourceKey(entry) === sourceKey(citation))));
+              const mismatch = findings.find((finding) => finding.outcome === "MISMATCH");
+              const warning = findings.find((finding) => finding.outcome === "WARNING" || finding.outcome === "NEEDS_REVIEW");
+              const status = reviewed ? "present" : mismatch ? "problem" : intakeStatus(field, !!warning || (key === "invoice_no" && !invoiceReference(field.value)));
+              const reason = reviewed ? "Reviewed" : mismatch?.explanation ?? warning?.explanation ?? field.english?.reason ?? statuses[status].label;
+              const interactive = !!evidence || editable;
+              const isFieldEditorOpen = selected && editor && activeField?.target?.name === key && !activeField?.target?.row;
+
+              return (
+                <div
+                  key={key}
+                  className={cn(
+                    "transition-colors",
+                    selected && "bg-primary/5 dark:bg-primary/10 border-l-2 border-primary"
+                  )}
+                >
+                  <div
+                    role={interactive ? "button" : undefined}
+                    data-field-key={key}
+                    data-connector-source={selected ? "true" : undefined}
+                    tabIndex={interactive ? 0 : undefined}
+                    aria-pressed={interactive ? selected : undefined}
+                    aria-describedby={`${descriptionId}-${id}`}
+                    title={evidence ? `${reason} · ${location(evidence)}` : reason}
+                    onClick={interactive ? () => onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" }) : undefined}
+                    onKeyDown={interactive ? (e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
+                      }
+                    } : undefined}
+                    className={cn(
+                      "grid w-full grid-cols-[minmax(7rem,1fr)_minmax(0,2fr)] items-center gap-2 px-2 py-2 text-left text-xs transition-colors outline-none",
+                      interactive && "cursor-pointer hover:bg-muted/40",
+                      status === "problem" && !selected && "bg-danger-fill/40"
+                    )}
+                  >
+                    <span className="flex items-center gap-2 font-medium">
+                      <IntakeStatusDot status={status} />
+                      <span>{name}</span>
+                    </span>
+                    <span className={cn("min-w-0 break-words whitespace-normal text-right font-mono text-[11px]", selected && "font-bold text-primary")}>
+                      {value}
+                    </span>
+                    <span hidden id={`${descriptionId}-${id}`}>{reason}</span>
+                  </div>
+
+                  {isFieldEditorOpen && (
+                    <InlineReviewDrawer
+                      key={`${name}:${editor.value}`}
+                      editor={editor}
+                      name={name}
+                      status={status}
+                      isUncertain={field.status === "uncertain"}
+                      currentValue={value}
+                      onDismiss={onDismissField}
+                    />
+                  )}
+                </div>
+              );
             })}
           </div>
         </section>)}
-        {!!document?.source_languages?.length && <p className="px-2 text-xs text-muted-foreground">
-          Source languages · {document.source_languages.map((code) => languageNames[code] ?? code).join(", ")}
-        </p>}
         {document && document.items.length > 0 && <GoodsItems key={`${document.document_id}:${document.role}:${document.sheet}`}
-          document={document} active={active} inspect={onInspect} names={cdcNames} candidates={candidates} />}
+          document={document} active={active} inspect={onInspect} names={cdcNames} candidates={candidates}
+          editable={editable} viewedField={viewedField} isReviewed={isReviewed}
+          editor={editor} activeField={activeField} onDismissField={onDismissField} />}
 
         {/* CDC Quota Summary Section (on Invoice tab) */}
         {activeRole === "invoice" && (
@@ -214,63 +484,14 @@ export function IntakeStudioPanel({
 
             <div className="space-y-1 border-y border-border/60 px-2 py-2 text-xs text-muted-foreground">
               {analysis.analyzed_master && <p>{analysis.analyzed_master.year} · {analysis.analyzed_master.approval_ref}</p>}
-              {analysis.comparison_master && <p>English workbook comparison · {analysis.comparison_master.year} · {analysis.comparison_master.approval_ref}</p>}
-              {cdcIssue && <p>{cdcIssue.explanation}</p>}
-              {candidates.length > 0
-                ? <p>Check the suggested CDC descriptions against the shipment before confirming a match.</p>
-                : !cdcIssue && <p>No CDC description matches for these items.</p>}
+              {analysis.comparison_master && <p>Comparison only · {analysis.comparison_master.approval_ref}</p>}
+              {!candidates.length && <p>{cdcIssue ? "CDC match pending" : "No CDC matches"}</p>}
               {cdcControls}
             </div>
           </div>
         )}
       </div>
 
-      {/* Bottom Sticky Intake Workflow Dock */}
-      <div className="sticky bottom-0 z-20 flex items-center justify-between border-t border-border/80 bg-white/95 px-3.5 py-2.5 backdrop-blur-md dark:bg-slate-900/95 shadow-xs">
-        <div className="flex items-center gap-2">
-          <Button
-            type="button"
-            size="sm"
-            onClick={onApprove}
-            className="bg-primary text-primary-foreground font-semibold gap-1.5 shadow-sm hover:bg-primary/90 cursor-pointer h-8 text-xs"
-          >
-            <CheckCircle2 size={14} /> Add to Processed
-          </Button>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="text-muted-foreground hover:text-foreground h-8 w-8"
-            title="Skip to Next Case"
-          >
-            <SkipForward size={14} />
-          </Button>
-        </div>
-
-        {/* Stepper Navigation */}
-        <div className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
-          <Button variant="ghost" size="icon-xs" className="h-7 w-7 text-muted-foreground">
-            <ChevronLeft size={13} />
-          </Button>
-          <span className="font-semibold text-foreground px-1">1 of 1</span>
-          <Button variant="ghost" size="icon-xs" className="h-7 w-7 text-muted-foreground">
-            <ChevronRight size={13} />
-          </Button>
-        </div>
-
-        {onReject && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            onClick={onReject}
-            className="text-muted-foreground hover:text-destructive h-8 w-8"
-            title="Reject / Discard Intake"
-          >
-            <Trash2 size={14} />
-          </Button>
-        )}
-      </div>
     </div>
   );
 }

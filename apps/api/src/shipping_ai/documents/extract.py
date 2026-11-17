@@ -12,12 +12,12 @@ from zipfile import ZipFile
 import pymupdf
 import xlrd
 from defusedxml.ElementTree import iterparse
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import column_index_from_string, get_column_letter
 from services.bill_extractor import extract_bill
 from services.extraction import extract_shipping, rows_from_workbook
 from services.packing import extract_packing
 
-from shipping_ai.review.schemas import Evidence, Extraction, Item, Role
+from shipping_ai.review.schemas import EnglishText, Evidence, Extraction, Item, Role
 from shipping_ai.review.values import (
     UNIT_ALIASES,
     clean,
@@ -30,7 +30,7 @@ from shipping_ai.review.values import (
 )
 
 from .languages import LABELS as LOCAL_LABELS
-from .languages import ROW_FIELDS, column_map, reference_text, spellings
+from .languages import ROW_FIELDS, column_map, languages, reference_text, spellings
 from .pdf_extract import PDFLimit, extract_positioned_pdf
 from .text_representation import annotate_languages
 from .workbook_layout import TOTAL_TEXT, Region, regions, workbook_merges
@@ -359,6 +359,47 @@ def party_value(raw):
     return sum(c.isalpha() for c in text) >= 2 and not is_any_meta_label(text)
 
 
+def printed_route_name(rows, key, source, raw):
+    """Bind an English continuation to the same labelled route value column."""
+    match = re.fullmatch(r"([A-Z]+)\d+", source.cell or "")
+    if not match or source.row is None or not set(languages(clean(raw))) & {"km", "zh"}:
+        return None
+    value_col = column_index_from_string(match[1]) - 1
+    sheet_rows = dict(rows[:35])
+    label = META_LABELS[key]
+    original = sheet_rows.get(source.row, [])
+    label_col = next(
+        (col for col in range(value_col - 1, max(-1, value_col - 5), -1)
+         if label.fullmatch(clean(at(original, col)))),
+        None,
+    )
+    if label_col is None:
+        return None
+    following = sheet_rows.get(source.row + 1, [])
+    if heading_row(following):
+        return None
+    # The adjacent value belongs to this field when its left side is blank
+    # or repeats the route label. A new label or value ends this block.
+    for col in range(label_col, value_col):
+        text = clean(at(following, col))
+        if text and (col != label_col or not label.fullmatch(text)):
+            return None
+    value = clean(at(following, value_col))
+    if (
+        not value
+        or len(value) > 72
+        or languages(value) != ["en"]
+        or not re.fullmatch(r"[A-Za-z][A-Za-z .,'()/-]*", value)
+        or is_any_meta_label(value)
+        or not place_value(value)
+    ):
+        return None
+    return EnglishText(
+        status="source", value=value,
+        evidence=[cell_evidence(source.document_id, source.sheet, source.row + 1, value_col, value)],
+    )
+
+
 def metadata(doc: UUID, sheet: str, rows: list[Row], legacy: dict, role: Role) -> dict:
     keys = [
         "supplier",
@@ -395,6 +436,8 @@ def metadata(doc: UUID, sheet: str, rows: list[Row], legacy: dict, role: Role) -
             raw, evidence = source
             value = date_text(raw) if key in {"invoice_date", "etd", "eta"} else clean(raw)[:350]
             result[key] = field(value or None, evidence, uncertain=not value)
+            if key in {"origin", "destination", "port"}:
+                result[key].english = printed_route_name(rows, key, evidence, raw)
         elif key in {"supplier", "consignee", "invoice_no", "invoice_date", "contract_no"} and (
             evidence := anchored(rows, doc, sheet, legacy.get(key))
         ) and accept(legacy.get(key)):

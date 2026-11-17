@@ -273,6 +273,13 @@ def invoice_packing(invoice: Extraction, packing: Extraction) -> list[Finding]:
     return result
 
 
+def printed_route_field(candidate):
+    english = candidate.english if candidate else None
+    if usable(candidate) and english and english.status == "source" and english.value and english.evidence:
+        return candidate.model_copy(update={"value": english.value, "evidence": english.evidence})
+    return candidate
+
+
 def transport(invoice: Extraction | None, packing: Extraction | None, bill: Extraction):
     result = []
     for doc in (invoice, packing):
@@ -302,6 +309,8 @@ def transport(invoice: Extraction | None, packing: Extraction | None, bill: Extr
             right = bill.fields.get(
                 "delivery" if name == "destination" and bill.document_kind else name
             )
+            if name in {"origin", "destination", "port"}:
+                left, right = printed_route_field(left), printed_route_field(right)
             # Only overlapping fields. An OCR candidate is surfaced as uncertain.
             if not (left and left.value is not None and right and right.value is not None):
                 continue

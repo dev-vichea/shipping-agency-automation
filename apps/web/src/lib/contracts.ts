@@ -233,6 +233,16 @@ export type MasterItems = { internally_reserved: Record<number, string>;
   }[];
 };
 
+export type ConsigneeSourceRef = {
+  document_id: string;
+  role: "invoice" | "packing_list" | "draft_bl";
+  alternative_index: number | null;
+};
+export type ConsigneeOption = {
+  value: string;
+  sources: { ref: ConsigneeSourceRef; value: string; status: "present" | "uncertain"; evidence: Evidence[] }[];
+};
+
 export type ReviewCorrection = {
   document_id: string;
   role: "invoice" | "packing_list" | "draft_bl";
@@ -242,6 +252,29 @@ export type ReviewCorrection = {
   unit: string | null;
   currency: string | null;
   note: string;
+  issue_key?: string | null;
+  alternative_index?: number | null;
+  consignee_source?: ConsigneeSourceRef;
+};
+export type ReviewField = Pick<ReviewCorrection, "document_id" | "role" | "row" | "name">;
+export type ReviewIssueAction = {
+  key: string;
+  action: "confirm" | "accept_ai" | "cannot_verify";
+};
+export type ReviewIssue = {
+  key: string;
+  name: string;
+  severity: "mismatch" | "invalid" | "missing" | "uncertain" | "suggestion";
+  message: string;
+  blocking: boolean;
+  target: ReviewField | null;
+  value: string | null;
+  comparison?: [string | null, string | null] | null;
+  context_only?: boolean;
+  evidence: Evidence[];
+  can_confirm: boolean;
+  can_resolve: boolean;
+  suggestion: NonNullable<ExtractedField["english"]> | null;
 };
 export type CdcItemName = {
   invoice_document_id: string;
@@ -264,6 +297,9 @@ export type StaffReview = {
   resolutions: { key: string; note: string }[];
   mappings: { invoice_row: number; master_row: number }[];
   verify_cdc_mappings: boolean;
+  issue_actions?: ReviewIssueAction[];
+  open_issues?: Record<string, boolean>;
+  reviewed_issue_keys?: string[];
   cdc_names?: CdcItemName[];
   blockers: string[];
   permit_pending: string | null;
@@ -273,11 +309,16 @@ export type StaffReview = {
 };
 export type ReviewWorkflow = {
   review: StaffReview | null;
+  issues?: ReviewIssue[];
+  consignee_options?: ConsigneeOption[];
+  history?: (Pick<StaffReview, "id" | "actor_id" | "created_at" | "ready"> & { actor_email?: string | null })[];
+  processed?: { at: string; actor_id: string } | null;
   decisions: {
     id: string; scope: string; decision: string; actor_id: string; revision: number;
     created_at: string; snapshot_hash: string; notes: string; permit_pending: string | null;
     recipient: string | null;
     review_id: string | null;
+    import_id?: string | null;
   }[];
 };
 export type PermitDraft = { id: string; sha256: string; created_at: string; revision: number; current: boolean; recipient: string | null };

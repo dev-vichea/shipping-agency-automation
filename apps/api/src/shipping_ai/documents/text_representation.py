@@ -60,7 +60,7 @@ def annotate_languages(doc):
             )
             candidate.source_languages = languages(candidate.original_text)
             detected.update(candidate.source_languages)
-            if key not in TRANSLATABLE:
+            if key not in TRANSLATABLE or (candidate.english and candidate.english.status == "source"):
                 continue
             if key == "description":
                 printed = fields.get("english_description")

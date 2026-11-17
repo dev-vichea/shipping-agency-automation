@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import type { ReviewAnalysis } from "../src/lib/contracts";
+import type { ReviewAnalysis, ReviewWorkflow } from "../src/lib/contracts";
 
 const fixture = (name: string) => resolve("../api/tests/fixtures", name);
 
@@ -70,7 +70,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1" })).toBeVisible();
   await expectConnectorAtTarget();
   expect(legacyLineRequests).toHaveLength(0);
-  await expect(source.getByText("DEMOBL0001", { exact: true })).toBeVisible();
+  await expect(source.getByRole("textbox", { name: "B/L Number value" })).toHaveValue("DEMOBL0001");
   await source.getByRole("button", { name: "Zoom In" }).click();
   await expectConnectorAtTarget();
 
@@ -96,6 +96,11 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(connector).toBeHidden();
   await expect(details.getByText("Invoice Number", { exact: true })).toBeVisible();
   await expect(details.getByText("B/L Number", { exact: true })).toHaveCount(0);
+  const consignee = details.getByRole("button", { name: /^Consignee / });
+  await consignee.click({ position: { x: 3, y: 8 } });
+  await expect(consignee).toHaveAttribute("aria-pressed", "true");
+  await expect(source.getByRole("region", { name: "Edit Consignee" })).toBeVisible();
+  await expect(source.locator('td[data-connector-target="true"]')).toContainText("Harbor Demo Co., Ltd.");
   await expect(goods.getByRole("columnheader", { name: "Unit Price" })).toBeVisible();
   const invoiceItem = goods.getByRole("row").filter({ hasText: "Woven label" });
   await invoiceItem.getByRole("button", { name: "12 PCS", exact: true }).click();
@@ -110,6 +115,26 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(source.locator('td[data-connector-target="true"]')).toHaveText("10");
   await expect(goods.getByRole("columnheader", { name: "Gross Weight" })).toBeVisible();
   await expectConnectorAtTarget();
+
+  const workflow: ReviewWorkflow = await (await page.request.get(`${intakePath}/review`)).json();
+  const issueCount = workflow.issues?.length ?? 0;
+  expect(issueCount).toBeGreaterThan(1);
+  const issues = page.getByRole("navigation", { name: "Review issues" });
+  const previousIssue = issues.getByRole("button", { name: "Previous issue" });
+  const nextIssue = issues.getByRole("button", { name: "Next issue" });
+  await expect(issues.getByRole("status")).toHaveText(`${issueCount} issues`);
+  await expect(previousIssue).toBeDisabled();
+  await nextIssue.click();
+  await expect(issues.getByRole("status")).toContainText(`1 / ${issueCount}`);
+  await expect(source.getByLabel("Worksheet")).toHaveValue("invoice");
+  await expect(source.locator('td[data-connector-target="true"]')).toHaveText("12");
+  await expect(source.getByRole("textbox", { name: "Quantity value" })).toHaveValue("12");
+  await nextIssue.click();
+  await expect(issues.getByRole("status")).toContainText(`2 / ${issueCount}`);
+  await previousIssue.click();
+  await expect(issues.getByRole("status")).toContainText(`1 / ${issueCount}`);
+  await expect(previousIssue).toBeDisabled();
+  await expect(source.locator('td[data-connector-target="true"]')).toHaveText("12");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(goods).toBeVisible();

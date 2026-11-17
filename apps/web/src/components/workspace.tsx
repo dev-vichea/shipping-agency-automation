@@ -1,10 +1,9 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { Anchor, Download, FileText } from "lucide-react";
+import { Anchor, Download, File, FileSpreadsheet, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { Document } from "@/lib/contracts";
-import { label, timestamp } from "@/lib/format";
+import { label } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 export function Brand() {
@@ -113,53 +112,33 @@ export function Section({ title, children, action }: { title: string; children: 
   );
 }
 
-const docClassificationLabel: Record<string, string> = {
-  commercial_invoice: "Invoice",
-  invoice: "Invoice",
-  packing_list: "Packing",
-  bill_of_lading: "B/L",
-  draft_bl: "B/L",
-  customs_permit: "Permit",
-};
-
 export function Originals({ documents }: { documents: Document[] }) {
-  if (!documents.length) return <Empty>No attachments on this intake.</Empty>;
+  if (!documents.length) return <p className="px-4 py-3 text-body-sm text-muted-foreground">No attachments</p>;
   return (
-    <Table>
-      <TableHeader>
-        <TableRow>
-          <TableHead>File</TableHead><TableHead>Classification</TableHead><TableHead>Received</TableHead>
-          <TableHead className="text-right">Download</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {documents.map((doc) => (
-          <TableRow key={doc.id}>
-            <TableCell className="whitespace-normal">
-              <details className="min-w-44 max-w-sm">
-                <summary className="break-all font-medium">{doc.original_filename}</summary>
-                <div className="mt-1.5 space-y-0.5 break-all font-mono text-code-tabular text-muted-foreground">
-                  <p>{doc.size_bytes.toLocaleString("en-GB")} bytes · {doc.mime}</p>
-                  <p>SHA-256: {doc.sha256.slice(0, 24)}…</p>
-                  <p>Source msg: {doc.source_message_id}</p>
-                  {doc.parent_version_id && <p className="text-primary">Revises: {doc.parent_version_id.slice(0, 8)}</p>}
-                </div>
-              </details>
-            </TableCell>
-            <TableCell><Badge variant="secondary">{docClassificationLabel[doc.classification] ?? label(doc.classification).trim().split(/\s+/)[0]}</Badge></TableCell>
-            <TableCell className="font-mono text-code-tabular text-muted-foreground">{timestamp(doc.received_at)}</TableCell>
-            <TableCell className="text-right">
-              <a
-                className="data-link inline-flex items-center gap-1"
-                aria-label={`Download ${doc.original_filename}`}
-                href={`/api/v1/documents/${doc.id}/download`}
-              >
-                <Download size={13} aria-hidden /> Original
-              </a>
-            </TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
+    <ul className="divide-y">
+      {documents.map(({ id, original_filename: filename, mime }) => {
+        const isPdf = mime === "application/pdf" || /\.pdf$/i.test(filename);
+        const isSpreadsheet = /\.(?:xlsx?|xlsm|xlsb|csv|tsv)$/i.test(filename);
+        const Icon = isPdf ? FileText : isSpreadsheet ? FileSpreadsheet : File;
+        return (
+          <li key={id}>
+            <a
+              className="group flex items-center gap-3 px-4 py-2.5 hover:bg-background focus-visible:-outline-offset-2"
+              aria-label={`Download ${filename}`}
+              href={`/api/v1/documents/${id}/download`}
+            >
+              <span className={cn("grid size-9 shrink-0 place-items-center rounded-control",
+                isPdf ? "bg-danger-fill text-destructive" : isSpreadsheet
+                  ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-accent text-primary")}>
+                <Icon size={18} aria-hidden />
+              </span>
+              <span className="min-w-0 flex-1 wrap-anywhere text-body-sm font-medium">{filename}</span>
+              <Download size={15} aria-hidden className="shrink-0 text-muted-foreground group-hover:text-primary" />
+            </a>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

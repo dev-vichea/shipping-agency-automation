@@ -159,10 +159,22 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
   const draft: ImportDetail = await response.json();
   expect(draft).toMatchObject({ id: importId, intake_case_id: caseId, state: "draft" });
   expect(draft.documents.map(({ id }) => id).sort()).toEqual(original.documents.map(({ id }) => id).sort());
+  const overview = page.getByRole("heading", { name: "Overview", exact: true });
+  const attachments = page.getByRole("heading", { name: "Original attachments", exact: true });
+  const attachmentCard = page.locator("section").filter({ has: attachments });
+  await expect(attachmentCard.getByRole("link")).toHaveCount(draft.documents.length);
+  expect((await attachments.boundingBox())!.x).toBe((await overview.boundingBox())!.x);
+  expect((await attachments.boundingBox())!.y).toBeGreaterThan((await overview.boundingBox())!.y);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  expect((await attachments.boundingBox())!.x).toBeGreaterThan((await overview.boundingBox())!.x);
+  expect((await attachments.boundingBox())!.y).toBe((await overview.boundingBox())!.y);
   for (const doc of draft.documents) {
-    const downloaded = await page.request.get(`/api/v1/documents/${doc.id}/download`);
-    expect(downloaded.ok()).toBe(true);
-    expect(await downloaded.body()).toEqual(await readFile(fixture(doc.original_filename)));
+    const file = attachmentCard.getByRole("link", { name: `Download ${doc.original_filename}`, exact: true });
+    await expect(file).toHaveText(doc.original_filename);
+    await expect(file.locator("svg").first()).toBeVisible();
+    const [downloaded] = await Promise.all([page.waitForEvent("download"), file.click()]);
+    expect(downloaded.suggestedFilename()).toBe(doc.original_filename);
+    expect(await readFile((await downloaded.path())!)).toEqual(await readFile(fixture(doc.original_filename)));
   }
   expect((await read()).outcome).toBe("MISMATCH");
   await expect(page.getByText("Import draft · pending approval")).toBeVisible();

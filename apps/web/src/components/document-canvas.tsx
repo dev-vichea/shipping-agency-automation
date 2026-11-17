@@ -3,6 +3,7 @@
 import Image from "next/image";
 import {
   ArrowDownToLine,
+  Check,
   ChevronLeft,
   ChevronRight,
   FileSpreadsheet,
@@ -11,10 +12,12 @@ import {
   Minimize2,
   RotateCw,
   Sparkles,
+  X,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { FieldEditor } from "@/components/evidence-field-card";
 import { sourceKey } from "@/components/review-evidence";
 import { Button } from "@/components/ui/button";
 import { NativeSelect } from "@/components/ui/native-select";
@@ -84,7 +87,7 @@ export function DocumentCanvas({
   currentKey,
   evidence,
   activeFieldInfo,
-  onDismissField,
+  editor,
   className,
 }: {
   file?: { id: string; name: string; fileType: "PDF" | "Excel" | "CDC"; url: string };
@@ -92,6 +95,8 @@ export function DocumentCanvas({
   currentKey?: string;
   onChooseSource?: (key: string) => void;
   evidence?: Evidence;
+  editor?: FieldEditor;
+  editorKey?: string;
   activeFieldInfo?: { name: string; value: string; uncertain?: boolean };
   onDismissField?: () => void;
   className?: string;
@@ -119,6 +124,7 @@ export function DocumentCanvas({
   const [excelResponse, setExcelResponse] = useState<{ key: string; data?: Worksheet; error?: string }>();
 
   const canvasRef = useRef<HTMLDivElement>(null);
+  const [selectedCell, setSelectedCell] = useState<{ col: string; row: number; value: string } | null>(null);
 
   const [previousEvidence, setPreviousEvidence] = useState(evidence);
   if (evidence !== previousEvidence) {
@@ -489,35 +495,6 @@ export function DocumentCanvas({
                     {!segments.length && <span role="img" aria-label="Source citation bounding box"
                       className="absolute inset-0 rounded-xs border-2 border-primary bg-primary/20" />}
 
-                    <div
-                      className={cn(
-                        "pointer-events-auto absolute z-30 min-w-[210px] max-w-[300px] rounded-lg border border-slate-200/95 bg-white p-3 shadow-2xl ring-1 ring-slate-900/10 dark:border-slate-800 dark:bg-slate-900 dark:ring-white/10 text-left transition-all animate-in fade-in zoom-in-95 duration-150",
-                        box[1] > 0.7 ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
-                        box[0] > 0.65 ? "right-0" : "left-0"
-                      )}
-                    >
-                      <div className="space-y-1">
-                        <div className="font-mono text-xs font-bold text-foreground px-0.5 break-words">
-                          {activeFieldInfo?.value || evidence?.raw || "Extracted Value"}
-                        </div>
-                        <div className="flex flex-wrap items-center justify-between gap-x-2 text-[11px] text-muted-foreground px-0.5 pt-0.5 border-t border-slate-100 dark:border-slate-800">
-                          <span className="font-medium">{activeFieldInfo?.name || "Source citation"}</span>
-                          {evidence && <span className="font-mono">{location(evidence)}</span>}
-                          {activeFieldInfo?.uncertain && <span className="text-warning">Uncertain</span>}
-                        </div>
-                      </div>
-
-                      <div className="mt-2.5 flex items-center justify-end gap-1.5 border-t border-slate-100 pt-1.5 dark:border-slate-800">
-                        <button
-                          type="button"
-                          onClick={() => onDismissField?.()}
-                          className="flex size-7 items-center justify-center rounded-full text-muted-foreground hover:bg-slate-100 hover:text-foreground dark:hover:bg-slate-800 transition-colors cursor-pointer text-xs font-semibold"
-                          aria-label="Clear evidence selection"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
                   </div>
                 )}
                 {segments.map(([x, y, width, height], index) => (
@@ -531,8 +508,8 @@ export function DocumentCanvas({
         ) : isExcel ? (
           /* EXCEL CANVAS SHEET */
           <div
-            className="relative mx-auto rounded-xs border border-slate-200/90 bg-white p-6 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.14),0_2px_8px_-2px_rgba(0,0,0,0.06)] ring-1 ring-slate-900/5 transition-all duration-100 dark:border-slate-800 dark:bg-card dark:ring-white/5"
-            style={{ width: `${Math.max(680, (880 * zoom) / 100)}px` }}
+            className="relative mx-auto rounded-xs border border-slate-200/90 bg-white p-4 sm:p-6 shadow-[0_4px_24px_-4px_rgba(0,0,0,0.14),0_2px_8px_-2px_rgba(0,0,0,0.06)] ring-1 ring-slate-900/5 transition-all duration-100 dark:border-slate-800 dark:bg-card dark:ring-white/5 w-full"
+            style={zoom !== 100 ? { width: `${Math.max(600, (880 * zoom) / 100)}px` } : undefined}
           >
             {/* Sheet Tabs Header */}
             {worksheet && worksheet.sheets.length > 1 && (
@@ -569,6 +546,48 @@ export function DocumentCanvas({
 
             {worksheet && !excelLoading && (
               <div className="space-y-3">
+                {selectedCell && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-1.5 text-xs">
+                    <div className="flex items-center gap-2 truncate">
+                      <span className="font-mono font-bold text-primary">{selectedCell.col}{selectedCell.row}:</span>
+                      <span className="truncate max-w-[260px] sm:max-w-[340px] font-mono font-medium text-foreground" title={selectedCell.value}>
+                        &ldquo;{selectedCell.value}&rdquo;
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {editor ? (
+                        <Button
+                          size="xs"
+                          type="button"
+                          disabled={editor.busy}
+                          onClick={() => {
+                            void editor.onSave({
+                              value: selectedCell.value,
+                              unit: editor.unit,
+                              currency: editor.currency,
+                            });
+                            setSelectedCell(null);
+                          }}
+                          className="h-6 px-2.5 text-xs font-semibold shadow-xs"
+                        >
+                          <Check size={12} className="mr-1" /> Use for {activeFieldInfo?.name ?? "field"}
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground italic">
+                          Select a field on the left to assign
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedCell(null)}
+                        className="rounded p-0.5 text-muted-foreground hover:text-foreground cursor-pointer"
+                        title="Dismiss selection"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                )}
                 <div className="overflow-x-auto rounded border border-border/80">
                   <Table className="text-xs">
                     <TableHeader>
@@ -607,14 +626,25 @@ export function DocumentCanvas({
                             </TableCell>
                             {worksheet.columns.map((col, cIdx) => {
                               const selected = targetCell === `${col}${row.number}`;
+                              const isClicked = selectedCell?.col === col && selectedCell?.row === row.number;
+                              const val = row.values[cIdx];
                               return (
                                 <TableCell
                                   key={col}
                                   data-connector-target={selected ? "true" : undefined}
-                                  className={cn("max-w-[220px] truncate py-1.5 font-mono text-[11px]", selected && "bg-primary/15 font-bold ring-2 ring-inset ring-primary")}
-                                  title={row.values[cIdx]}
+                                  onClick={() => {
+                                    if (val && val.trim() !== "" && val !== "—") {
+                                      setSelectedCell({ col, row: row.number, value: val.trim() });
+                                    }
+                                  }}
+                                  className={cn(
+                                    "max-w-[220px] truncate py-1.5 font-mono text-[11px] cursor-pointer transition-colors hover:bg-primary/10",
+                                    selected && "bg-primary/15 font-bold ring-2 ring-inset ring-primary",
+                                    isClicked && "bg-primary/25 font-bold ring-2 ring-inset ring-primary"
+                                  )}
+                                  title={val ? `${col}${row.number}: ${val}` : undefined}
                                 >
-                                  {row.values[cIdx] || "—"}
+                                  {val || "—"}
                                 </TableCell>
                               );
                             })}

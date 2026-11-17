@@ -34,6 +34,7 @@ const documentFields: Record<string, string> = {
   english_description: "English Description",
   description: "Goods Description",
   unit_price: "Unit Price",
+  unit: "Unit of Measure",
   etd: "ETD",
   eta: "ETA",
 };
@@ -53,7 +54,6 @@ export function intakeField(field?: ExtractedField) {
     return {
       value: [english.value, field?.currency, field?.unit].filter(Boolean).join(" "),
       evidence: english.evidence[0] ?? field?.evidence[0],
-      original: english.value !== field?.value ? source : undefined,
       label: english.status === "proposed" ? "English proposal"
         : english.status === "verified_company_alias" ? "Verified English alias" : undefined,
     };
@@ -61,10 +61,10 @@ export function intakeField(field?: ExtractedField) {
   if (english && source !== "—") {
     return {
       value: english.status === "pending" ? "English translation pending" : "English needs review",
-      evidence: field?.evidence[0], original: source, label: undefined,
+      evidence: field?.evidence[0], label: undefined,
     };
   }
-  return { value: source, evidence: field?.evidence[0], original: undefined, label: undefined };
+  return { value: source, evidence: field?.evidence[0], label: undefined };
 }
 
 export function invoiceReference(value?: string | null) {

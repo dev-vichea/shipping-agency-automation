@@ -312,13 +312,47 @@ def test_worker_proposal_is_audited_then_staff_approves_separate_english(
             "note": "Verified against A8.",
         }
     ]
-    if master_id:
+    if not master_id:
+        issue = next(
+            issue
+            for issue in staff.get(f"{case}/review").json()["issues"]
+            if issue["target"]
+            and issue["target"]["role"] == "invoice"
+            and issue["target"]["name"] == "english_description"
+            and issue["suggestion"]
+        )
+        assert issue["suggestion"]["evidence"] == description["english"]["evidence"]
+        review_request = {
+            key: value for key, value in request.items() if key not in {"notes", "corrections"}
+        }
+        pending = staff.post(f"{case}/review", json=review_request).json()
+        assert not pending["ready"] and pending["open_issues"][issue["key"]]
+        review_request.update(
+            expected_review_id=pending["id"],
+            issue_actions=[{"key": issue["key"], "action": "accept_ai"}],
+        )
+        reviewed = staff.post(f"{case}/review", json=review_request)
+        assert reviewed.status_code == 200, reviewed.text
+        saved = reviewed.json()
+        assert saved["ready"] and issue["key"] not in saved["open_issues"]
+        assert saved["issue_log"][0]["suggestion"] == issue["suggestion"]
+        assert saved["changes"][0]["after"]["evidence"] == issue["suggestion"]["evidence"]
+        assert staff.get(f"{case}/analysis").json()["extractions"] == view["extractions"]
+        approval = staff.post(
+            f"{case}/approve",
+            json={
+                "expected_revision": view["revision"],
+                "review_id": saved["id"],
+                "notes": request["notes"],
+            },
+        )
+    else:
         request["mappings"] = [
             {"invoice_row": item["row"], "master_row": view["candidates"][0]["master_row"]}
         ]
         assert staff.post(f"{case}/review-and-approve", json=request).status_code == 422
         request["verify_cdc_mappings"] = True
-    approval = staff.post(f"{case}/review-and-approve", json=request)
+        approval = staff.post(f"{case}/review-and-approve", json=request)
     assert approval.status_code == 200, approval.text
     approved = staff.get(f"{api}/imports/{approval.json()['import_id']}").json()
     assert approved["consignee"] == TEXT["zh"][13]
@@ -372,3 +406,81 @@ def test_descriptions_with_printed_legal_names_require_manual_translation():
     annotate_languages(doc)
     assert original.english.status == "ambiguous"
     assert not any(entry["field"] == "description" for entry in choices([doc]).values())
+
+
+@pytest.mark.parametrize("repeated_origin_label", [None, "Port of loading:"])
+def test_printed_port_continuation_controls_english_and_transport_evidence(repeated_origin_label):
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    from shipping_ai.review.compare import transport
+    from shipping_ai.review.schemas import Evidence, Extraction
+    from shipping_ai.review.values import field
+
+    workbook = Workbook()
+    invoice = workbook.active
+    invoice.title = "INV"
+    for cells in [
+        ["Commercial Invoice"],
+        ["Invoice No.", "EX-104"],
+        ["起运港：", None, "厦门"],
+        [repeated_origin_label, None, "XIAMEN"],
+        ["目的港：", None, "泰国"],
+        [None, None, "Laem Chabang"],
+        ["Description", "Quantity", "Unit"],
+        ["Industrial bearings", 7, "PCS"],
+    ]:
+        invoice.append(cells)
+    output = BytesIO()
+    workbook.save(output)
+    document_id = uuid4()
+    [result] = extract(output.getvalue(), "fictional.xlsx", document_id, "other")
+
+    origin = result.fields["origin"]
+    assert origin.value == "厦门"
+    assert origin.evidence[0].cell == "C3"
+    assert origin.english.value == "XIAMEN"
+    assert origin.english.status == "source" and origin.english.evidence[0].cell == "C4"
+
+    destination = result.fields["destination"]
+    assert destination.value == "泰国"
+    assert destination.original_text == "泰国"
+    assert destination.evidence[0].cell == "C5"
+    assert destination.english.value == "Laem Chabang"
+    assert destination.english.status == "source" and destination.english.evidence[0].cell == "C6"
+    assert not any(
+        request["field"] in {"origin", "destination"} for request in choices([result]).values()
+    )
+
+    bl_id = uuid4()
+    bill = Extraction(
+        document_id=bl_id,
+        role="draft_bl",
+        status="extracted",
+        method="pdf_text",
+        document_kind="bill_of_lading",
+        fields={
+            "origin": field("Xiamen", Evidence(document_id=bl_id, page=1)),
+            "delivery": field("LAEM CHABANG", Evidence(document_id=bl_id, page=1)),
+        },
+    )
+    findings = transport(result, None, bill)
+    assert [(check.field, check.outcome, check.evidence[0].cell) for check in findings] == [
+        ("origin", "PASS", "C4"),
+        ("destination", "PASS", "C6"),
+    ]
+
+
+@pytest.mark.parametrize("next_row", [["Vessel:", None, "Ocean Star"], [None, None, None]])
+def test_printed_route_requires_immediate_continuation_in_same_field(next_row):
+    from shipping_ai.documents.extract import metadata
+
+    rows = [
+        (1, ["起运港：", None, "厦门"]),
+        (2, next_row),
+        (3, [None, None, "Ocean Star"]),
+    ]
+    origin = metadata(uuid4(), "Ports", rows, {}, "invoice")["origin"]
+    assert origin.value == "厦门"
+    assert origin.english is None
