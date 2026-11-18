@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import Script from "next/script";
 import { Geist, JetBrains_Mono } from "next/font/google";
 import { TelegramWebAppInitializer } from "@/components/telegram-web-app";
+import { Toaster } from "@/components/ui/toaster";
 import "./globals.css";
 
 const geist = Geist({
@@ -36,6 +37,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="min-h-screen">
         <Script src="https://telegram.org/js/telegram-web-app.js" strategy="beforeInteractive" />
         <TelegramWebAppInitializer />
+        <Toaster />
         {children}
       </body>
     </html>

@@ -3,6 +3,7 @@
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { Check, FileSpreadsheet, ScanSearch } from "lucide-react";
+import { toast } from "@/components/ui/toast";
 import { useWrite } from "@/components/forms";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogCloseButton, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -62,6 +63,7 @@ export function RegisterMasterDialog({ companyId, companies, openVersion, outlin
   function registered(version: MasterVersion) {
     setOpen(false);
     setSaved(true);
+    toast.saved("Master List registered!");
     if (openVersion) router.replace(scopedPath(`/cdc?version=${version.id}`, companyId));
     router.refresh();
   }

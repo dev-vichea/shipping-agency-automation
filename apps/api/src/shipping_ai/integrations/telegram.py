@@ -619,13 +619,30 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
     return "\n".join(lines), quick, buttons
 
 
+def format_item_num(val, decimals: int = 2, force_decimals: bool = False) -> str:
+    if val is None or val == "":
+        return "Pending"
+    val_str = str(val).replace(",", "").strip()
+    if not val_str:
+        return "Pending"
+    try:
+        f = float(val_str)
+        if not force_decimals and f.is_integer():
+            return f"{int(f):,}"
+        formatted = f"{f:,.{decimals}f}"
+        return formatted
+    except (ValueError, TypeError):
+        return val_str
+
+
 def format_invoice_card(case, company_name: str | None, payload: dict) -> tuple[str, list[list[dict]]]:
     ref = case.detected_reference or str(case.id)[:8]
     fields = payload.get("fields", {})
     excerpts = payload.get("source_excerpt", [])
     inv_no = fields.get("invoice_no", {}).get("value") or ref
     inv_date = resolve_issue_date([], excerpts) if not fields.get("invoice_date", {}).get("value") else format_date_readable(fields.get("invoice_date", {}).get("value"))
-    total_amt = fields.get("amount", {}).get("value") or "Pending"
+    raw_total_amt = fields.get("amount", {}).get("value")
+    total_amt = format_item_num(raw_total_amt) if raw_total_amt is not None else "Pending"
     currency = fields.get("amount", {}).get("currency") or "USD"
     supplier = fields.get("supplier", {}).get("value") or fields.get("shipper", {}).get("value") or "Pending"
     consignee = fields.get("consignee", {}).get("value") or company_name or "Pending"
@@ -651,22 +668,19 @@ def format_invoice_card(case, company_name: str | None, payload: dict) -> tuple[
         for idx, item in enumerate(items[:5], 1):
             i_fields = item.get("fields", {})
             desc = i_fields.get("description", {}).get("value") or f"Item #{idx}"
-            qty = i_fields.get("quantity", {}).get("value")
+            raw_qty = i_fields.get("quantity", {}).get("value")
             unit = i_fields.get("quantity", {}).get("unit") or i_fields.get("unit", {}).get("value") or ""
-            price = i_fields.get("unit_price", {}).get("value")
-            amt = i_fields.get("amount", {}).get("value")
+            raw_price = i_fields.get("unit_price", {}).get("value")
+            raw_amt = i_fields.get("amount", {}).get("value")
 
-            parts = []
-            if qty is not None:
-                parts.append(f"Qty: {qty} {unit}".strip())
-            if price is not None:
-                parts.append(f"Price: {price} {currency}")
-            if amt is not None:
-                parts.append(f"Amt: <code>{amt} {currency}</code>")
-            sub_info = " | ".join(parts) if parts else "Details pending"
+            qty_str = f"{format_item_num(raw_qty)} {unit}".strip() if raw_qty is not None else "Pending"
+            price_str = f"{format_item_num(raw_price, force_decimals=True)} {currency}" if raw_price is not None else "Pending"
+            amt_str = f"{format_item_num(raw_amt)} {currency}" if raw_amt is not None else "Pending"
 
             lines.append(f"{idx}. <b>{html.escape(str(desc))}</b>")
-            lines.append(f"   • {sub_info}")
+            lines.append(f"   • QTY: <code>{html.escape(qty_str)}</code>")
+            lines.append(f"   • PRICE: <code>{html.escape(price_str)}</code>")
+            lines.append(f"   • AMOUNT: <code>{html.escape(amt_str)}</code>")
         if len(items) > 5:
             lines.append(f"<i>...and {len(items) - 5} more items (view full list in Harborway)</i>")
     else:
@@ -690,11 +704,14 @@ def format_invoice_card(case, company_name: str | None, payload: dict) -> tuple[
 def format_packing_list_card(case, company_name: str | None, payload: dict) -> tuple[str, list[list[dict]]]:
     ref = case.detected_reference or str(case.id)[:8]
     fields = payload.get("fields", {})
-    gw = fields.get("gross_weight", {}).get("value") or fields.get("weight", {}).get("value") or "Pending"
+    raw_gw = fields.get("gross_weight", {}).get("value") or fields.get("weight", {}).get("value")
+    gw = format_item_num(raw_gw) if raw_gw is not None else "Pending"
     gw_unit = fields.get("gross_weight", {}).get("unit") or "KG"
-    nw = fields.get("net_weight", {}).get("value")
+    raw_nw = fields.get("net_weight", {}).get("value")
+    nw = format_item_num(raw_nw) if raw_nw is not None else None
     nw_unit = fields.get("net_weight", {}).get("unit") or "KG"
-    pkgs = fields.get("packages", {}).get("value") or fields.get("package_count", {}).get("value") or "Pending"
+    raw_pkgs = fields.get("packages", {}).get("value") or fields.get("package_count", {}).get("value")
+    pkgs = format_item_num(raw_pkgs, decimals=0) if raw_pkgs is not None else "Pending"
     origin = fields.get("origin", {}).get("value") or fields.get("loading_port", {}).get("value") or "Pending"
     supplier = fields.get("supplier", {}).get("value") or fields.get("shipper", {}).get("value") or "Pending"
     url = draft_url(case)
@@ -722,22 +739,24 @@ def format_packing_list_card(case, company_name: str | None, payload: dict) -> t
         for idx, item in enumerate(items[:5], 1):
             i_fields = item.get("fields", {})
             desc = i_fields.get("description", {}).get("value") or f"Item #{idx}"
-            item_gw = i_fields.get("gross_weight", {}).get("value")
-            item_qty = i_fields.get("quantity", {}).get("value")
-            item_unit = i_fields.get("quantity", {}).get("unit") or i_fields.get("unit", {}).get("value") or ""
-            item_pkgs = i_fields.get("packages", {}).get("value")
+            raw_qty = i_fields.get("quantity", {}).get("value")
+            unit = i_fields.get("quantity", {}).get("unit") or i_fields.get("unit", {}).get("value") or ""
+            raw_nw = i_fields.get("net_weight", {}).get("value") or i_fields.get("nw", {}).get("value")
+            raw_gw = i_fields.get("gross_weight", {}).get("value") or i_fields.get("gw", {}).get("value")
+            raw_pkgs = i_fields.get("packages", {}).get("value")
 
-            parts = []
-            if item_pkgs:
-                parts.append(f"Pkgs: {item_pkgs}")
-            if item_gw:
-                parts.append(f"GW: {item_gw} {gw_unit}")
-            if item_qty:
-                parts.append(f"Qty: {item_qty} {item_unit}".strip())
-            sub_info = " | ".join(parts) if parts else "Details pending"
+            qty_str = f"{format_item_num(raw_qty)} {unit}".strip() if raw_qty is not None else "Pending"
+            nw_str = f"{format_item_num(raw_nw)} {nw_unit}".strip() if raw_nw is not None else None
+            gw_str = f"{format_item_num(raw_gw)} {gw_unit}".strip() if raw_gw is not None else None
 
             lines.append(f"{idx}. <b>{html.escape(str(desc))}</b>")
-            lines.append(f"   • {sub_info}")
+            lines.append(f"   • QTY: <code>{html.escape(qty_str)}</code>")
+            if nw_str:
+                lines.append(f"   • NW: <code>{html.escape(nw_str)}</code>")
+            if gw_str:
+                lines.append(f"   • GW: <code>{html.escape(gw_str)}</code>")
+            if raw_pkgs and not nw_str and not gw_str:
+                lines.append(f"   • PKGS: <code>{html.escape(str(raw_pkgs))}</code>")
         if len(items) > 5:
             lines.append(f"<i>...and {len(items) - 5} more items (view full breakdown in Harborway)</i>")
     else:
@@ -790,7 +809,8 @@ def format_bl_card(case, company_name: str | None, payload: dict, all_docs: dict
     voyage = fields.get("voyage", {}).get("value")
     carrier = fields.get("carrier", {}).get("value")
     seal = fields.get("seal", {}).get("value")
-    pkgs = fields.get("packages", {}).get("value") or fields.get("package_count", {}).get("value") or "Pending"
+    raw_pkgs = fields.get("packages", {}).get("value") or fields.get("package_count", {}).get("value")
+    pkgs = format_item_num(raw_pkgs, decimals=0) if raw_pkgs is not None else "Pending"
     cargo = fields.get("cargo_summary", {}).get("value") or "Pending"
     shipper = fields.get("shipper", {}).get("value") or fields.get("supplier", {}).get("value") or "Pending"
     consignee = fields.get("consignee", {}).get("value") or company_name or "Pending"
@@ -1020,6 +1040,52 @@ def format_status_notification(
             "",
             f"🔗 <a href='{url}'>Review Updated Draft in Harborway ↗</a>",
         ])
+        buttons = card_buttons(case, review)
+        return "\n".join(lines), buttons
+
+    elif event_type in ("new_intake", "ready_for_review"):
+        transport_extra = []
+        if port_val and port_val != "Pending":
+            transport_extra.append(f"• <b>Port / Discharge:</b> {html.escape(port_val)}")
+        if container_val and container_val != "Pending":
+            transport_extra.append(f"• <b>Container:</b> {html.escape(container_val)}")
+
+        lines = [
+            "🚢 <b>New Shipment Detected</b>",
+            "",
+            f"📄 <b>Reference:</b> <code>{html.escape(ref)}</code>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+            "",
+            "📦 <b>Shipment Summary:</b>",
+            f"• <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
+            f"• <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
+            *transport_extra,
+            "",
+            f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
+            f"🚦 <b>Status:</b> {approval_text}",
+            "",
+            f"🔗 <a href='{url}'>Open Draft in Harborway ↗</a>",
+        ]
+        buttons = card_buttons(case, review)
+        return "\n".join(lines), buttons
+
+    elif event_type == "manual_matching":
+        reason = (
+            (details or {}).get("reason")
+            or case.review_reason
+            or "Matching identifiers were conflicting or uncertain."
+        )
+        lines = [
+            "🔍 <b>Manual Matching Required</b>",
+            "",
+            f"📄 <b>Reference:</b> <code>{html.escape(ref)}</code>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+            "",
+            f"⚠️ <b>Reason:</b> {html.escape(reason)}",
+            "🚦 <b>Status:</b> 🔍 Manual Matching Required",
+            "",
+            f"🔗 <a href='{url}'>Open Intake in Harborway ↗</a>",
+        ]
         buttons = card_buttons(case, review)
         return "\n".join(lines), buttons
 

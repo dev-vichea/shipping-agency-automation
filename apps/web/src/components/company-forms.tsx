@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { write } from "@/lib/client-api";
 import type { Company, StaffMember } from "@/lib/contracts";
 import { useWrite } from "@/components/forms";
+import { toast } from "@/components/ui/toast";
 
 export function CompanyForm({ company }: { company?: Company }) {
   const router = useRouter();
@@ -29,8 +30,10 @@ export function CompanyForm({ company }: { company?: Company }) {
       });
       if (company) {
         setSaved(true);
+        toast.updated("Company updated!");
         router.refresh();
       } else {
+        toast.saved("Company created!");
         router.push(`/companies/${result.id}`);
       }
     });
@@ -62,6 +65,7 @@ export function CompanyStaffForm({ companyId, members, assigned }: {
     void submit(async () => {
       await write(`/companies/${companyId}/staff`, { user_ids: data.getAll("member") });
       setSaved(true);
+      toast.updated("Staff access updated!");
       router.refresh();
     });
   }}>
@@ -89,6 +93,7 @@ export function AssignCompanyForm({ companies, caseId, revision }: {
     const data = new FormData(event.currentTarget);
     void submit(async () => {
       await write(`/intakes/${caseId}/company`, { company_id: data.get("company_id"), expected_revision: revision });
+      toast.updated("Company assigned!");
       router.refresh();
     });
   }}>

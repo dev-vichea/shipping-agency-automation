@@ -70,7 +70,7 @@ def list_cases(
     include_checks: bool = False,
     company_id: UUID | None = None,
     oldest_first: bool = False,
-    queue: Literal["approval", "draft"] | None = None,
+    queue: Literal["approval", "draft", "imports"] | None = None,
     run_state: Literal["running"] | None = None,
     source: Literal["manual", "gmail", "folder"] | None = None,
 ):
@@ -119,10 +119,9 @@ def list_cases(
         query = query.where(IntakeCase.channel == source)
     if queue == "approval":
         query = query.where(IntakeCase.state.in_(("needs_review", "ready_for_approval")))
-    if queue == "draft":
+    if queue in ("draft", "imports"):
         query = query.where(
-            ReviewSnapshot.id.is_not(None),
-            IntakeCase.state.in_(("needs_review", "ready_for_approval")),
+            IntakeCase.state.in_(("needs_review", "ready_for_approval", "approved")),
         )
     running = (
         select(AutomationRun.id)

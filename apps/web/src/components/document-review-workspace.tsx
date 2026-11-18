@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FileText, Folder, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -16,8 +16,10 @@ import { AdvisoryPanel, Findings, sourceKey } from "@/components/review-evidence
 import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
+import { toast } from "@/lib/toast";
 import { write } from "@/lib/client-api";
 import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
@@ -381,6 +383,7 @@ const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
   item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
 }) {
+  const [workspaceTab, setWorkspaceTab] = useState<"documents" | "verification">("documents");
   const [chosenMainTab, setChosenMainTab] = useState<MainTab>();
   const [chosenBlSubTabKey, setChosenBlSubTabKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
@@ -1458,70 +1461,137 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
   return <Sheet open={auditOpen} onOpenChange={setAuditOpen}>
     <div className="space-y-gutter lg:space-y-gutter-desktop">
-      <header className="panel overflow-hidden">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-2">
-          <div className="flex min-w-0 items-center gap-1.5 text-label-md text-muted-foreground">
-            <Link href="/inbox" className="shrink-0 hover:text-primary">Inbox</Link>
-            <ChevronRight size={13} aria-hidden className="shrink-0" />
-            <span className="truncate font-mono text-code-tabular text-primary">{reference ?? "Reference pending"}</span>
-            <ChevronRight size={13} aria-hidden className="shrink-0" />
-            <span className="shrink-0">Document review</span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <RefreshButton />
-            {["needs_review", "ready_for_approval", "failed"].includes(item.state) && (
-              <ReprocessDocumentsButton caseId={item.id} revision={analysis.revision} />
-            )}
-            {share}
-            {editable && (
-              <>
-                {groupedIssues.length > 0 && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => setReviewDialogOpen(true)}
-                    className="border-amber-600/30 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-400 dark:hover:bg-amber-950/40 text-xs font-medium"
-                    title="Review warnings and suggestions"
-                  >
-                    Review ({groupedIssues.length})
-                  </Button>
-                )}
+      {/* Top Bar: Breadcrumb + Action Controls */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Breadcrumb>
+          <BreadcrumbList>
+            <BreadcrumbItem>
+              <BreadcrumbLink asChild>
+                <Link href="/inbox">Inbox</Link>
+              </BreadcrumbLink>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <span className="truncate font-mono text-code-tabular text-primary font-medium">{reference ?? "Reference pending"}</span>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Document review</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
+        <div className="flex flex-wrap items-center gap-2">
+          <RefreshButton />
+          {["needs_review", "ready_for_approval", "failed"].includes(item.state) && (
+            <ReprocessDocumentsButton caseId={item.id} revision={analysis.revision} />
+          )}
+          {share}
+          {editable && (
+            <>
+              {groupedIssues.length > 0 && (
                 <Button
                   type="button"
+                  variant="outline"
                   size="sm"
                   disabled={busy}
-                  onClick={() => caseAction("approve")}
-                  className="font-semibold shadow-xs"
+                  onClick={() => setReviewDialogOpen(true)}
+                  className="border-amber-600/30 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-400 dark:hover:bg-amber-950/40 text-xs font-medium"
+                  title="Review warnings and suggestions"
                 >
-                  <Check aria-hidden /> Approve
+                  Review ({groupedIssues.length})
                 </Button>
-              </>
-            )}
-            {requiresFinalConfirmation && (
+              )}
               <Button
                 type="button"
                 size="sm"
                 disabled={busy}
-                onClick={handleConfirmFinalBL}
-                className="bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs text-xs"
+                onClick={() => caseAction("approve")}
+                className="font-semibold shadow-xs"
               >
-                <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
+                <Check aria-hidden /> Approve
               </Button>
-            )}
-            {item.state === "approved" && approval && !workflow.processed && <Button type="button" size="sm"
-              disabled={busy} onClick={() => caseAction("processed")}><Check aria-hidden /> Add to Processed</Button>}
-            {workflow.processed && <Badge variant="secondary">Processed</Badge>}
-            <SheetTrigger asChild>
-              <Button variant="outline" size="sm" type="button" className="border-intelligence-border bg-intelligence-fill text-intelligence hover:bg-intelligence-border">
-                <Sparkles aria-hidden /> Audit &amp; findings
-                {issueCount > 0 && <Badge variant="destructive">{issueCount}</Badge>}
-              </Button>
-            </SheetTrigger>
-          </div>
+            </>
+          )}
+          {requiresFinalConfirmation && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              onClick={handleConfirmFinalBL}
+              className="bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs text-xs"
+            >
+              <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
+            </Button>
+          )}
+          {item.state === "approved" && approval && !workflow.processed && (
+            <Button
+              type="button"
+              size="sm"
+              disabled={busy}
+              onClick={() => caseAction("processed")}
+            >
+              <Check aria-hidden /> Add to Processed
+            </Button>
+          )}
+          {workflow.processed && <Badge variant="secondary">Processed</Badge>}
+          <SheetTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              className="border-intelligence-border bg-intelligence-fill text-intelligence hover:bg-intelligence-border"
+            >
+              <Sparkles aria-hidden /> Audit &amp; findings
+              {issueCount > 0 && <Badge variant="destructive">{issueCount}</Badge>}
+            </Button>
+          </SheetTrigger>
         </div>
-        {actionError && <p role="alert" className="px-3 pt-1 text-xs text-destructive">{actionError}</p>}
+      </div>
+      {actionError && <p role="alert" className="text-xs text-destructive">{actionError}</p>}
+
+      {/* Top Workspace Level Tabs: Documents | Verification */}
+      <nav className="flex border-b bg-background gap-1" aria-label="Case workspace tabs">
+        <button
+          type="button"
+          onClick={() => setWorkspaceTab("documents")}
+          aria-pressed={workspaceTab === "documents"}
+          className={cn(
+            "cursor-pointer border-b-2 px-4 py-2.5 text-xs font-semibold transition-all flex items-center gap-1.5",
+            workspaceTab === "documents"
+              ? "border-primary text-primary font-bold"
+              : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+          )}
+        >
+          <FileText className="size-3.5" />
+          <span>Documents</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setWorkspaceTab("verification")}
+          aria-pressed={workspaceTab === "verification"}
+          className={cn(
+            "cursor-pointer border-b-2 px-4 py-2.5 text-xs font-semibold transition-all flex items-center gap-1.5",
+            workspaceTab === "verification"
+              ? "border-primary text-primary font-bold"
+              : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+          )}
+        >
+          <CheckCircle2 className="size-3.5" />
+          <span>Verification</span>
+          {issueCount > 0 ? (
+            <span className="rounded-control bg-destructive/10 text-destructive font-mono text-[10px] px-1.5 py-0.2 font-bold">
+              {issueCount}
+            </span>
+          ) : analysis.outcome === "PASS" ? (
+            <span className="rounded-control bg-emerald-500/10 text-emerald-600 font-mono text-[10px] px-1.5 py-0.2 font-bold">
+              PASS
+            </span>
+          ) : null}
+        </button>
+      </nav>
+
+      {/* Case Header Card */}
+      <header className="panel overflow-hidden">
         <div className="flex flex-wrap items-start justify-between gap-3 px-3 py-2.5">
           <div className="min-w-0">
             <h1 className="break-words text-headline-lg">{reference ?? "Intake case"}</h1>
@@ -1582,13 +1652,109 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         )}
       </header>
 
-      {/* Main Review Workspace Layout */}
-      <div
-        ref={workspaceGridRef}
-        className="relative grid min-w-0 items-start gap-gutter lg:gap-gutter-desktop xl:grid-cols-12"
-        role="region"
-        aria-label="Document evidence and comparisons"
-      >
+      {workspaceTab === "verification" ? (
+        <div className="space-y-4 pt-2">
+          {/* 1. CDC Master List Selector */}
+          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border bg-card">
+            <div className="flex items-center gap-3">
+              <div className="grid size-9 place-items-center rounded-md bg-primary/10 text-primary">
+                <FileSpreadsheet className="size-5" />
+              </div>
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">CDC Master List</div>
+                <div className="text-sm font-semibold">
+                  {analysis.selected_master?.approval_ref
+                    ? `Master List ${analysis.selected_master.approval_ref} (${analysis.selected_master.year})`
+                    : analysis.analyzed_master?.approval_ref
+                    ? `Master List ${analysis.analyzed_master.approval_ref} (${analysis.analyzed_master.year})`
+                    : "No Master List Selected"}
+                </div>
+              </div>
+            </div>
+            <ReviewActions
+              caseId={item.id}
+              revision={analysis.revision}
+              selected={analysis.selected_master ?? master ?? undefined}
+              versions={versions}
+              companyId={item.company_id ?? undefined}
+              canRegister={admin}
+              pending={processing}
+              showReprocess={false}
+            />
+          </div>
+
+          {/* 2. CDC Item Matching */}
+          <div className="rounded-lg border bg-card overflow-hidden">
+            <div className="border-b px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="size-4 text-primary" />
+                <h2 className="text-sm font-semibold">CDC Item Matching</h2>
+              </div>
+              <div className="flex items-center gap-2">
+                {analysis.outcome && <Status value={analysis.outcome} />}
+              </div>
+            </div>
+            <div className="p-4">
+              {candidates.length > 0 ? (
+                <ReviewCdcMappings
+                  key={saved?.id ?? "none"}
+                  candidates={candidates}
+                  saved={saved}
+                  busy={busy}
+                  openInitially
+                  onSave={async (mappings) => {
+                    await saveReview({ ...reviewDraft(saved), mappings, verify_cdc_mappings: mappings.length > 0 });
+                    toast.updated("CDC mappings updated!");
+                  }}
+                />
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                    No CDC candidates available. Select a CDC Master List above to run matching.
+                </p>
+              )}
+            </div>
+          </div>
+
+          {/* 3. Audit Checks & Findings */}
+          <div className="rounded-lg border bg-card overflow-hidden">
+            <div className="border-b px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Sparkles className="size-4 text-primary" />
+                <h2 className="text-sm font-semibold">Audit Checks &amp; Findings</h2>
+              </div>
+              <span className="text-xs font-mono text-muted-foreground">
+                {analysis.findings?.length ?? 0} checks
+              </span>
+            </div>
+            <div className="divide-y text-xs">
+              {analysis.findings && analysis.findings.length > 0 ? (
+                analysis.findings.map((f, idx) => (
+                  <div key={idx} className="flex items-start justify-between gap-3 p-3">
+                    <div className="space-y-0.5 min-w-0">
+                      <div className="font-semibold text-foreground">
+                        {f.field ? documentFieldLabel(f.field) : f.group ? label(f.group) : `Check #${idx + 1}`}
+                      </div>
+                      {f.explanation && <div className="text-muted-foreground">{f.explanation}</div>}
+                    </div>
+                    <Status value={f.outcome} />
+                  </div>
+                ))
+              ) : (
+                <div className="p-4 text-xs text-muted-foreground">
+                  No findings recorded for this analysis revision.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Main Review Workspace Layout */
+        <div
+          ref={workspaceGridRef}
+          className="relative grid min-w-0 items-start gap-gutter lg:gap-gutter-desktop xl:grid-cols-12"
+          role="region"
+          aria-label="Document evidence and comparisons"
+        >
         <ConnectorLine containerRef={workspaceGridRef} active={!!selectedEvidence} />
 
         {/* Left Column: Review & Extractions Panel */}
@@ -1779,6 +1945,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           />
         </div>
       </div>
+      )}
 
       <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
         <DialogContent className="max-w-3xl p-0 overflow-hidden sm:max-w-3xl">

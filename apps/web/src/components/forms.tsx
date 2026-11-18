@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/toast";
 import { write } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
 import type { Company, ImportSummary, Receipt } from "@/lib/contracts";
@@ -78,6 +79,7 @@ export function IntakeForm({ caseId, revisionChoices = [], companies = [], defau
     void submit(async () => {
       const receipt = await write<Receipt>("/intakes/upload", form);
       setMessageId(undefined);
+      toast.saved(caseId ? "Arrival archived!" : "Intake uploaded!");
       if (caseId) {
         element.reset();
         router.refresh();
@@ -135,6 +137,7 @@ export function DraftForm({ caseId, company }: { caseId: string; company?: strin
         intake_case_id: caseId, company: data.get("company"), invoice_no: data.get("invoice_no"),
         supplier: data.get("supplier") || null, consignee: data.get("consignee") || null,
       });
+      toast.saved("Draft saved!");
       router.push(`/imports/${draft.id}`);
     });
   }
@@ -154,6 +157,7 @@ export function AutomationAction({ path, children }: { path: string; children: R
   const { error, busy, submit } = useWrite();
   return <div><Button variant="outline" size="sm" disabled={busy} onClick={() => void submit(async () => {
     await write(path);
+    toast.updated("Queued run");
     router.refresh();
   })}>{busy ? "Queuing…" : children}</Button><ErrorMessage error={error} /></div>;
 }

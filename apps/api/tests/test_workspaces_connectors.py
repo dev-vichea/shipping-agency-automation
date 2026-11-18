@@ -725,3 +725,48 @@ def test_telegram_status_notifications_on_approval_rejection_and_revision(staff,
     assert "Document Revision Received" in rev_msg
     assert "Final B/L (Telex / Original) received" in rev_msg
 
+    # 4. Test New Intake Detection Notification on Analysis
+    calls.clear()
+    path3 = archive(staff, company_id=company)
+    case_id3 = UUID(path3.split("/")[-1])
+    finish_queue()
+
+    new_intake_sends = [
+        c for c in calls if c["method"] == "sendMessage" and "New Shipment Detected" in c["payload"]["text"]
+    ]
+    assert len(new_intake_sends) >= 1
+    new_msg = new_intake_sends[0]["payload"]["text"]
+    assert "New Shipment Detected" in new_msg
+    assert "INV-FIXTURE-101" in new_msg
+    assert "XIN CAI FU" in new_msg or COMPANY in new_msg
+
+    with session_factory().begin() as db:
+        new_event = db.scalar(
+            select(ActivityEvent).filter_by(
+                intake_case_id=case_id3, event_type="telegram_status_new_intake"
+            )
+        )
+        assert new_event is not None
+
+    # 5. Test Invoice Item Formatting (• QTY:, • PRICE:, • AMOUNT:)
+    calls.clear()
+    with session_factory().begin() as db:
+        telegram.handle_document_command(db, "55512345", "inv", "INV-FIXTURE-101")
+    inv_sends = [c for c in calls if c["method"] == "sendMessage"]
+    assert len(inv_sends) >= 1
+    inv_text = inv_sends[0]["payload"]["text"]
+    assert "• QTY:" in inv_text
+    assert "• PRICE:" in inv_text
+    assert "• AMOUNT:" in inv_text
+
+    # 6. Test Packing List Item Formatting (• QTY:, • NW:, • GW:)
+    calls.clear()
+    with session_factory().begin() as db:
+        telegram.handle_document_command(db, "55512345", "pl", "INV-FIXTURE-101")
+    pl_sends = [c for c in calls if c["method"] == "sendMessage"]
+    assert len(pl_sends) >= 1
+    pl_text = pl_sends[0]["payload"]["text"]
+    assert "• QTY:" in pl_text
+    assert "• GW:" in pl_text
+
+

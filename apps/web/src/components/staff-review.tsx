@@ -25,17 +25,18 @@ export function reviewDraft(saved: StaffReview | null): ReviewDraft {
   };
 }
 
-export function ReviewCdcMappings({ candidates, saved, busy, onSave }: {
+export function ReviewCdcMappings({ candidates, saved, busy, onSave, openInitially = false }: {
   candidates: ReviewAnalysis["candidates"]; saved: StaffReview | null; busy: boolean;
   onSave: (mappings: StaffReview["mappings"]) => Promise<void>;
+  openInitially?: boolean;
 }) {
   const [mappings, setMappings] = useState(saved?.mappings ?? []);
   const [verified, setVerified] = useState(saved?.verify_cdc_mappings ?? false);
   const [error, setError] = useState("");
   const rows = [...new Set(candidates.map((candidate) => candidate.invoice_row))];
   if (!rows.length) return null;
-  return <details className="text-xs">
-    <summary className="cursor-pointer text-primary">Verify CDC candidates</summary>
+  return <details className="text-xs" open={openInitially || undefined}>
+    <summary className="cursor-pointer text-primary font-semibold">Verify CDC candidates</summary>
     <form className="space-y-2 py-2" onSubmit={(event) => {
       event.preventDefault();
       setError("");

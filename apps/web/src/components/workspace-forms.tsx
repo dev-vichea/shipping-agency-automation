@@ -4,6 +4,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWrite } from "@/components/forms";
+import { toast } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { write } from "@/lib/client-api";
@@ -20,8 +21,10 @@ export function WorkspaceForm({ existing }: { existing?: string }) {
       await write(existing ? "/workspace/settings" : "/workspaces", Object.fromEntries(form));
       if (existing) {
         setSaved(true);
+        toast.updated("Workspace updated!");
         router.refresh();
       } else {
+        toast.saved("Workspace created!");
         // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- Reload scoped data after creating a workspace.
         window.location.assign("/home");
       }
@@ -45,6 +48,7 @@ export function MemberForm() {
     void submit(async () => {
       await write("/workspace/members", Object.fromEntries(form));
       setSaved(true);
+      toast.saved("Staff member added!");
       router.refresh();
     });
   }}>
@@ -65,6 +69,7 @@ export function RemoveMember({ id, email }: { id: string; email: string }) {
       if (!window.confirm(`Remove workspace access for ${email}?`)) return;
       void submit(async () => {
         await write(`/workspace/members/${id}/remove`);
+        toast.updated("Staff member removed");
         router.refresh();
       });
     }}>Remove</Button>
@@ -83,6 +88,7 @@ export function AlertPreferences({ approvals, automation }: { approvals: boolean
     void submit(async () => {
       await write("/auth/preferences", { approval_alerts: data.has("approval"), automation_alerts: data.has("automation") });
       setSaved(true);
+      toast.updated("Alert preferences updated!");
       router.refresh();
     });
   }}>
@@ -106,6 +112,7 @@ export function ChangePasswordForm() {
       await write("/auth/password", Object.fromEntries(data));
       element.reset();
       setSaved(true);
+      toast.updated("Password updated!");
     });
   }}>
     <label className="grid gap-1.5 font-medium">Current password<Input name="current_password" type="password" autoComplete="current-password" maxLength={128} required /></label>

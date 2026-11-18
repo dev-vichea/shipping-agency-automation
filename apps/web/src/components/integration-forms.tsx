@@ -7,6 +7,7 @@ import { useWrite } from "@/components/forms";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { toast } from "@/components/ui/toast";
 import { write } from "@/lib/client-api";
 import type { Company, Integrations, StaffMember, TelegramPairing, TelegramPreview } from "@/lib/contracts";
 import { useTelegramWebApp } from "@/lib/telegram";
@@ -38,6 +39,7 @@ export function GmailForm({ config, companies }: { config: Integrations["gmail"]
         company_id: data.get("company_id") || null, enabled: data.get("enabled") === "on",
       });
       setSaved(true);
+      toast.updated("Inbox settings updated!");
       router.refresh();
     });
   }}>
@@ -149,6 +151,7 @@ export function TelegramLinkForm({ members, botUsername }: { members: StaffMembe
               await write("/integrations/telegram/recipients", Object.fromEntries(data));
               element.reset();
               setSaved(true);
+              toast.saved("Recipient linked!");
               router.refresh();
             });
           }}
@@ -185,7 +188,11 @@ export function UnlinkTelegram({ id, name }: { id: string; name: string }) {
   return <div>
     <Button size="xs" variant="outline" disabled={busy} onClick={() => {
       if (!window.confirm(`Remove ${name} as a Telegram recipient?`)) return;
-      void submit(async () => { await write(`/integrations/telegram/recipients/${id}/unlink`); router.refresh(); });
+      void submit(async () => {
+        await write(`/integrations/telegram/recipients/${id}/unlink`);
+        toast.updated("Recipient unlinked");
+        router.refresh();
+      });
     }}>Unlink</Button>
     {error && <p className="field-error mt-1" role="alert">{error}</p>}
   </div>;
@@ -240,6 +247,7 @@ export function QuickDecisionForm({ caseId, revision, reviewId, reject }: {
         if (reject) {
           await write(`/intakes/${caseId}/quick-rejection`, payload);
           hapticSuccess();
+          toast.updated("Draft rejected");
           if (isTelegram) {
             setCompleted("Draft rejected. Returning to Telegram...");
             setTimeout(() => close(), 1200);
@@ -249,6 +257,7 @@ export function QuickDecisionForm({ caseId, revision, reviewId, reject }: {
         } else {
           const { import_id: id } = await write<{ import_id: string }>(`/intakes/${caseId}/quick-approval`, payload);
           hapticSuccess();
+          toast.saved("Import approved!");
           if (isTelegram) {
             setCompleted("Import approved. Returning to Telegram...");
             setTimeout(() => close(), 1200);

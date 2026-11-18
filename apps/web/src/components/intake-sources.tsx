@@ -13,6 +13,7 @@ import { Dialog, DialogCloseButton, DialogContent, DialogTitle, DialogTrigger } 
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { toast } from "@/components/ui/toast";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, Section } from "@/components/workspace";
 import { write } from "@/lib/client-api";
@@ -154,9 +155,11 @@ export function IntakeSources({ gmail, companies, folders, macAppAvailable }: {
               if (editing) {
                 await write(`/integrations/folders/${editing.id}/settings`, { ...values, enabled: editing.enabled });
                 setPanel(null);
+                toast.updated("Folder source updated!");
               } else {
                 const pairing = await write<Pairing>("/integrations/folders", values);
                 setPanel({ view: "picker", pairing });
+                toast.saved("Folder source created!");
               }
               refresh();
             });

@@ -5,6 +5,7 @@ import { ChevronRight, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { write } from "@/lib/client-api";
+import { toast } from "@/components/ui/toast";
 
 export function PermitRelease({ importId, draftId, recipient }: {
   importId: string;
@@ -25,6 +26,7 @@ export function PermitRelease({ importId, draftId, recipient }: {
         recipient: data.get("recipient"), notes: data.get("notes"),
       });
       setAuthorized(result.recipient);
+      toast.saved("Release authorized!");
     } catch (issue) {
       setError(issue instanceof Error ? issue.message : "Could not authorize release.");
     } finally {
