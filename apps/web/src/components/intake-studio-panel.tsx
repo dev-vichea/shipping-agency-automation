@@ -296,7 +296,7 @@ function InlineReviewDrawer({
       <form onSubmit={handleSubmit} className="space-y-1">
         <div className="flex items-center gap-1.5">
           {editor.dimension ? (
-            <div className="flex-1 min-w-0 flex items-center rounded border border-border/70 bg-background overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors">
+            <div className="flex-1 min-w-0 flex items-center rounded border border-border/70 bg-transparent overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors">
               <input
                 type="text"
                 value={text}
@@ -520,7 +520,7 @@ export function IntakeStudioPanel({
           <h3 className="flex items-center gap-1.5 px-0.5 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             <Icon size={12} className="text-primary shrink-0" aria-hidden /> {title}
           </h3>
-          <div className="divide-y divide-border/60 border-y border-border/60">
+          <div className="space-y-0.5">
             {keys.map((key) => {
               const field = fields[key];
               const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as ReviewField["role"], row: null, name: key };
@@ -546,8 +546,8 @@ export function IntakeStudioPanel({
                 <div
                   key={key}
                   className={cn(
-                    "transition-colors",
-                    selected && "bg-primary/5 dark:bg-primary/10 border-l-2 border-primary"
+                    "transition-colors rounded-md",
+                    selected && "bg-primary/8 dark:bg-primary/15"
                   )}
                 >
                   <div
@@ -576,9 +576,8 @@ export function IntakeStudioPanel({
                       }
                     } : undefined}
                     className={cn(
-                      "grid w-full grid-cols-[minmax(7rem,1fr)_minmax(0,2fr)] items-center gap-2 px-2 py-2 text-left text-xs transition-colors outline-none",
-                      interactive && "cursor-pointer hover:bg-muted/40",
-                      status === "problem" && !selected && "bg-danger-fill/40"
+                      "grid w-full grid-cols-[minmax(7.5rem,1.2fr)_minmax(0,2fr)] items-center gap-3 px-2 py-1.5 text-left text-xs transition-colors outline-none rounded-md",
+                      interactive && "cursor-pointer hover:bg-muted/40"
                     )}
                   >
                     <span className="flex items-center gap-2 font-medium">

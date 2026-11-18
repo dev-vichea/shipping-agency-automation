@@ -150,12 +150,9 @@ function ReviewTreeItem({
   };
 
   return (
-    <div key={item.id} className="relative flex items-center justify-between gap-3 py-1 text-xs">
-      {/* Branch elbow connector */}
-      <span className="pointer-events-none absolute -left-4 top-1/2 w-4 border-t border-dashed border-border/80" aria-hidden="true" />
-
+    <div key={item.id} className="grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1 text-xs">
       {/* Leaf icon + Clean label */}
-      <div className="flex items-center gap-1.5 w-36 sm:w-44 shrink-0">
+      <div className="flex items-center gap-1.5 min-w-0">
         <FileText size={13} className="text-amber-600/70 shrink-0" />
         <span className="text-xs font-medium text-foreground truncate block" title={item.label}>
           {item.label}
@@ -163,9 +160,9 @@ function ReviewTreeItem({
       </div>
 
       {/* Edit input: segmented [ amount | unit ] for dimensioned, or text input */}
-      <div className="min-w-0 flex-1 flex items-center gap-1.5">
+      <div className="min-w-0 flex items-center gap-2">
         {isDimensioned ? (
-          <div className="flex items-center rounded border border-border/70 bg-background overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors max-w-xs w-full h-7">
+          <div className="flex items-center rounded border border-border/70 bg-transparent overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors max-w-xs w-full h-7">
             <input
               type="text"
               value={amount}
@@ -203,7 +200,7 @@ function ReviewTreeItem({
               setChosenChoice(undefined);
             }}
             disabled={busy}
-            className="h-7 w-full max-w-xs rounded border border-border/70 bg-background px-2.5 py-0 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
+            className="h-7 w-full max-w-xs rounded border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
             placeholder={`Enter ${item.label.toLowerCase()}…`}
           />
         )}
@@ -1433,21 +1430,52 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           </div>
         </div>
         {!item.company_id && !item.import_id && !["approved", "rejected"].includes(item.state) && <AssignCompanyForm companies={companies} caseId={item.id} revision={analysis.revision} />}
-        {metadata.length > 0 && <dl className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-4 xl:grid-cols-8">
-          {metadata.map(({ key, title, field, target }) => {
-            const text = intakeField(field);
-            const cite = text.evidence;
-            const needsReview = intakeStatus(field) === "review";
-            return <div key={key} className="min-w-0 bg-background px-3 py-2">
-              <dt className="panel-label">{title}</dt>
-              <dd className={cn("mt-0.5 flex min-w-0 items-center gap-1.5 truncate text-label-md", ["bl_no", "container", "seal"].includes(key) && "font-mono text-code-tabular")} title={text.value}>
-                {cite ? <button type="button" className="data-link block max-w-full cursor-pointer truncate text-left"
-                  onClick={() => inspect(cite, { id: `field:${key}`, name: title, value: text.value, target, uncertain: needsReview })}>{text.value}</button> : text.value}
-                {needsReview && <span className="size-1.5 rounded-full bg-amber-500 shrink-0" title="Review suggested" />}
-              </dd>
-            </div>;
-          })}
-        </dl>}
+        {metadata.length > 0 && (
+          <dl className="grid grid-cols-2 gap-x-8 gap-y-2.5 px-3.5 py-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+            {metadata.map(({ key, title, field, target }) => {
+              const text = intakeField(field);
+              const cite = text.evidence;
+              const needsReview = intakeStatus(field) === "review";
+              return (
+                <div key={key} className="min-w-0 space-y-0.5">
+                  <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
+                    {title}
+                  </dt>
+                  <dd
+                    className={cn(
+                      "flex min-w-0 items-center gap-1.5 truncate text-xs font-semibold text-foreground",
+                      ["bl_no", "container", "seal"].includes(key) && "font-mono"
+                    )}
+                    title={text.value}
+                  >
+                    {cite ? (
+                      <button
+                        type="button"
+                        className="data-link block max-w-full cursor-pointer truncate text-left hover:text-primary transition-colors"
+                        onClick={() =>
+                          inspect(cite, {
+                            id: `field:${key}`,
+                            name: title,
+                            value: text.value,
+                            target,
+                            uncertain: needsReview,
+                          })
+                        }
+                      >
+                        {text.value}
+                      </button>
+                    ) : (
+                      text.value
+                    )}
+                    {needsReview && (
+                      <span className="size-1.5 rounded-full bg-amber-500 shrink-0" title="Review suggested" />
+                    )}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+        )}
       </header>
 
       {/* Main Review Workspace Layout */}
@@ -1713,19 +1741,16 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
                   {/* Direct Branch Leaf Items */}
                   {branch.items && branch.items.length > 0 && (
-                    <div className="relative ml-2.5 pl-4 space-y-1.5 py-1">
-                      <div className="pointer-events-none absolute left-0 top-0 bottom-3.5 w-px border-l border-dashed border-border/80" aria-hidden="true" />
+                    <div className="space-y-1 py-0.5 pl-2">
                       {branch.items.map((item) => renderTreeItem(item))}
                     </div>
                   )}
 
                   {/* Row Groups (Line Items) */}
                   {branch.rowGroups && branch.rowGroups.length > 0 && (
-                    <div className="relative ml-2.5 pl-4 space-y-3 py-1">
-                      <div className="pointer-events-none absolute left-0 top-0 bottom-4 w-px border-l border-dashed border-border/80" aria-hidden="true" />
+                    <div className="space-y-2.5 py-1 pl-2">
                       {branch.rowGroups.map((rg) => (
-                        <div key={rg.row} className="relative space-y-1">
-                          <span className="pointer-events-none absolute -left-4 top-3 w-4 border-t border-dashed border-border/80" aria-hidden="true" />
+                        <div key={rg.row} className="space-y-1">
                           {/* Row Folder Header */}
                           <div className="flex items-center gap-2 py-0.5 text-xs font-medium text-foreground">
                             <Folder size={14} className="text-amber-600/70 fill-amber-600/10 shrink-0" />
@@ -1741,8 +1766,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                           </div>
 
                           {/* Row Leaf Items */}
-                          <div className="relative ml-2.5 pl-4 space-y-1.5 py-1">
-                            <div className="pointer-events-none absolute left-0 top-0 bottom-3.5 w-px border-l border-dashed border-border/80" aria-hidden="true" />
+                          <div className="space-y-1 py-0.5 pl-3">
                             {rg.items.map((item) => renderTreeItem(item))}
                           </div>
                         </div>
