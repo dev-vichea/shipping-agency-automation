@@ -222,19 +222,16 @@ function ReviewTreeItem({
                   {filteredOptions.length > 0 ? (
                     filteredOptions.map((opt, i) => {
                       const isCurrent =
-                        opt.value.trim() === amount.trim() &&
-                        (!opt.unit || opt.unit.trim() === unit.trim());
+                        opt.choice && chosenChoice
+                          ? opt.choice.id === chosenChoice.id
+                          : opt.value.trim() === amount.trim() &&
+                            (opt.unit ? opt.unit.trim() === unit.trim() : true);
                       return (
                         <button
                           key={`${opt.value}-${i}`}
                           type="button"
                           onClick={() => handleSelectOption(opt)}
-                          className={cn(
-                            "flex w-full flex-col items-start rounded px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
-                            isCurrent
-                              ? "bg-primary/10 text-primary font-medium"
-                              : "hover:bg-muted/70 text-foreground"
-                          )}
+                          className="flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
                         >
                           <div className="flex w-full items-center justify-between gap-2">
                             <span className="font-mono text-xs font-medium truncate">
@@ -245,7 +242,7 @@ function ReviewTreeItem({
                                 </span>
                               )}
                             </span>
-                            {isCurrent && <Check size={12} className="text-primary shrink-0" />}
+                            {isCurrent && <Check size={14} className="text-primary shrink-0" />}
                           </div>
                           <span className="text-[10px] text-muted-foreground truncate w-full">
                             {opt.label}
@@ -312,24 +309,22 @@ function ReviewTreeItem({
                 </div>
                 {filteredOptions.length > 0 ? (
                   filteredOptions.map((opt, i) => {
-                    const isCurrent = opt.value.trim() === amount.trim();
+                    const isCurrent =
+                      opt.choice && chosenChoice
+                        ? opt.choice.id === chosenChoice.id
+                        : opt.value.trim() === amount.trim();
                     return (
                       <button
                         key={`${opt.value}-${i}`}
                         type="button"
                         onClick={() => handleSelectOption(opt)}
-                        className={cn(
-                          "flex w-full flex-col items-start rounded px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
-                          isCurrent
-                            ? "bg-primary/10 text-primary font-medium"
-                            : "hover:bg-muted/70 text-foreground"
-                        )}
+                        className="flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
                       >
                         <div className="flex w-full items-center justify-between gap-2">
                           <span className="font-mono text-xs font-medium truncate">
                             {opt.value}
                           </span>
-                          {isCurrent && <Check size={12} className="text-primary shrink-0" />}
+                          {isCurrent && <Check size={14} className="text-primary shrink-0" />}
                         </div>
                         <span className="text-[10px] text-muted-foreground truncate w-full">
                           {opt.label}
