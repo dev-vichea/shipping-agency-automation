@@ -1,26 +1,11 @@
-from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
-from uuid import UUID, uuid4
 
 import pymupdf
 import pytest
-from fastapi.testclient import TestClient
 from fixtures.build_samples import COMPANY, SUPPLIER, draft_bill, supplier
 from openpyxl import Workbook
-from sqlalchemy import select
 from test_phase_two import finish_queue
-
-from shipping_ai.core.db import session_factory
-from shipping_ai.documents.extract import extract
-from shipping_ai.documents.versions import compute_fields_diff, reconcile_review_draft
-from shipping_ai.intakes.matching import (
-    ExtractedIdentifiers,
-    detect_document_relationship,
-    extract_file_identifiers,
-    match_shipment,
-)
-from shipping_ai.models import Document, IntakeCase, ReviewSnapshot, User
 
 API = "/api/v1"
 REAL_SAMPLE_DIR = Path(
@@ -246,7 +231,7 @@ def test_uncertain_matching_and_manual_linking(staff):
         files=[("files", ("inv_b.xlsx", sheet_b, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))],
     )
     assert res_b.status_code == 201
-    case_b_id = res_b.json()["case_id"]
+    assert res_b.json()["case_id"]
     finish_queue()
 
     bill_conflicting = make_pdf_bl(

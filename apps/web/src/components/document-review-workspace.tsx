@@ -22,7 +22,7 @@ import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/compone
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "@/lib/toast";
 import { write } from "@/lib/client-api";
-import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
+import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewCorrection, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -402,6 +402,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     }
     return true;
   });
+  const [cdcAutoRuleEnabled, setCdcAutoRuleEnabled] = useState(true);
   const [selectedValues, setSelectedValues] = useState<
     Record<string, { value: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }>
   >({});
@@ -1042,8 +1043,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return await saveReview(nextDraft);
   }
 
-
-
   function cleanFieldLabel(name: string): string {
     if (name === "unit") return "Unit of Measure";
     if (name === "packages") return "Total Packages";
@@ -1260,6 +1259,169 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     }
 
     return await saveReview(nextDraft);
+  }
+
+  async function handleApplyCdcRules(): Promise<void> {
+    if (busy) return;
+    setActionError("");
+
+    const invDoc = analysis.extractions.find((d) => d.role === "invoice");
+    const plDoc = analysis.extractions.find((d) => d.role === "packing_list");
+    const blDoc = analysis.extractions.find((d) => d.role === "draft_bl" || d.role === "final_bl");
+
+    const newSelectedValues = { ...selectedValues };
+    const correctionsToAdd: ReviewCorrection[] = [];
+
+    // 1. Build CDC candidates mapping map
+    const topCandidatesByRow = new Map<number, (typeof analysis.candidates)[0]>();
+    for (const cand of analysis.candidates || []) {
+      const prev = topCandidatesByRow.get(cand.invoice_row);
+      if (!prev || cand.score > prev.score) {
+        topCandidatesByRow.set(cand.invoice_row, cand);
+      }
+    }
+
+    const nextMappings = Array.from(topCandidatesByRow.values()).map((c) => ({
+      invoice_row: c.invoice_row,
+      master_row: c.master_row,
+    }));
+
+    // 2. Iterate over invoice line items and reconcile with PL & CDC
+    if (invDoc && invDoc.items) {
+      for (const invItem of invDoc.items) {
+        const row = invItem.row;
+        const plItem = plDoc?.items?.find((p) => p.row === row);
+        const topCand = topCandidatesByRow.get(row);
+
+        // A. Description: Use matched CDC Master List description, or AI English translation
+        const cdcDesc =
+          topCand?.description ||
+          invItem.fields.description?.english?.value ||
+          invItem.fields.description?.value;
+
+        if (cdcDesc) {
+          const descId = `description:${row}`;
+          newSelectedValues[descId] = { value: cdcDesc };
+          correctionsToAdd.push({
+            document_id: invDoc.document_id,
+            role: "invoice",
+            row,
+            name: "description",
+            value: cdcDesc,
+            unit: null,
+            currency: null,
+            note: "Auto-corrected based on CDC Master List description.",
+          });
+        }
+
+        // B. Unit: standard CDC unit (KG for fabrics, YDS/GROSS/PCS)
+        const rawUnit = invItem.fields.quantity?.unit || plItem?.fields.quantity?.unit || "KG";
+        const stdUnit = rawUnit.toUpperCase().trim();
+        const unitId = `unit:${row}`;
+        newSelectedValues[unitId] = { value: stdUnit };
+
+        // C. Unit Price: USD price from invoice
+        const priceVal = invItem.fields.unit_price?.value;
+        if (priceVal) {
+          const priceId = `unit_price:${row}`;
+          newSelectedValues[priceId] = { value: String(priceVal), currency: "USD" };
+          correctionsToAdd.push({
+            document_id: invDoc.document_id,
+            role: "invoice",
+            row,
+            name: "unit_price",
+            value: String(priceVal),
+            unit: null,
+            currency: "USD",
+            note: "Confirmed unit price in USD.",
+          });
+        }
+
+        // D. Net Weight: from Packing List
+        if (plItem?.fields.net_weight?.value) {
+          const nwVal = String(plItem.fields.net_weight.value);
+          const nwUnit = plItem.fields.net_weight.unit || "KG";
+          const nwId = `net_weight:${row}`;
+          newSelectedValues[nwId] = { value: nwVal, unit: nwUnit };
+          if (plDoc) {
+            correctionsToAdd.push({
+              document_id: plDoc.document_id,
+              role: "packing_list",
+              row,
+              name: "net_weight",
+              value: nwVal,
+              unit: nwUnit,
+              currency: null,
+              note: "Reconciled net weight from Packing List.",
+            });
+          }
+        }
+
+        // E. Gross Weight: from Packing List
+        if (plItem?.fields.gross_weight?.value) {
+          const gwVal = String(plItem.fields.gross_weight.value);
+          const gwUnit = plItem.fields.gross_weight.unit || "KG";
+          const gwId = `gross_weight:${row}`;
+          newSelectedValues[gwId] = { value: gwVal, unit: gwUnit };
+          if (plDoc) {
+            correctionsToAdd.push({
+              document_id: plDoc.document_id,
+              role: "packing_list",
+              row,
+              name: "gross_weight",
+              value: gwVal,
+              unit: gwUnit,
+              currency: null,
+              note: "Reconciled gross weight from Packing List.",
+            });
+          }
+        }
+
+        // F. CDC Item No / Serial
+        if (topCand) {
+          const serialVal = String(topCand.master_row).padStart(2, "0");
+          newSelectedValues[`cdc_no:${row}`] = { value: serialVal };
+        }
+      }
+    }
+
+    // 3. Reconcile header fields (Packages, Gross Weight)
+    const totalGw = plDoc?.fields.gross_weight?.value || blDoc?.fields.gross_weight?.value;
+    if (totalGw) {
+      newSelectedValues["gross_weight"] = { value: String(totalGw), unit: "KG" };
+    }
+    const totalPkg = plDoc?.fields.packages?.value || blDoc?.fields.packages?.value;
+    if (totalPkg) {
+      newSelectedValues["packages"] = { value: String(totalPkg), unit: "PKG" };
+    }
+
+    setSelectedValues(newSelectedValues);
+
+    // 4. Save review draft immediately
+    const baseDraft = reviewDraft(saved);
+    const existingCorrections = baseDraft.corrections.filter(
+      (c) => !correctionsToAdd.some((n) => n.document_id === c.document_id && n.role === c.role && n.row === c.row && n.name === c.name)
+    );
+
+    const newActions = pendingIssues.map(({ issue }) => ({
+      key: issue.key,
+      action: (issue.can_confirm ? "confirm" : "accept_ai") as "confirm" | "accept_ai",
+    }));
+
+    const nextDraft: ReviewDraft = {
+      ...baseDraft,
+      issue_actions: [...baseDraft.issue_actions, ...newActions],
+      mappings: nextMappings.length > 0 ? nextMappings : baseDraft.mappings,
+      verify_cdc_mappings: true,
+      corrections: [...existingCorrections, ...correctionsToAdd],
+    };
+
+    try {
+      await saveReview(nextDraft);
+      toast.saved(`AI Auto-Prepared: Draft reconciled with CDC rules (${invDoc?.items?.length || 0} items)`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to auto-prepare CDC draft.");
+    }
   }
 
   function clearField(review: ReviewDraft, refs: ReviewField[]) {
@@ -2018,6 +2180,47 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
             {/* Close icon top right */}
             <DialogCloseButton label="Close review dialog" />
+          </div>
+
+          {/* AI Auto-Suggestion & CDC Rules Assistant Banner */}
+          <div className="border-b bg-sky-500/5 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <Sparkles className="size-4 text-sky-600 dark:text-sky-400 shrink-0" />
+              <div>
+                <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                  <span>AI Auto-Suggestion</span>
+                  <span className="rounded-md bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 px-1.5 py-0.2 text-[10px] font-medium border border-sky-200 dark:border-sky-800">
+                    CDC Rule Engine
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Collect original docs &amp; auto-prepare description, unit, unit price, CDC no, NW &amp; GW.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none text-foreground">
+                <input
+                  type="checkbox"
+                  checked={cdcAutoRuleEnabled}
+                  onChange={(e) => setCdcAutoRuleEnabled(e.target.checked)}
+                  className="rounded border-border text-primary focus:ring-primary size-3.5"
+                />
+                <span>CDC Rule Checkbox</span>
+              </label>
+
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                onClick={handleApplyCdcRules}
+                className="text-xs font-semibold h-7 gap-1 border-sky-300 bg-sky-50/80 text-sky-900 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200 cursor-pointer shadow-2xs"
+              >
+                <Sparkles size={12} className="text-sky-600" /> Auto-prepare Draft
+              </Button>
+            </div>
           </div>
 
           <div className="max-h-[65vh] overflow-y-auto px-5 py-3 space-y-4">

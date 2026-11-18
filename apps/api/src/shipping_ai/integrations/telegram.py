@@ -550,20 +550,19 @@ def card_buttons(case, review=None) -> list[list[dict]]:
     ]
 
     action_row: list[dict] = []
-    if is_public:
-        if origin.scheme == "https":
-            if review and case.state in ("needs_review", "ready_for_approval"):
-                action_row.extend([
-                    {"text": "✅ Quick Approve", "web_app": {"url": f"{url}&decision=approve"}},
-                    {"text": "❌ Quick Reject", "web_app": {"url": f"{url}&decision=reject"}},
-                ])
-            elif case.state == "approved":
-                action_row.append({"text": "📋 View Import in Telegram", "web_app": {"url": url}})
-            else:
-                action_row.append({"text": "🔍 Review in Telegram", "web_app": {"url": url}})
+    if is_public and origin.scheme == "https":
+        if review and case.state in ("needs_review", "ready_for_approval"):
+            action_row.extend([
+                {"text": "✅ Quick Approve", "web_app": {"url": f"{url}&decision=approve"}},
+                {"text": "❌ Quick Reject", "web_app": {"url": f"{url}&decision=reject"}},
+            ])
+        elif case.state == "approved":
+            action_row.append({"text": "📋 View Import in Telegram", "web_app": {"url": url}})
         else:
-            action_label = "📋 View Import Record ↗" if case.state == "approved" else "🔍 Open in Harborway ↗"
-            action_row.append({"text": action_label, "url": url})
+            action_row.append({"text": "🔍 Review in Telegram", "web_app": {"url": url}})
+    else:
+        action_label = "📋 View Import Record ↗" if case.state == "approved" else "🔗 Open Detail ↗"
+        action_row.append({"text": action_label, "url": url})
 
     action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
     rows.append(action_row)
@@ -1018,8 +1017,6 @@ def format_status_notification(
     port_val = resolve_port(documents, excerpts)
     container_val = resolve_container(documents, excerpts)
     url = draft_url(case)
-    origin = settings().web_origin
-    is_public = is_public_url(str(origin))
 
     approval_map = {
         "approved": "✅ Approved",
@@ -1056,27 +1053,32 @@ def format_status_notification(
             lines.append(f"📍 <b>Discharge Port:</b> {html.escape(port_val)}")
         if container_val and container_val != "Pending":
             lines.append(f"📦 <b>Container:</b> {html.escape(container_val)}")
+
+        inv_doc = next((d for d in documents if d.role == "invoice"), None)
+        if inv_doc and inv_doc.items:
+            lines.append("")
+            lines.append(f"📦 <b>Approved Line Items ({len(inv_doc.items)}):</b>")
+            for idx, item in enumerate(inv_doc.items[:5], 1):
+                desc = item.fields.get("description")
+                desc_val = desc.value if desc and desc.value else f"Item #{idx}"
+                qty_fld = item.fields.get("quantity")
+                qty_val = format_item_num(qty_fld.value) if qty_fld and qty_fld.value else ""
+                unit_val = qty_fld.unit if qty_fld and qty_fld.unit else "KG"
+                price_fld = item.fields.get("unit_price")
+                price_val = format_item_num(price_fld.value) if price_fld and price_fld.value else ""
+                cur_val = price_fld.currency if price_fld and price_fld.currency else "USD"
+                lines.append(f"{idx}. <b>{html.escape(desc_val)}</b>")
+                lines.append(f"   • Qty: {qty_val} {unit_val} | Price: {price_val} {cur_val}")
+            if len(inv_doc.items) > 5:
+                lines.append(f"<i>...and {len(inv_doc.items) - 5} more items in Harborway</i>")
+
         lines.extend([
             "",
             "🚦 <b>Status:</b> ✅ Accepted — CDC import record created",
             "",
             f"🔗 <a href='{url}'>Open Accepted Record in Harborway ↗</a>",
         ])
-        action_row: list[dict] = []
-        if is_public:
-            if origin.scheme == "https":
-                action_row.append({"text": "📋 View Import in Telegram", "web_app": {"url": url}})
-            else:
-                action_row.append({"text": "📋 View Import Record ↗", "url": url})
-        action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
-        buttons = [
-            [
-                {"text": "📄 Invoice", "callback_data": f"doc:inv:{ref}"},
-                {"text": "📦 Packing List", "callback_data": f"doc:pl:{ref}"},
-                {"text": "🚢 B/L", "callback_data": f"doc:bl:{ref}"},
-            ],
-            action_row,
-        ]
+        buttons = card_buttons(case, review)
         return "\n".join(lines), buttons
 
     elif event_type == "rejected":
@@ -1093,21 +1095,7 @@ def format_status_notification(
             "",
             f"🔗 <a href='{url}'>View Intake in Harborway ↗</a>",
         ]
-        action_row = []
-        if is_public:
-            if origin.scheme == "https":
-                action_row.append({"text": "🔍 View in Telegram", "web_app": {"url": url}})
-            else:
-                action_row.append({"text": "🔍 View in Harborway ↗", "url": url})
-        action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
-        buttons = [
-            [
-                {"text": "📄 Invoice", "callback_data": f"doc:inv:{ref}"},
-                {"text": "📦 Packing List", "callback_data": f"doc:pl:{ref}"},
-                {"text": "🚢 B/L", "callback_data": f"doc:bl:{ref}"},
-            ],
-            action_row,
-        ]
+        buttons = card_buttons(case, review)
         return "\n".join(lines), buttons
 
     elif event_type == "revision_received":
@@ -1171,11 +1159,11 @@ def format_status_notification(
         return "\n".join(lines), buttons
 
     elif event_type in ("new_intake", "ready_for_review"):
-        transport_extra = []
-        if port_val and port_val != "Pending":
-            transport_extra.append(f"• <b>Port / Discharge:</b> {html.escape(port_val)}")
-        if container_val and container_val != "Pending":
-            transport_extra.append(f"• <b>Container:</b> {html.escape(container_val)}")
+        if snapshot:
+            card_text, _, buttons = format_card(
+                case, company_name, snapshot, payloads, review
+            )
+            return "🚢 <b>New Shipment Detected</b>\n\n" + card_text, buttons
 
         lines = [
             "🚢 <b>New Shipment Detected</b>",
@@ -1183,12 +1171,9 @@ def format_status_notification(
             f"📄 <b>Reference:</b> <code>{html.escape(ref)}</code>",
             f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
             "",
-            "📦 <b>Shipment Summary:</b>",
-            f"• <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
-            f"• <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
-            *transport_extra,
+            f"💰 <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
+            f"📄 <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
             "",
-            f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
             f"🚦 <b>Status:</b> {approval_text}",
             "",
             f"🔗 <a href='{url}'>Open Draft in Harborway ↗</a>",

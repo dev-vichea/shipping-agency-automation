@@ -26,7 +26,7 @@ from shipping_ai.models import (
     IntakeCase,
     ReviewSnapshot,
 )
-from shipping_ai.review.values import clean, folded, usable
+from shipping_ai.review.values import folded, usable
 
 ISO_CONTAINER = re.compile(r"\b([A-Z]{3}[UJZ]\s*\d{7})\b", re.I)
 ANY_CONTAINER = re.compile(r"\b([A-Z]{4}\s*\d{6,7}[ -]?\d?)\b", re.I)

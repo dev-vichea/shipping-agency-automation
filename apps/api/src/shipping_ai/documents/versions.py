@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from shipping_ai.models import Document, DocumentExtraction, ReviewSnapshot
+from shipping_ai.models import Document, DocumentExtraction
 from shipping_ai.review.schemas import Extraction
 from shipping_ai.review.values import clean, usable
 

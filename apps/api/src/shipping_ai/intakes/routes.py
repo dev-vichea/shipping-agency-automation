@@ -21,6 +21,13 @@ from shipping_ai.core.access import (
 from shipping_ai.core.auth import DB, Staff, browser_origin
 from shipping_ai.core.config import settings
 from shipping_ai.documents.storage import InvalidUpload, LocalStorage, StoredFile
+from shipping_ai.intakes.matching import (
+    ExtractedIdentifiers,
+    detect_document_relationship,
+    extract_context_identifiers,
+    extract_file_identifiers,
+    match_shipment,
+)
 from shipping_ai.models import (
     ActivityEvent,
     AutomationRun,
@@ -32,14 +39,6 @@ from shipping_ai.models import (
     IntakeCase,
     ReviewSnapshot,
     User,
-)
-
-from shipping_ai.intakes.matching import (
-    ExtractedIdentifiers,
-    detect_document_relationship,
-    extract_context_identifiers,
-    extract_file_identifiers,
-    match_shipment,
 )
 from shipping_ai.review.pipeline import enqueue
 

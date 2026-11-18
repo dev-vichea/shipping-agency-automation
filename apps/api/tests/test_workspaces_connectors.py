@@ -596,7 +596,7 @@ def test_telegram_status_notifications_on_approval_rejection_and_revision(staff,
     from shipping_ai.core.config import settings
     from shipping_ai.core.db import session_factory
     from shipping_ai.integrations import telegram
-    from shipping_ai.models import ActivityEvent, IntakeCase, ReviewSnapshot, TelegramDelivery
+    from shipping_ai.models import ActivityEvent, IntakeCase
 
     workspace(staff, "Telegram Status Updates Workspace")
     company = new_company(staff, COMPANY)
