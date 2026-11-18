@@ -240,14 +240,13 @@ def archive_folder_file(db, authorization, payload, stored):
     provider_id = digest(f"{thread}:{stored.sha256}")
     previous = db.execute(
         select(IncomingMessage.intake_case_id, AutomationRun.id)
-        .join(AutomationRun, AutomationRun.message_id == IncomingMessage.id)
+        .outerjoin(AutomationRun, AutomationRun.message_id == IncomingMessage.id)
         .where(
             IncomingMessage.workspace_id == source.workspace_id,
             IncomingMessage.channel == CHANNEL,
             IncomingMessage.provider_message_id == provider_id,
-            AutomationRun.stage == "receipt",
         )
-    ).one_or_none()
+    ).first()
     if previous is not None:
         return Receipt(case_id=previous[0], run_id=previous[1], replayed=True)
 
