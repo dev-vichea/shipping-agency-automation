@@ -224,10 +224,10 @@ export type DocumentDiff = {
   parent_version_id: string | null;
   parent_filename: string | null;
   parent_version_number: number | null;
-  added: Record<string, any>;
-  modified: Record<string, { old: any; new: any }>;
-  missing: Record<string, any>;
-  unchanged: Record<string, any>;
+  added: Record<string, unknown>;
+  modified: Record<string, { old: unknown; new: unknown }>;
+  missing: Record<string, unknown>;
+  unchanged: Record<string, unknown>;
   has_changes: boolean;
 };
 

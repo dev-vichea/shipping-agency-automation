@@ -20,15 +20,6 @@ export type InspectedField = {
   target?: ReviewField;
 };
 
-export type TabDocumentItem = {
-  id: string;
-  name: string;
-  classification?: string;
-  version_number?: number;
-  is_superseded?: boolean;
-  reference?: string | null;
-};
-
 const groups = [
   { title: "Document Details", icon: FileText, keys: ["bl_no", "booking_no", "invoice_no", "invoice_date", "issue_date", "shipper", "supplier", "consignee", "notify_party", "carrier", "origin", "port", "destination", "shipping_mode", "vessel", "voyage", "etd", "eta", "payment_terms", "incoterms"] },
   { title: "Container & Cargo", icon: Package, keys: ["container", "seal", "packages", "gross_weight", "net_weight", "measurement"] },
@@ -343,7 +334,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
 export function IntakeStudioPanel({
   item, analysis, document, activeEvidence, activeField, activeRole, onInspect,
   cdcNames, cdcControls, intakeReference, editable, hasConsigneeOptions, viewedField, isReviewed,
-  editor, onDismissField, tabDocuments, currentDocumentId, onSelectDocument,
+  editor, onDismissField,
 }: {
   item: CaseDetail;
   intakeReference: string | null;
@@ -361,9 +352,6 @@ export function IntakeStudioPanel({
   isReviewed: (target: ReviewField) => boolean;
   editor?: FieldEditor;
   onDismissField?: () => void;
-  tabDocuments?: TabDocumentItem[];
-  currentDocumentId?: string;
-  onSelectDocument?: (documentId: string) => void;
 }) {
   const descriptionId = useId();
   const candidates = analysis.candidates.filter((candidate) => candidate.invoice_document_id === document?.document_id);
@@ -389,61 +377,13 @@ export function IntakeStudioPanel({
 
   return (
     <div className="flex flex-col h-full bg-card">
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 border-b border-border/60">
-        {tabDocuments && tabDocuments.length > 1 ? (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {tabDocuments.map((doc) => {
-              const isSelected = doc.id === (currentDocumentId ?? document?.document_id);
-              const isFinal = doc.classification === "final_bl";
-              const isSuperseded = doc.is_superseded;
-              const ref = doc.reference;
-              const Icon = isFinal || isTransport ? Anchor : FileText;
-              return (
-                <button
-                  key={doc.id}
-                  type="button"
-                  onClick={() => onSelectDocument?.(doc.id)}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-all font-medium border cursor-pointer select-none",
-                    isSelected
-                      ? isFinal
-                        ? "bg-purple-600 text-white border-purple-600 shadow-xs"
-                        : "bg-primary text-primary-foreground border-primary shadow-xs"
-                      : "bg-background text-muted-foreground border-border hover:border-foreground/30 hover:text-foreground"
-                  )}
-                  title={doc.name}
-                >
-                  <Icon size={12} className={cn(isSelected ? "text-current" : "text-muted-foreground")} />
-                  <span>
-                    {isFinal ? "Final B/L" : `Draft B/L v${doc.version_number ?? 1}`}
-                  </span>
-                  {ref && (
-                    <span className={cn("font-mono text-[11px]", isSelected ? "font-semibold opacity-95" : "text-muted-foreground")}>
-                      · {ref}
-                    </span>
-                  )}
-                  {isFinal && !isSelected && (
-                    <span className="rounded bg-purple-100 px-1 py-0.2 text-[9px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">
-                      FINAL
-                    </span>
-                  )}
-                  {isSuperseded && !isSelected && (
-                    <span className="text-[10px] text-muted-foreground opacity-80">
-                      (v{doc.version_number ?? 1})
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="min-w-0 flex items-center gap-2">
-            <DocumentIcon size={15} className="text-primary shrink-0" aria-hidden />
-            <span className="font-semibold text-xs truncate text-foreground">
-              {details.name} · {invoiceReference(fields[isTransport ? "bl_no" : "invoice_no"]?.value) ?? intakeReference ?? "Reference pending"}
-            </span>
-          </div>
-        )}
+      <div className="flex items-center justify-between gap-2 px-3.5 py-2.5 border-b border-border/60">
+        <div className="min-w-0 flex items-center gap-2">
+          <DocumentIcon size={15} className="text-primary shrink-0" aria-hidden />
+          <span className="font-semibold text-xs truncate text-foreground">
+            {details.name} · {invoiceReference(fields[isTransport ? "bl_no" : "invoice_no"]?.value) ?? intakeReference ?? "Reference pending"}
+          </span>
+        </div>
         <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
           {item.documents.length} source file{item.documents.length > 1 ? "s" : ""}
         </span>
@@ -459,7 +399,7 @@ export function IntakeStudioPanel({
           <div className="divide-y divide-border/60 border-y border-border/60">
             {keys.map((key) => {
               const field = fields[key];
-              const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as any, row: null, name: key };
+              const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as ReviewField["role"], row: null, name: key };
               const reviewed = isReviewed(target);
               const visibleField = viewedField(target, field);
               const text = intakeField(visibleField);

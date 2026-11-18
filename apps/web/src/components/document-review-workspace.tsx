@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, GitCompare, ScanSearch, Sparkles } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -17,23 +17,22 @@ import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { write } from "@/lib/client-api";
 import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const documentTabs = ["B/L", "Invoice", "Packing list"] as const;
-type DocumentTab = typeof documentTabs[number];
-
-function tabToRole(tab: DocumentTab): "draft_bl" | "invoice" | "packing_list" {
-  switch (tab) {
-    case "B/L": return "draft_bl";
-    case "Invoice": return "invoice";
-    case "Packing list": return "packing_list";
-  }
-}
+type WorkspaceTab = {
+  key: string;
+  label: string;
+  role: "draft_bl" | "final_bl" | "invoice" | "packing_list";
+  documentId?: string;
+  badge?: string;
+  badgeVariant?: "final" | "draft";
+  count: number | null;
+};
 
 function matchesRole(docRole: string, targetRole: string): boolean {
   if (targetRole === "draft_bl" || targetRole === "final_bl") {
@@ -48,7 +47,7 @@ const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
   item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
 }) {
-  const [chosenDocTab, setActiveDocTab] = useState<DocumentTab>();
+  const [chosenTabKey, setChosenTabKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
   const [selection, setSelection] = useState<Evidence>();
   const [partyPreview, setPartyPreview] = useState<{ source: ConsigneeSourceRef; evidence: Evidence }>();
@@ -99,24 +98,139 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     const matches = excerpts.filter((excerpt) => excerpt.id === file.id);
     return matches.length ? matches : [{key: file.id, id: file.id, title: file.name, sheet: null, lines: []}];
   });
-  const activeDocTab = chosenDocTab ?? documentTabs.find((tab) => analysis.extractions.some((doc) => doc.role === tabToRole(tab) || (tab === "B/L" && doc.role === "final_bl"))) ?? "B/L";
-  const activeRole = tabToRole(activeDocTab);
-  const classifiedSources = item.documents.filter((doc) =>
-    activeRole === "draft_bl" ? (doc.classification === "draft_bl" || doc.classification === "final_bl") : doc.classification === activeRole
+
+  const transportDocs = item.documents
+    .filter((doc) => doc.classification === "draft_bl" || doc.classification === "final_bl")
+    .sort((a, b) => {
+      if (a.classification === "final_bl" && b.classification !== "final_bl") return -1;
+      if (b.classification === "final_bl" && a.classification !== "final_bl") return 1;
+      return (b.version_number ?? 1) - (a.version_number ?? 1);
+    });
+
+  const transportExtractions = analysis.extractions.filter(
+    (e) => e.role === "draft_bl" || e.role === "final_bl"
   );
-  const compatibleSources = sources.filter((doc) => doc.fileType === (activeRole === "draft_bl" ? "PDF" : "Excel"));
+
+  const tabs: WorkspaceTab[] = [];
+
+  if (transportDocs.length > 0) {
+    if (transportDocs.length === 1) {
+      const doc = transportDocs[0];
+      const ext = analysis.extractions.find((e) => e.document_id === doc.id)
+        ?? analysis.extractions.find((e) => e.role === doc.classification);
+      const isFinal = doc.classification === "final_bl" || ext?.role === "final_bl";
+      const count = ext ? (ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length) : null;
+      tabs.push({
+        key: `transport:${doc.id}`,
+        label: "B/L",
+        role: isFinal ? "final_bl" : "draft_bl",
+        documentId: doc.id,
+        badge: isFinal ? "FINAL" : (doc.version_number ?? 1) > 1 ? `v${doc.version_number}` : undefined,
+        badgeVariant: isFinal ? "final" : "draft",
+        count,
+      });
+    } else {
+      for (const doc of transportDocs) {
+        const ext = analysis.extractions.find((e) => e.document_id === doc.id);
+        const isFinal = doc.classification === "final_bl" || ext?.role === "final_bl";
+        const count = ext ? (ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length) : null;
+        tabs.push({
+          key: `transport:${doc.id}`,
+          label: "B/L",
+          role: isFinal ? "final_bl" : "draft_bl",
+          documentId: doc.id,
+          badge: isFinal ? "FINAL" : "DRAFT",
+          badgeVariant: isFinal ? "final" : "draft",
+          count,
+        });
+      }
+    }
+  } else if (transportExtractions.length > 0) {
+    for (const ext of transportExtractions) {
+      const isFinal = ext.role === "final_bl";
+      const count = ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length;
+      tabs.push({
+        key: `transport:${ext.document_id}`,
+        label: "B/L",
+        role: isFinal ? "final_bl" : "draft_bl",
+        documentId: ext.document_id,
+        badge: isFinal ? "FINAL" : "DRAFT",
+        badgeVariant: isFinal ? "final" : "draft",
+        count,
+      });
+    }
+  } else {
+    tabs.push({
+      key: "transport:default",
+      label: "B/L",
+      role: "draft_bl",
+      count: null,
+    });
+  }
+
+  // Invoice tab
+  const invoiceExt = analysis.extractions.find((e) => e.role === "invoice");
+  const invoiceDoc = item.documents.find((d) => d.classification === "invoice");
+  const invoiceCount = invoiceExt ? (invoiceExt.items?.length || Object.values(invoiceExt.fields).filter((f) => f?.value).length) : null;
+  tabs.push({
+    key: "invoice",
+    label: "Invoice",
+    role: "invoice",
+    documentId: invoiceExt?.document_id ?? invoiceDoc?.id,
+    count: invoiceCount,
+  });
+
+  // Packing list tab
+  const packingExt = analysis.extractions.find((e) => e.role === "packing_list");
+  const packingDoc = item.documents.find((d) => d.classification === "packing_list");
+  const packingCount = packingExt ? (packingExt.items?.length || Object.values(packingExt.fields).filter((f) => f?.value).length) : null;
+  tabs.push({
+    key: "packing_list",
+    label: "Packing list",
+    role: "packing_list",
+    documentId: packingExt?.document_id ?? packingDoc?.id,
+    count: packingCount,
+  });
+
+  const fallbackTab = tabs.find((t) => t.documentId && selectedKey?.startsWith(t.documentId))
+    ?? tabs.find((t) => t.role && selectedKey?.endsWith(`:${t.role}`))
+    ?? tabs[0];
+  const activeTab: WorkspaceTab = (chosenTabKey ? tabs.find((t) => t.key === chosenTabKey) : undefined) ?? fallbackTab ?? tabs[0];
+  const activeRole = activeTab.role;
+
+  const classifiedSources = item.documents.filter((doc) =>
+    activeRole === "draft_bl" || activeRole === "final_bl"
+      ? (doc.classification === "draft_bl" || doc.classification === "final_bl")
+      : doc.classification === activeRole
+  );
+  const compatibleSources = sources.filter((doc) =>
+    doc.fileType === (activeRole === "draft_bl" || activeRole === "final_bl" ? "PDF" : "Excel")
+  );
   const fallbackSource = classifiedSources.length === 1 ? classifiedSources[0].id
     : compatibleSources.length === 1 ? compatibleSources[0].id : undefined;
+
+  const targetOption = activeTab.documentId
+    ? options.find((opt) => opt.id === activeTab.documentId && (!activeTab.role || opt.key.endsWith(`:${activeTab.role}`)))
+      ?? options.find((opt) => opt.id === activeTab.documentId)
+    : options.find((opt) => opt.key.endsWith(`:${activeTab.role}`));
+
   const previewOption = partyPreview && options.find((option) => option.id === partyPreview.source.document_id &&
     (option.key.endsWith(`:${partyPreview.source.role}`) || (matchesRole(partyPreview.source.role, "draft_bl") && matchesRole(option.key.split(":").pop() ?? "", "draft_bl"))) && option.sheet === partyPreview.evidence.sheet);
   const current = previewOption ?? options.find((option) => option.key === selectedKey)
-    ?? options.find((option) => matchesRole(option.key.split(":").pop() ?? "", activeRole))
+    ?? targetOption
     ?? options.find((option) => option.id === fallbackSource)
-    ?? (!chosenDocTab ? options[0] : undefined);
-  const activeDocument = extractionSources.find((doc, index) => matchesRole(doc.role, activeRole) && excerpts[index].key === current?.key)
+    ?? options[0];
+
+  const activeDocument = (activeTab.documentId
+      ? extractionSources.find((doc) => doc.document_id === activeTab.documentId && (doc.role === activeTab.role || matchesRole(doc.role, activeTab.role)))
+      : undefined
+    )
+    ?? extractionSources.find((doc, index) => excerpts[index].key === current?.key)
+    ?? extractionSources.find((doc) => doc.document_id === current?.id && matchesRole(doc.role, activeRole))
     ?? extractionSources.find((doc) => doc.document_id === current?.id)
-    ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole) && doc.document_id === activeFieldInfo?.target?.document_id)
+    ?? extractionSources.find((doc) => doc.role === activeRole)
     ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole));
+
   const file = sources.find((entry) => entry.id === current?.id);
   const citation = partyPreview?.evidence ?? selection;
   const selectedEvidence = citation?.document_id === file?.id ? citation : undefined;
@@ -140,10 +254,10 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       .map((entry) => [`${entry.invoice_document_id}:${entry.invoice_row}:${entry.master_row}`, entry]),
   ).values());
   const metadata = consignmentFields.flatMap((key) => {
-    for (const role of ["draft_bl", "invoice", "packing_list"]) {
+    for (const role of ["final_bl", "draft_bl", "invoice", "packing_list"] as const) {
       const docs = analysis.extractions.filter((doc) => doc.role === role);
-      const field = docs.length === 1 ? docs[0].fields[key] : undefined;
-      if (field?.value && (role === "invoice" || role === "packing_list" || role === "draft_bl")) {
+      const field = docs.length >= 1 ? docs[0].fields[key] : undefined;
+      if (field?.value) {
         const target: ReviewField = { document_id: docs[0].document_id, role, row: null, name: key };
         return [{ key, title: documentFieldLabel(key), field: displayedField(target, field), target }];
       }
@@ -151,13 +265,22 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return [];
   });
 
-  function handleDocTabChange(tab: DocumentTab) {
+  function handleSelectTab(tab: WorkspaceTab) {
+    setChosenTabKey(tab.key);
     setPartyPreview(undefined);
     setIssueSelection(undefined);
-    setActiveDocTab(tab);
-    setSelectedKey(undefined);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
+
+    const match = (tab.documentId
+      ? options.find((opt) => opt.id === tab.documentId && (!tab.role || opt.key.endsWith(`:${tab.role}`)))
+        ?? options.find((opt) => opt.id === tab.documentId)
+      : undefined
+    ) ?? options.find((opt) => opt.key.endsWith(`:${tab.role}`));
+
+    if (match) {
+      setSelectedKey(match.key);
+    }
   }
 
   function chooseSource(key?: string) {
@@ -166,44 +289,20 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setSelectedKey(key);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
-    const tab = documentTabs.find((entry) => key?.endsWith(`:${tabToRole(entry)}`));
-    if (tab) setActiveDocTab(tab);
-  }
-
-  const tabDocuments = item.documents.filter((doc) =>
-    activeRole === "draft_bl"
-      ? (doc.classification === "draft_bl" || doc.classification === "final_bl")
-      : doc.classification === activeRole
-  ).sort((a, b) => {
-    if (a.classification === "final_bl" && b.classification !== "final_bl") return -1;
-    if (b.classification === "final_bl" && a.classification !== "final_bl") return 1;
-    return (b.version_number ?? 1) - (a.version_number ?? 1);
-  }).map((doc) => {
-    const ext = extractionSources.find((e) => e.document_id === doc.id);
-    return {
-      id: doc.id,
-      name: doc.original_filename,
-      classification: doc.classification,
-      version_number: doc.version_number ?? 1,
-      is_superseded: Boolean(doc.parent_version_id || item.documents.some((other) => other.parent_version_id === doc.id)),
-      reference: ext?.fields?.bl_no?.value || (doc.classification === "final_bl" ? "Final" : ext?.fields?.invoice_no?.value),
-    };
-  });
-
-  function handleSelectDocument(docId: string) {
-    const targetOption = options.find((opt) => opt.id === docId);
-    if (targetOption) {
-      chooseSource(targetOption.key);
-    } else {
-      const ext = extractionSources.find((e) => e.document_id === docId);
-      if (ext) {
-        const excerptIdx = extractionSources.indexOf(ext);
-        if (excerptIdx >= 0) {
-          chooseSource(excerpts[excerptIdx].key);
-        }
+    const opt = options.find((o) => o.key === key);
+    if (opt) {
+      const matchingTab = tabs.find((t) =>
+        (t.documentId && t.documentId === opt.id && key?.endsWith(`:${t.role}`)) ||
+        (t.documentId && t.documentId === opt.id) ||
+        (key && key.endsWith(`:${t.role}`))
+      );
+      if (matchingTab) {
+        setChosenTabKey(matchingTab.key);
       }
     }
   }
+
+
 
   function inspect(evidence?: Evidence, meta?: InspectedField) {
     const documentId = evidence?.document_id ?? meta?.target?.document_id;
@@ -216,8 +315,12 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setIssueSelection(undefined);
     if (match) {
       setSelectedKey(match.key);
-      const tab = documentTabs.find((entry) => role ? tabToRole(entry) === role : match.key.endsWith(`:${tabToRole(entry)}`));
-      if (tab) setActiveDocTab(tab);
+      const matchingTab = tabs.find((entry) =>
+        (entry.documentId && entry.documentId === documentId && (!role || entry.role === role)) ||
+        (role && entry.role === role) ||
+        (entry.documentId && entry.documentId === documentId)
+      );
+      if (matchingTab) setChosenTabKey(matchingTab.key);
     }
     setSelection(evidence ? { ...evidence } : undefined);
 
@@ -290,8 +393,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     if (evidence || target) {
       inspect(evidence, meta);
     } else {
-      const tab = documentTabs.find((entry) => tabToRole(entry) === issue.name);
-      if (tab) handleDocTabChange(tab);
+      const matchingTab = tabs.find((entry) => entry.role === issue.name);
+      if (matchingTab) handleSelectTab(matchingTab);
       setSelection(undefined);
       setPartyPreview(undefined);
       setActiveFieldInfo(meta);
@@ -523,12 +626,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return await saveReview(nextDraft);
   }
 
-  async function handleConfirmIssue(issue: ReviewIssue, chosenValue?: string, chosenChoice?: FieldChoice) {
-    const targetName = issue.target?.name ?? issue.name;
-    const targetRow = issue.target?.row ?? (issue.key.match(/\.(\d+)\.?/) ? parseInt(RegExp.$1, 10) : null);
-    const groupId = targetRow ? `${targetName}:${targetRow}` : targetName;
-    return await handleConfirmGroup({ id: groupId, name: targetName, row: targetRow, issues: [issue] }, chosenValue, chosenChoice);
-  }
+
 
   function cleanFieldLabel(name: string): string {
     if (name === "unit") return "Unit of Measure";
@@ -1141,19 +1239,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           )}
 
           <div className="panel overflow-hidden">
-            {/* Exactly 3 Document Intake Tabs (matching simple flat tab style) */}
+            {/* Document Intake Tabs */}
             <nav className="flex border-b bg-background px-2" aria-label="Document intake tabs">
-              {documentTabs.map((tab) => {
-                const active = activeDocTab === tab;
-                const role = tabToRole(tab);
-                const doc = analysis.extractions.find((d) => role === "draft_bl" ? (d.role === "draft_bl" || d.role === "final_bl") : d.role === role);
-                const count = doc ? (doc.items?.length || Object.values(doc.fields).filter((f) => f?.value).length) : null;
-                const activeDocSource = item.documents.find((d) => role === "draft_bl" ? (d.classification === "draft_bl" || d.classification === "final_bl") : d.classification === role);
+              {tabs.map((tab) => {
+                const active = activeTab.key === tab.key;
                 return (
                   <button
-                    key={tab}
+                    key={tab.key}
                     type="button"
-                    onClick={() => handleDocTabChange(tab)}
+                    onClick={() => handleSelectTab(tab)}
                     aria-pressed={active}
                     className={cn(
                       "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5",
@@ -1162,18 +1256,20 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                         : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
                     )}
                   >
-                    <span>{tab}</span>
-                    {activeDocSource?.classification === "final_bl" && (
-                      <span className="rounded bg-purple-100 px-1 py-0.2 text-[9px] font-bold text-purple-700 dark:bg-purple-950 dark:text-purple-300">
-                        FINAL
+                    <span>{tab.label}</span>
+                    {tab.badge && (
+                      <span
+                        className={cn(
+                          "rounded px-1 py-0.2 text-[9px] font-bold",
+                          tab.badgeVariant === "final"
+                            ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                            : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                        )}
+                      >
+                        {tab.badge}
                       </span>
                     )}
-                    {activeDocSource && activeDocSource.classification !== "final_bl" && (activeDocSource.version_number ?? 1) > 1 && (
-                      <span className="rounded bg-blue-100 px-1 py-0.2 text-[9px] font-bold text-blue-700 dark:bg-blue-950 dark:text-blue-300">
-                        v{activeDocSource.version_number}
-                      </span>
-                    )}
-                    {typeof count === "number" && count > 0 && (
+                    {typeof tab.count === "number" && tab.count > 0 && (
                       <span
                         className={cn(
                           "rounded-control px-1.5 py-0.2 text-[10px] font-mono",
@@ -1182,7 +1278,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                             : "bg-muted text-muted-foreground"
                         )}
                       >
-                        {count}
+                        {tab.count}
                       </span>
                     )}
                   </button>
@@ -1216,9 +1312,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               activeEvidence={selectedEvidence}
               activeField={activeFieldInfo}
               activeRole={activeRole}
-              tabDocuments={tabDocuments}
-              currentDocumentId={current?.id}
-              onSelectDocument={handleSelectDocument}
               onInspect={inspect}
               editor={editor}
               onDismissField={() => {
