@@ -1535,7 +1535,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         </div>
         {!item.company_id && !item.import_id && !["approved", "rejected"].includes(item.state) && <AssignCompanyForm companies={companies} caseId={item.id} revision={analysis.revision} />}
         {metadata.length > 0 && (
-          <dl className="grid grid-cols-2 gap-x-8 gap-y-2.5 px-3.5 py-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t px-4 py-2.5 sm:grid-cols-3 md:grid-flow-col md:auto-cols-fr">
             {metadata.map(({ key, title, field, target }) => {
               const text = intakeField(field);
               const cite = text.evidence;
@@ -1547,7 +1547,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   </dt>
                   <dd
                     className={cn(
-                      "flex min-w-0 items-center gap-1.5 truncate text-xs font-semibold text-foreground",
+                      "flex min-w-0 items-center gap-1.5 truncate text-xs font-semibold text-primary",
                       ["bl_no", "container", "seal"].includes(key) && "font-mono"
                     )}
                     title={text.value}
@@ -1555,7 +1555,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                     {cite ? (
                       <button
                         type="button"
-                        className="data-link block max-w-full cursor-pointer truncate text-left hover:text-primary transition-colors"
+                        className="data-link block max-w-full cursor-pointer truncate text-left text-primary hover:underline transition-colors"
                         onClick={() =>
                           inspect(cite, {
                             id: `field:${key}`,
