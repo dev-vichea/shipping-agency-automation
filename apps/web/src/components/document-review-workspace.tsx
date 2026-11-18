@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FileText, Folder, GitCompare, ScanSearch, Sparkles } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, GitCompare, ScanSearch, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -1104,96 +1104,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             </div>
           )}
 
-          {requiresFinalConfirmation ? (
-            <div className="rounded-md border border-purple-500/30 bg-purple-50/70 p-3 text-xs text-purple-900 dark:border-purple-500/20 dark:bg-purple-950/30 dark:text-purple-200">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 font-semibold">
-                  <CheckCircle2 className="size-4 text-purple-600 shrink-0" />
-                  <span>Final B/L Confirmation Required</span>
-                  {analysis.version_diff?.diffs.length ? (
-                    <span className="rounded bg-purple-200/70 px-1.5 py-0.2 text-[10px] font-mono text-purple-800 dark:bg-purple-900 dark:text-purple-200">
-                      {analysis.version_diff.diffs.length} {analysis.version_diff.diffs.length === 1 ? "update" : "updates"}
-                    </span>
-                  ) : null}
-                </div>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={busy}
-                  onClick={handleConfirmFinalBL}
-                  className="bg-purple-600 hover:bg-purple-700 text-white font-semibold shadow-xs text-xs h-7"
-                >
-                  <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
-                </Button>
-              </div>
-              <p className="mt-1 text-purple-800/90 dark:text-purple-300/90">
-                A Final / Telex Release B/L has been attached. Staff confirmation is required to verify container numbers, seal numbers, and shipping details before final clearance.
-              </p>
-              {analysis.version_diff?.diffs.map((diff) => (
-                <div key={diff.document_id} className="mt-2 space-y-1.5 rounded border border-purple-200/80 bg-white/70 p-2.5 dark:border-purple-900/60 dark:bg-purple-950/40">
-                  <div className="flex items-center justify-between font-medium">
-                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
-                    {diff.parent_filename && (
-                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 pt-0.5">
-                    {Object.entries(diff.modified).map(([f, vals]) => (
-                      <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] border border-amber-500/20 text-amber-900 dark:text-amber-200">
-                        <span className="font-medium text-amber-700 dark:text-amber-400">{documentFieldLabel(f)}:</span>
-                        <span className="line-through text-muted-foreground text-[10px]">{String(vals.old)}</span>
-                        <span className="font-semibold text-foreground">→ {String(vals.new)}</span>
-                      </span>
-                    ))}
-                    {Object.entries(diff.added).map(([f, val]) => (
-                      <span key={f} className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
-                        <span className="font-medium text-emerald-700 dark:text-emerald-400">+{documentFieldLabel(f)}:</span>
-                        <span className="font-semibold text-foreground">{String(val)}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : analysis.version_diff?.has_revisions ? (
-            <div className="rounded-md border border-blue-500/30 bg-blue-50/70 p-3 text-xs text-blue-900 dark:border-blue-500/20 dark:bg-blue-950/30 dark:text-blue-200">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 font-semibold">
-                  <GitCompare className="size-4 text-blue-600 shrink-0" />
-                  <span>Document Revision Detected</span>
-                </div>
-                <span className="font-mono text-[11px] text-blue-700 dark:text-blue-300">
-                  {analysis.version_diff.diffs.length} {analysis.version_diff.diffs.length === 1 ? "document updated" : "documents updated"}
-                </span>
-              </div>
-              {analysis.version_diff.diffs.map((diff) => (
-                <div key={diff.document_id} className="mt-2 space-y-1.5 rounded border border-blue-200 bg-white/60 p-2.5 dark:border-blue-900/60 dark:bg-blue-950/40">
-                  <div className="flex items-center justify-between font-medium">
-                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
-                    {diff.parent_filename && (
-                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5 pt-0.5">
-                    {Object.entries(diff.modified).map(([f, vals]) => (
-                      <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] border border-amber-500/20 text-amber-900 dark:text-amber-200">
-                        <span className="font-medium text-amber-700 dark:text-amber-400">{documentFieldLabel(f)}:</span>
-                        <span className="line-through text-muted-foreground text-[10px]">{String(vals.old)}</span>
-                        <span className="font-semibold text-foreground">→ {String(vals.new)}</span>
-                      </span>
-                    ))}
-                    {Object.entries(diff.added).map(([f, val]) => (
-                      <span key={f} className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
-                        <span className="font-medium text-emerald-700 dark:text-emerald-400">+{documentFieldLabel(f)}:</span>
-                        <span className="font-semibold text-foreground">{String(val)}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : null}
-
           <div className="panel overflow-hidden">
             {/* Exactly 3 Document Intake Tabs (matching simple flat tab style) */}
             <nav className="flex border-b bg-background px-2" aria-label="Document intake tabs">
@@ -1438,6 +1348,37 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           </nav>
           <Findings analysis={analysis} names={names} onInspect={inspect} auditFilter={auditView} />
         </Section>
+        {analysis.version_diff?.has_revisions && (
+          <Section title="Document Revisions">
+            <div className="space-y-2 p-3 text-xs">
+              {analysis.version_diff.diffs.map((diff) => (
+                <div key={diff.document_id} className="rounded border bg-card p-2.5 space-y-1">
+                  <div className="flex items-center justify-between font-medium">
+                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
+                    {diff.parent_filename && (
+                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {Object.entries(diff.modified).map(([f, vals]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] border border-amber-500/20 text-amber-900 dark:text-amber-200">
+                        <span className="font-medium text-amber-700 dark:text-amber-400">{documentFieldLabel(f)}:</span>
+                        <span className="line-through text-muted-foreground text-[10px]">{String(vals.old)}</span>
+                        <span className="font-semibold text-foreground">→ {String(vals.new)}</span>
+                      </span>
+                    ))}
+                    {Object.entries(diff.added).map(([f, val]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
+                        <span className="font-medium text-emerald-700 dark:text-emerald-400">+{documentFieldLabel(f)}:</span>
+                        <span className="font-semibold text-foreground">{String(val)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
         <div className="space-y-2 px-2">
           <ReviewAuditControls caseId={item.id} workflow={workflow} saved={saved} busy={busy} editable={editable}
             onResolve={async (key, note) => {
