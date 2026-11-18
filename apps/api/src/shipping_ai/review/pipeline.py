@@ -140,17 +140,22 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
         )
     superseded = {doc.parent_version_id for doc in docs if doc.parent_version_id}
     seen = set()
-    active = []
+    active_docs = []
+    all_non_duplicate = []
     for doc in docs:
-        if doc.id not in superseded and doc.sha256 not in seen:
-            active.append(doc)
+        if doc.sha256 not in seen:
+            all_non_duplicate.append(doc)
             seen.add(doc.sha256)
+            if doc.id not in superseded:
+                active_docs.append(doc)
 
     originals = LocalStorage(settings().storage_dir)
     extractions = []
+    active_extractions = []
     deadline = monotonic() + ANALYSIS_BUDGET_SECONDS
     processed = 0
-    for doc in active[:MAX_ACTIVE_DOCUMENTS]:
+    ordered_docs = active_docs + [d for d in all_non_duplicate if d.id in superseded]
+    for doc in ordered_docs[:MAX_ACTIVE_DOCUMENTS]:
         if monotonic() >= deadline:
             break
         try:
@@ -159,15 +164,18 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
             data = originals.path(doc.storage_key).read_bytes()
         except FileNotFoundError:
             raise ArchiveUnavailable("attachment_unavailable") from None
-        extractions.extend(extract(data, doc.original_filename, doc.id, doc.classification))
-        processed += 1
+        extracted_items = extract(data, doc.original_filename, doc.id, doc.classification)
+        extractions.extend(extracted_items)
+        if doc.id not in superseded:
+            active_extractions.extend(extracted_items)
+            processed += 1
 
     with session_factory()() as db:
         apply_company_aliases(
             extractions, db.scalars(select(Company).where(Company.workspace_id == case.workspace_id))
         )
-    findings, roles = review_documents(extractions)
-    if processed < len(active):
+    findings, roles = review_documents(active_extractions)
+    if processed < len(active_docs):
         findings.append(
             finding(
                 "extraction",
@@ -179,7 +187,7 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
     invoice = roles.get("invoice")
     lookup_issue = None
     company_id = None
-    if master is None and processed == len(active):
+    if master is None and processed == len(active_docs):
         with session_factory()() as db:
             company_id = detected_company(db, case, roles)
             master, lookup_issue = registered_master(db, case, invoice, company_id=company_id)

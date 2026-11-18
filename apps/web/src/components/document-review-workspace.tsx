@@ -114,6 +114,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     ?? options.find((option) => option.id === fallbackSource)
     ?? (!chosenDocTab ? options[0] : undefined);
   const activeDocument = extractionSources.find((doc, index) => matchesRole(doc.role, activeRole) && excerpts[index].key === current?.key)
+    ?? extractionSources.find((doc) => doc.document_id === current?.id)
     ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole) && doc.document_id === activeFieldInfo?.target?.document_id)
     ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole));
   const file = sources.find((entry) => entry.id === current?.id);
@@ -167,6 +168,41 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setActiveFieldInfo(undefined);
     const tab = documentTabs.find((entry) => key?.endsWith(`:${tabToRole(entry)}`));
     if (tab) setActiveDocTab(tab);
+  }
+
+  const tabDocuments = item.documents.filter((doc) =>
+    activeRole === "draft_bl"
+      ? (doc.classification === "draft_bl" || doc.classification === "final_bl")
+      : doc.classification === activeRole
+  ).sort((a, b) => {
+    if (a.classification === "final_bl" && b.classification !== "final_bl") return -1;
+    if (b.classification === "final_bl" && a.classification !== "final_bl") return 1;
+    return (b.version_number ?? 1) - (a.version_number ?? 1);
+  }).map((doc) => {
+    const ext = extractionSources.find((e) => e.document_id === doc.id);
+    return {
+      id: doc.id,
+      name: doc.original_filename,
+      classification: doc.classification,
+      version_number: doc.version_number ?? 1,
+      is_superseded: Boolean(doc.parent_version_id || item.documents.some((other) => other.parent_version_id === doc.id)),
+      reference: ext?.fields?.bl_no?.value || (doc.classification === "final_bl" ? "Final" : ext?.fields?.invoice_no?.value),
+    };
+  });
+
+  function handleSelectDocument(docId: string) {
+    const targetOption = options.find((opt) => opt.id === docId);
+    if (targetOption) {
+      chooseSource(targetOption.key);
+    } else {
+      const ext = extractionSources.find((e) => e.document_id === docId);
+      if (ext) {
+        const excerptIdx = extractionSources.indexOf(ext);
+        if (excerptIdx >= 0) {
+          chooseSource(excerpts[excerptIdx].key);
+        }
+      }
+    }
   }
 
   function inspect(evidence?: Evidence, meta?: InspectedField) {
@@ -1180,6 +1216,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               activeEvidence={selectedEvidence}
               activeField={activeFieldInfo}
               activeRole={activeRole}
+              tabDocuments={tabDocuments}
+              currentDocumentId={current?.id}
+              onSelectDocument={handleSelectDocument}
               onInspect={inspect}
               editor={editor}
               onDismissField={() => {
