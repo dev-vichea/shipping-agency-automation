@@ -37,7 +37,7 @@ Note = Annotated[
 Value = Annotated[
     str, StringConstraints(strip_whitespace=True, min_length=1, max_length=350), SafeText
 ]
-Role = Literal["invoice", "packing_list", "draft_bl"]
+Role = Literal["invoice", "packing_list", "draft_bl", "final_bl"]
 NUMBERS = {
     "quantity",
     "packages",

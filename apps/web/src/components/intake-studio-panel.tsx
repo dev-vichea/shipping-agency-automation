@@ -31,6 +31,7 @@ const knownFields = new Set(groups.flatMap(({ keys }) => keys));
 
 const roleDetails = {
   draft_bl: { name: "Draft Bill of Lading", icon: Anchor },
+  final_bl: { name: "Final Bill of Lading", icon: Anchor },
   invoice: { name: "Commercial Invoice", icon: FileText },
   packing_list: { name: "Packing List", icon: Package },
 };
@@ -356,7 +357,10 @@ export function IntakeStudioPanel({
   const candidates = analysis.candidates.filter((candidate) => candidate.invoice_document_id === document?.document_id);
   const cdcIssue = analysis.findings.find((finding) =>
     ["cdc.company", "cdc.version"].includes(finding.key) && finding.outcome !== "PASS");
-  const details = roleDetails[activeRole];
+  const isTransport = activeRole === "draft_bl" || document?.role === "draft_bl" || document?.role === "final_bl";
+  const details = (document?.role ? roleDetails[document.role as keyof typeof roleDetails] : undefined)
+    ?? roleDetails[activeRole as keyof typeof roleDetails]
+    ?? { name: "Bill of Lading", icon: Anchor };
   const DocumentIcon = details.icon;
   const fields = document?.fields ?? {};
   const extraKeys = Object.keys(fields).filter((key) => !knownFields.has(key)).sort();
@@ -377,7 +381,7 @@ export function IntakeStudioPanel({
         <div className="min-w-0 flex items-center gap-2">
           <DocumentIcon size={15} className="text-primary shrink-0" aria-hidden />
           <span className="font-semibold text-xs truncate text-foreground">
-            {details.name} · {invoiceReference(fields[activeRole === "draft_bl" ? "bl_no" : "invoice_no"]?.value) ?? intakeReference ?? "Reference pending"}
+            {details.name} · {invoiceReference(fields[isTransport ? "bl_no" : "invoice_no"]?.value) ?? intakeReference ?? "Reference pending"}
           </span>
         </div>
         <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
@@ -395,7 +399,7 @@ export function IntakeStudioPanel({
           <div className="divide-y divide-border/60 border-y border-border/60">
             {keys.map((key) => {
               const field = fields[key];
-              const target: ReviewField = { document_id: document!.document_id, role: activeRole, row: null, name: key };
+              const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as any, row: null, name: key };
               const reviewed = isReviewed(target);
               const visibleField = viewedField(target, field);
               const text = intakeField(visibleField);

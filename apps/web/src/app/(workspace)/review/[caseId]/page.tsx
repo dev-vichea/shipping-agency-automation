@@ -44,8 +44,16 @@ export default async function ReviewDetail({
     <LiveRefresh active={item.state === "queued" || item.state === "processing" || analysis.ai_state === "pending"} />
     <DocumentReviewWorkspace item={item} analysis={analysis} versions={versions} workflow={workflow}
       companies={companies} activity={activity} admin={admin}
-      share={telegram && <RecordDialog title="Telegram draft notification" trigger={<><Send aria-hidden /> Share draft</>} outline>
-        <TelegramSendForm caseId={item.id} preview={telegram} />
-      </RecordDialog>} />
+      share={telegram && (
+        <RecordDialog
+          title="Telegram draft notification"
+          trigger={<Send aria-hidden className="size-4" />}
+          outline
+          size="icon-sm"
+          buttonTitle="Share draft"
+        >
+          <TelegramSendForm caseId={item.id} preview={telegram} />
+        </RecordDialog>
+      )} />
   </>;
 }

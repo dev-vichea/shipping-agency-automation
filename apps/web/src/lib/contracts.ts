@@ -260,7 +260,7 @@ export type MasterItems = { internally_reserved: Record<number, string>;
 
 export type ConsigneeSourceRef = {
   document_id: string;
-  role: "invoice" | "packing_list" | "draft_bl";
+  role: "invoice" | "packing_list" | "draft_bl" | "final_bl";
   alternative_index: number | null;
 };
 export type ConsigneeOption = {
@@ -270,7 +270,7 @@ export type ConsigneeOption = {
 
 export type ReviewCorrection = {
   document_id: string;
-  role: "invoice" | "packing_list" | "draft_bl";
+  role: "invoice" | "packing_list" | "draft_bl" | "final_bl";
   row: number | null;
   name: string;
   value: string;

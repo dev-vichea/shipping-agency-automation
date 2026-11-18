@@ -35,6 +35,13 @@ function tabToRole(tab: DocumentTab): "draft_bl" | "invoice" | "packing_list" {
   }
 }
 
+function matchesRole(docRole: string, targetRole: string): boolean {
+  if (targetRole === "draft_bl" || targetRole === "final_bl") {
+    return docRole === "draft_bl" || docRole === "final_bl";
+  }
+  return docRole === targetRole;
+}
+
 const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
 const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
@@ -101,14 +108,14 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const fallbackSource = classifiedSources.length === 1 ? classifiedSources[0].id
     : compatibleSources.length === 1 ? compatibleSources[0].id : undefined;
   const previewOption = partyPreview && options.find((option) => option.id === partyPreview.source.document_id &&
-    option.key.endsWith(`:${partyPreview.source.role}`) && option.sheet === partyPreview.evidence.sheet);
+    (option.key.endsWith(`:${partyPreview.source.role}`) || (matchesRole(partyPreview.source.role, "draft_bl") && matchesRole(option.key.split(":").pop() ?? "", "draft_bl"))) && option.sheet === partyPreview.evidence.sheet);
   const current = previewOption ?? options.find((option) => option.key === selectedKey)
-    ?? options.find((option) => option.key.endsWith(`:${activeRole}`))
+    ?? options.find((option) => matchesRole(option.key.split(":").pop() ?? "", activeRole))
     ?? options.find((option) => option.id === fallbackSource)
     ?? (!chosenDocTab ? options[0] : undefined);
-  const activeDocument = extractionSources.find((doc, index) => doc.role === activeRole && excerpts[index].key === current?.key)
-    ?? extractionSources.find((doc) => doc.role === activeRole && doc.document_id === activeFieldInfo?.target?.document_id)
-    ?? extractionSources.find((doc) => doc.role === activeRole);
+  const activeDocument = extractionSources.find((doc, index) => matchesRole(doc.role, activeRole) && excerpts[index].key === current?.key)
+    ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole) && doc.document_id === activeFieldInfo?.target?.document_id)
+    ?? extractionSources.find((doc) => matchesRole(doc.role, activeRole));
   const file = sources.find((entry) => entry.id === current?.id);
   const citation = partyPreview?.evidence ?? selection;
   const selectedEvidence = citation?.document_id === file?.id ? citation : undefined;
@@ -737,7 +744,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     const partyOptions = needsReview || !source.value || shipmentParties.length > 1 ? shipmentParties : [];
     const printedHere = partyOptions.find((option) => option.sources.some(({ ref }) =>
       ref.document_id === currentRef.document_id && ref.role === currentRef.role && ref.alternative_index === null));
-    const partyRoles = { draft_bl: "B/L", invoice: "Invoice", packing_list: "Packing list" };
+    const partyRoles: Record<string, string> = { draft_bl: "B/L", final_bl: "B/L", invoice: "Invoice", packing_list: "Packing list" };
     const options: FieldChoice[] = (printedHere ? [printedHere, ...partyOptions.filter((option) => option !== printedHere)] : partyOptions)
       .slice(0, 3).flatMap((option, index) => {
         const printed = option.sources.find(({ ref }) =>
@@ -978,7 +985,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             <ChevronRight size={13} aria-hidden className="shrink-0" />
             <span className="shrink-0">Document review</span>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <RefreshButton />
             {["needs_review", "ready_for_approval", "failed"].includes(item.state) && (
               <ReprocessDocumentsButton caseId={item.id} revision={analysis.revision} />
@@ -1097,12 +1104,17 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             </div>
           )}
 
-          {requiresFinalConfirmation && (
+          {requiresFinalConfirmation ? (
             <div className="rounded-md border border-purple-500/30 bg-purple-50/70 p-3 text-xs text-purple-900 dark:border-purple-500/20 dark:bg-purple-950/30 dark:text-purple-200">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 font-semibold">
                   <CheckCircle2 className="size-4 text-purple-600 shrink-0" />
                   <span>Final B/L Confirmation Required</span>
+                  {analysis.version_diff?.diffs.length ? (
+                    <span className="rounded bg-purple-200/70 px-1.5 py-0.2 text-[10px] font-mono text-purple-800 dark:bg-purple-900 dark:text-purple-200">
+                      {analysis.version_diff.diffs.length} {analysis.version_diff.diffs.length === 1 ? "update" : "updates"}
+                    </span>
+                  ) : null}
                 </div>
                 <Button
                   type="button"
@@ -1114,13 +1126,36 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   <Check aria-hidden className="size-3.5 mr-1" /> Confirm Final B/L
                 </Button>
               </div>
-              <p className="mt-1 text-purple-800 dark:text-purple-300">
-                A Final / Telex Release B/L has been attached to this shipment. Staff confirmation is required to verify container numbers, seal numbers, and shipping details before final clearance.
+              <p className="mt-1 text-purple-800/90 dark:text-purple-300/90">
+                A Final / Telex Release B/L has been attached. Staff confirmation is required to verify container numbers, seal numbers, and shipping details before final clearance.
               </p>
+              {analysis.version_diff?.diffs.map((diff) => (
+                <div key={diff.document_id} className="mt-2 space-y-1.5 rounded border border-purple-200/80 bg-white/70 p-2.5 dark:border-purple-900/60 dark:bg-purple-950/40">
+                  <div className="flex items-center justify-between font-medium">
+                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
+                    {diff.parent_filename && (
+                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {Object.entries(diff.modified).map(([f, vals]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] border border-amber-500/20 text-amber-900 dark:text-amber-200">
+                        <span className="font-medium text-amber-700 dark:text-amber-400">{documentFieldLabel(f)}:</span>
+                        <span className="line-through text-muted-foreground text-[10px]">{String(vals.old)}</span>
+                        <span className="font-semibold text-foreground">→ {String(vals.new)}</span>
+                      </span>
+                    ))}
+                    {Object.entries(diff.added).map(([f, val]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
+                        <span className="font-medium text-emerald-700 dark:text-emerald-400">+{documentFieldLabel(f)}:</span>
+                        <span className="font-semibold text-foreground">{String(val)}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-          )}
-
-          {analysis.version_diff?.has_revisions && (
+          ) : analysis.version_diff?.has_revisions ? (
             <div className="rounded-md border border-blue-500/30 bg-blue-50/70 p-3 text-xs text-blue-900 dark:border-blue-500/20 dark:bg-blue-950/30 dark:text-blue-200">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 font-semibold">
@@ -1131,42 +1166,33 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   {analysis.version_diff.diffs.length} {analysis.version_diff.diffs.length === 1 ? "document updated" : "documents updated"}
                 </span>
               </div>
-              <p className="mt-1 text-blue-800 dark:text-blue-300">
-                {analysis.version_diff.summary}
-              </p>
               {analysis.version_diff.diffs.map((diff) => (
-                <div key={diff.document_id} className="mt-2 space-y-1 rounded border border-blue-200 bg-white/60 p-2 dark:border-blue-900/60 dark:bg-blue-950/40">
+                <div key={diff.document_id} className="mt-2 space-y-1.5 rounded border border-blue-200 bg-white/60 p-2.5 dark:border-blue-900/60 dark:bg-blue-950/40">
                   <div className="flex items-center justify-between font-medium">
-                    <span>{diff.original_filename} (v{diff.version_number})</span>
+                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
                     {diff.parent_filename && (
                       <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
                     )}
                   </div>
-                  {Object.keys(diff.modified).length > 0 && (
-                    <div className="text-[11px]">
-                      <span className="font-semibold text-amber-700 dark:text-amber-400">Modified: </span>
-                      {Object.entries(diff.modified).map(([f, vals]) => (
-                        <span key={f} className="mr-2">
-                          <span className="font-medium">{documentFieldLabel(f)}</span>:{" "}
-                          <del className="text-muted-foreground">{String(vals.old)}</del> &rarr; <ins className="no-underline font-semibold text-foreground">{String(vals.new)}</ins>
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {Object.keys(diff.added).length > 0 && (
-                    <div className="text-[11px]">
-                      <span className="font-semibold text-emerald-700 dark:text-emerald-400">Added: </span>
-                      {Object.entries(diff.added).map(([f, val]) => (
-                        <span key={f} className="mr-2">
-                          <span className="font-medium">{documentFieldLabel(f)}</span>: <span className="font-semibold">{String(val)}</span>
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                  <div className="flex flex-wrap gap-1.5 pt-0.5">
+                    {Object.entries(diff.modified).map(([f, vals]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-amber-500/10 px-2 py-0.5 text-[11px] border border-amber-500/20 text-amber-900 dark:text-amber-200">
+                        <span className="font-medium text-amber-700 dark:text-amber-400">{documentFieldLabel(f)}:</span>
+                        <span className="line-through text-muted-foreground text-[10px]">{String(vals.old)}</span>
+                        <span className="font-semibold text-foreground">→ {String(vals.new)}</span>
+                      </span>
+                    ))}
+                    {Object.entries(diff.added).map(([f, val]) => (
+                      <span key={f} className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-2 py-0.5 text-[11px] border border-emerald-500/20 text-emerald-900 dark:text-emerald-200">
+                        <span className="font-medium text-emerald-700 dark:text-emerald-400">+{documentFieldLabel(f)}:</span>
+                        <span className="font-semibold text-foreground">{String(val)}</span>
+                      </span>
+                    ))}
+                  </div>
                 </div>
               ))}
             </div>
-          )}
+          ) : null}
 
           <div className="panel overflow-hidden">
             {/* Exactly 3 Document Intake Tabs (matching simple flat tab style) */}

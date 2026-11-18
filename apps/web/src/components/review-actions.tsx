@@ -3,6 +3,7 @@
 import { NativeSelect } from "@/components/ui/native-select";
 import { useState, useTransition, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { FileCog, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { RegisterMasterDialog } from "@/components/register-master-dialog";
@@ -14,17 +15,31 @@ export function ReprocessDocumentsButton({ caseId, revision }: { caseId: string;
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState("");
   return <>
-    <Button type="button" variant="outline" size="sm" disabled={pending} onClick={() =>
-      startTransition(async () => {
-        setError("");
-        try {
-          await write(`/intakes/${caseId}/process`, { expected_revision: revision });
-          router.refresh();
-        } catch (cause) {
-          setError(cause instanceof Error ? cause.message : "Could not reprocess the documents.");
-        }
-      })
-    }>{pending ? "Queueing…" : "Reprocess documents"}</Button>
+    <Button
+      type="button"
+      variant="outline"
+      size="icon-sm"
+      title="Reprocess documents"
+      aria-label="Reprocess documents"
+      disabled={pending}
+      onClick={() =>
+        startTransition(async () => {
+          setError("");
+          try {
+            await write(`/intakes/${caseId}/process`, { expected_revision: revision });
+            router.refresh();
+          } catch (cause) {
+            setError(cause instanceof Error ? cause.message : "Could not reprocess the documents.");
+          }
+        })
+      }
+    >
+      {pending ? (
+        <Loader2 aria-hidden className="size-4 animate-spin" />
+      ) : (
+        <FileCog aria-hidden className="size-4" />
+      )}
+    </Button>
     {error && <span role="alert" className="field-error">{error}</span>}
   </>;
 }

@@ -1,13 +1,15 @@
 "use client";
 
 import { NativeSelect } from "@/components/ui/native-select";
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, useTransition, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import { RotateCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { write } from "@/lib/client-api";
+import { cn } from "@/lib/utils";
 import type { Company, ImportSummary, Receipt } from "@/lib/contracts";
 
 function ErrorMessage({ error }: { error: string }) {
@@ -158,5 +160,18 @@ export function AutomationAction({ path, children }: { path: string; children: R
 
 export function RefreshButton() {
   const router = useRouter();
-  return <Button type="button" variant="outline" size="sm" onClick={() => router.refresh()}>Refresh</Button>;
+  const [pending, startTransition] = useTransition();
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="icon-sm"
+      title="Refresh"
+      aria-label="Refresh"
+      disabled={pending}
+      onClick={() => startTransition(() => router.refresh())}
+    >
+      <RotateCw aria-hidden className={cn("size-4", pending && "animate-spin")} />
+    </Button>
+  );
 }
