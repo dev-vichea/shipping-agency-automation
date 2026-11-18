@@ -269,7 +269,11 @@ def archive_folder_file(db, authorization, payload, stored):
     parent_id = (
         db.scalar(
             select(Document.id)
-            .where(Document.intake_case_id == case_id, Document.original_filename == stored.name)
+            .where(
+                Document.intake_case_id == case_id,
+                Document.original_filename == stored.name,
+                Document.sha256 != stored.sha256,
+            )
             .order_by(Document.received_at.desc(), Document.id.desc())
             .limit(1)
         )

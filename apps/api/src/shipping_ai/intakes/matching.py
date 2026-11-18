@@ -555,13 +555,18 @@ def detect_document_relationship(
     if incoming_role in ("draft_bl", "final_bl"):
         # Match against active transport document
         for doc in active_docs:
-            if doc.classification in ("draft_bl", "final_bl"):
+            is_transport = (
+                doc.classification in ("draft_bl", "final_bl")
+                or any(t in doc.original_filename.lower() for t in ("bl", "bill", "telex", "hbl", "bol", "lading", "提单"))
+                or doc.original_filename.lower().endswith(".pdf")
+            )
+            if is_transport:
                 matching_parent = doc
                 break
     elif incoming_role in ("invoice", "packing_list"):
         # Match against active document of same classification
         for doc in active_docs:
-            if doc.classification == incoming_role:
+            if doc.classification == incoming_role or any(t in doc.original_filename.lower() for t in (incoming_role, "invoice", "inv", "packing", "资料")):
                 matching_parent = doc
                 break
 

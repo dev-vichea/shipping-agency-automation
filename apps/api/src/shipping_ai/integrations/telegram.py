@@ -394,7 +394,7 @@ def format_summary(case, company, snapshot, extracted, review):
     }.get(case.state, "Review required")
     lines = ["Shipping draft", f"Company: {company or 'Unassigned'}"]
     if v_diff.get("has_revisions"):
-        desc = v_diff.get("summary", {}).get("description")
+        desc = v_diff.get("summary") if isinstance(v_diff.get("summary"), str) else (v_diff.get("summary", {}).get("description") if isinstance(v_diff.get("summary"), dict) else v_diff.get("details", {}).get("description"))
         if desc:
             lines.append(f"Revision updates: {desc}")
         if v_diff.get("is_final_bl"):
@@ -549,7 +549,7 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
         revision_lines.append("🔄 <b>Document Revision Updates:</b>")
         if v_diff.get("is_final_bl"):
             revision_lines.append("• 🚢 <b>Final B/L (Telex / Original) received</b>")
-        desc = v_diff.get("summary", {}).get("description")
+        desc = v_diff.get("summary") if isinstance(v_diff.get("summary"), str) else (v_diff.get("summary", {}).get("description") if isinstance(v_diff.get("summary"), dict) else v_diff.get("details", {}).get("description"))
         if desc:
             revision_lines.append(f"• {html.escape(desc)}")
 
