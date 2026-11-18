@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
+import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
+import { AlertCircle, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -17,7 +17,7 @@ import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { write } from "@/lib/client-api";
 import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
@@ -52,6 +52,229 @@ function matchesRole(docRole: string, targetRole: string): boolean {
 }
 
 const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
+
+function ReviewTreeItem({
+  item,
+  options,
+  selected,
+  onSave,
+  autoSave,
+  busy,
+  defaultUnit,
+}: {
+  item: { id: string; name: string; row: number | null; label: string; issues: ReviewIssue[] };
+  options: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[];
+  selected?: { value: string; choice?: FieldChoice; unit?: string | null; currency?: string | null };
+  onSave: (val: string, choice?: FieldChoice, unit?: string | null, currency?: string | null) => Promise<void>;
+  autoSave: boolean;
+  busy: boolean;
+  defaultUnit?: string;
+}) {
+  const isDimensioned =
+    ["gross_weight", "net_weight", "measurement", "packages", "quantity", "amount", "unit_price"].includes(item.name) ||
+    options.some((o) => !!o.unit || !!o.currency);
+
+  const fallbackUnit =
+    defaultUnit ||
+    (["gross_weight", "net_weight"].includes(item.name)
+      ? "KG"
+      : item.name === "measurement"
+      ? "CBM"
+      : item.name === "packages"
+      ? "PKG"
+      : ["amount", "unit_price"].includes(item.name)
+      ? "USD"
+      : options.find((o) => o.unit)?.unit ?? options.find((o) => o.currency)?.currency ?? "");
+
+  const initialOpt = options[0];
+  const initialVal = selected?.value ?? initialOpt?.value ?? "";
+  const initialUnit = selected?.unit ?? initialOpt?.unit ?? fallbackUnit;
+
+  const [amount, setAmount] = useState(initialVal);
+  const [unit, setUnit] = useState(initialUnit);
+  const [chosenChoice, setChosenChoice] = useState<FieldChoice | undefined>(selected?.choice ?? initialOpt?.choice);
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  const dirty = amount.trim() !== initialVal.trim() || (isDimensioned && unit.trim() !== initialUnit.trim());
+
+  useEffect(() => {
+    if (!autoSave || !dirty || !amount.trim() || busy) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      setSaveStatus("saving");
+      try {
+        const effectiveUnit = isDimensioned ? unit.trim() || fallbackUnit : null;
+        await onSave(amount.trim(), chosenChoice, effectiveUnit);
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      } catch {
+        setSaveStatus("idle");
+      }
+    }, 600);
+
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [amount, unit, autoSave, dirty, busy, isDimensioned, fallbackUnit, chosenChoice, onSave]);
+
+  const handleSelectOption = (opt: typeof options[0]) => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setAmount(opt.value);
+    const newUnit = opt.unit || fallbackUnit;
+    if (isDimensioned) setUnit(newUnit);
+    setChosenChoice(opt.choice);
+
+    if (autoSave) {
+      setSaveStatus("saving");
+      void onSave(opt.value, opt.choice, isDimensioned ? newUnit : null).then(() => {
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      });
+    }
+  };
+
+  const handleManualConfirm = async () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    setSaveStatus("saving");
+    try {
+      const effectiveUnit = isDimensioned ? unit.trim() || fallbackUnit : null;
+      await onSave(amount.trim(), chosenChoice, effectiveUnit);
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    } catch {
+      setSaveStatus("idle");
+    }
+  };
+
+  return (
+    <div key={item.id} className="relative flex items-center justify-between gap-3 py-1 text-xs">
+      {/* Branch elbow connector */}
+      <span className="pointer-events-none absolute -left-4 top-1/2 w-4 border-t border-dashed border-border/80" aria-hidden="true" />
+
+      {/* Leaf icon + Clean label */}
+      <div className="flex items-center gap-1.5 w-36 sm:w-44 shrink-0">
+        <FileText size={13} className="text-amber-600/70 shrink-0" />
+        <span className="text-xs font-medium text-foreground truncate block" title={item.label}>
+          {item.label}
+        </span>
+      </div>
+
+      {/* Edit input: segmented [ amount | unit ] for dimensioned, or text input */}
+      <div className="min-w-0 flex-1 flex items-center gap-1.5">
+        {isDimensioned ? (
+          <div className="flex items-center rounded border border-border/70 bg-background overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors max-w-xs w-full h-7">
+            <input
+              type="text"
+              value={amount}
+              onChange={(e) => {
+                setAmount(e.target.value);
+                setChosenChoice(undefined);
+              }}
+              disabled={busy}
+              className="flex-1 min-w-0 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none border-none placeholder:text-muted-foreground/50"
+              placeholder={item.name.toLowerCase().includes("weight") ? "1000" : "0"}
+            />
+            <span className="px-2 text-muted-foreground/40 font-mono text-xs select-none" aria-hidden="true">
+              |
+            </span>
+            <input
+              type="text"
+              value={unit}
+              onChange={(e) => {
+                setUnit(e.target.value);
+                setChosenChoice(undefined);
+              }}
+              disabled={busy}
+              maxLength={8}
+              placeholder={fallbackUnit || "KG"}
+              className="w-14 bg-transparent px-1.5 py-0 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none border-none placeholder:text-muted-foreground/50"
+              title="Unit of measure"
+            />
+          </div>
+        ) : (
+          <input
+            type="text"
+            value={amount}
+            onChange={(e) => {
+              setAmount(e.target.value);
+              setChosenChoice(undefined);
+            }}
+            disabled={busy}
+            className="h-7 w-full max-w-xs rounded border border-border/70 bg-background px-2.5 py-0 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
+            placeholder={`Enter ${item.label.toLowerCase()}…`}
+          />
+        )}
+
+        {/* Source options dropdown if available */}
+        {options.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground border border-border/60 shrink-0 gap-1 font-normal cursor-pointer"
+                title="Select from detected document sources"
+              >
+                <span>Sources</span>
+                <ChevronDown size={11} className="opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64 max-h-56 overflow-y-auto p-1">
+              {options.map((opt, i) => (
+                <DropdownMenuItem
+                  key={`${opt.value}-${i}`}
+                  onClick={() => handleSelectOption(opt)}
+                  className="flex flex-col items-start py-1.5 px-2 text-xs cursor-pointer"
+                >
+                  <div className="flex items-center gap-1.5 font-mono text-xs font-medium text-foreground">
+                    <span>{opt.value}</span>
+                    {(opt.unit || (isDimensioned && fallbackUnit)) && (
+                      <>
+                        <span className="text-muted-foreground/40 select-none">|</span>
+                        <span className="text-muted-foreground font-semibold uppercase">{opt.unit || fallbackUnit}</span>
+                      </>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">{opt.label}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+      </div>
+
+      {/* Action / Auto-save Status */}
+      <div className="shrink-0 flex items-center gap-2 min-w-20 justify-end">
+        {saveStatus === "saving" && (
+          <span className="text-[10px] text-muted-foreground animate-pulse font-mono">
+            Auto-saving…
+          </span>
+        )}
+        {saveStatus === "saved" && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+            <Check size={11} /> Saved
+          </span>
+        )}
+        {(!autoSave || saveStatus === "idle") && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || !amount.trim()}
+            onClick={handleManualConfirm}
+            className="h-7 px-2.5 text-xs font-medium border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-400 cursor-pointer"
+          >
+            <Check size={12} className="mr-1" /> Confirm
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
 const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
@@ -67,7 +290,16 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const [auditView, setAuditView] = useState<typeof auditViews[number]>("All");
   const [auditOpen, setAuditOpen] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
-  const [selectedValues, setSelectedValues] = useState<Record<string, { value: string; choice?: FieldChoice }>>({});
+  const [dialogAutoSave, setDialogAutoSave] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("harborway-dialog-autosave");
+      return stored !== "false";
+    }
+    return true;
+  });
+  const [selectedValues, setSelectedValues] = useState<
+    Record<string, { value: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }>
+  >({});
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [refreshing, startRefresh] = useTransition();
@@ -467,14 +699,45 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return review;
   }
 
-  function getDetectedOptions(name: string, row: number | null, issue?: ReviewIssue): { value: string; label: string; choice?: FieldChoice }[] {
-    const rawOptions: { value: string; label: string; choice?: FieldChoice }[] = [];
+  function getDetectedOptions(
+    name: string,
+    row: number | null,
+    issue?: ReviewIssue
+  ): { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] {
+    const rawOptions: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] = [];
 
-    const add = (val: string | null | undefined, lbl: string, choice?: FieldChoice) => {
+    const add = (
+      val: string | null | undefined,
+      lbl: string,
+      choice?: FieldChoice,
+      unit?: string | null,
+      currency?: string | null
+    ) => {
       if (!val) return;
       const trimmed = val.trim();
       if (!trimmed) return;
-      rawOptions.push({ value: trimmed, label: lbl, choice });
+
+      let effectiveUnit = unit ?? choice?.unit ?? null;
+      let effectiveVal = trimmed;
+      if (!effectiveUnit) {
+        const m = trimmed.match(/^([\d.,]+)\s+([A-Za-z/]+)$/);
+        if (m) {
+          effectiveVal = m[1];
+          effectiveUnit = m[2];
+        }
+      }
+
+      const effectiveCurrency = currency ?? choice?.currency ?? null;
+
+      if (!rawOptions.some((o) => o.value === effectiveVal && (o.unit ?? "") === (effectiveUnit ?? ""))) {
+        rawOptions.push({
+          value: effectiveVal,
+          label: lbl,
+          choice,
+          unit: effectiveUnit,
+          currency: effectiveCurrency,
+        });
+      }
     };
 
     if (name === "consignee" && workflow.consignee_options?.length) {
@@ -489,7 +752,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       const ed = editorFor(issue.target, true);
       if (ed?.choices) {
         for (const c of ed.choices) {
-          add(c.value, c.label, c);
+          add(c.value, c.label, c, c.unit, c.currency);
         }
       }
     }
@@ -500,11 +763,11 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       if (row === null || row === 0) {
         const fld = doc.fields[name];
         if (fld?.value) {
-          add(fld.value, roleLabel);
+          add(fld.value, roleLabel, undefined, fld.unit, fld.currency);
         }
         if (fld?.alternatives) {
           for (const alt of fld.alternatives) {
-            if (alt.value) add(alt.value, `${roleLabel} (Alt)`);
+            if (alt.value) add(alt.value, `${roleLabel} (Alt)`, undefined, alt.unit, alt.currency);
           }
         }
       }
@@ -513,7 +776,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         if (row === null || itm.row === row) {
           const itmFld = itm.fields[name];
           if (itmFld?.value) {
-            add(itmFld.value, `${roleLabel}${row ? ` (Row ${itm.row})` : ""}`);
+            add(itmFld.value, `${roleLabel}${row ? ` (Row ${itm.row})` : ""}`, undefined, itmFld.unit, itmFld.currency);
           }
 
           if (name === "description" || name === "english_description") {
@@ -527,7 +790,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       if (row !== null && name === "packages") {
         const headerFld = doc.fields["packages"];
         if (headerFld?.value) {
-          add(headerFld.value, `${roleLabel} (Shipment Total)`);
+          add(headerFld.value, `${roleLabel} (Shipment Total)`, undefined, headerFld.unit, headerFld.currency);
         }
       }
     }
@@ -579,11 +842,12 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       }
     }
 
-    const deduplicated: { value: string; label: string; choice?: FieldChoice }[] = [];
-    const byValue = new Map<string, { value: string; labels: string[]; choice?: FieldChoice }>();
+    const deduplicated: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] = [];
+    const byValue = new Map<string, { value: string; labels: string[]; choice?: FieldChoice; unit?: string | null; currency?: string | null }>();
 
     for (const opt of rawOptions) {
-      const existing = byValue.get(opt.value);
+      const mapKey = `${opt.value}:${opt.unit ?? ""}`;
+      const existing = byValue.get(mapKey);
       if (existing) {
         if (!existing.labels.includes(opt.label)) {
           existing.labels.push(opt.label);
@@ -592,7 +856,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           existing.choice = opt.choice;
         }
       } else {
-        byValue.set(opt.value, { value: opt.value, labels: [opt.label], choice: opt.choice });
+        byValue.set(mapKey, { value: opt.value, labels: [opt.label], choice: opt.choice, unit: opt.unit, currency: opt.currency });
       }
     }
 
@@ -601,6 +865,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         value: entry.value,
         label: entry.labels.join(" / "),
         choice: entry.choice,
+        unit: entry.unit,
+        currency: entry.currency,
       });
     }
 
@@ -610,7 +876,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   async function handleConfirmGroup(
     group: { id: string; name: string; row: number | null; issues: ReviewIssue[] },
     chosenValue?: string,
-    chosenChoice?: FieldChoice
+    chosenChoice?: FieldChoice,
+    chosenUnit?: string | null,
+    chosenCurrency?: string | null
   ) {
     const baseDraft = reviewDraft(saved);
     const nextDraft: ReviewDraft = {
@@ -638,8 +906,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           nextDraft.corrections.push({
             ...target,
             value: chosenValue,
-            unit: chosenChoice?.unit ?? source?.unit ?? null,
-            currency: chosenChoice?.currency ?? source?.currency ?? null,
+            unit: chosenUnit !== undefined ? chosenUnit : (chosenChoice?.unit ?? source?.unit ?? null),
+            currency: chosenCurrency !== undefined ? chosenCurrency : (chosenChoice?.currency ?? source?.currency ?? null),
             note: chosenChoice?.consigneeSource ? "Selected a printed consignee from this shipment." :
               chosenChoice?.alternativeIndex !== undefined ? "Selected a value from the original document evidence." :
               source && chosenValue === source.value ? "Confirmed against original document evidence." : "Confirmed in review dialog.",
@@ -876,8 +1144,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           nextDraft.corrections.push({
             ...target,
             value: selection.value,
-            unit: selection.choice?.unit ?? source?.unit ?? null,
-            currency: selection.choice?.currency ?? source?.currency ?? null,
+            unit: selection.unit !== undefined ? selection.unit : (selection.choice?.unit ?? source?.unit ?? null),
+            currency: selection.currency !== undefined ? selection.currency : (selection.choice?.currency ?? source?.currency ?? null),
             note: "Confirmed in review dialog.",
             alternative_index: selection.choice?.alternativeIndex,
             consignee_source: selection.choice?.consigneeSource,
@@ -1054,84 +1322,20 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   function renderTreeItem(item: { id: string; name: string; row: number | null; label: string; issues: ReviewIssue[] }) {
     const options = getDetectedOptions(item.name, item.row, item.issues[0]);
     const selected = selectedValues[item.id];
-    const currentVal = selected?.value ?? options[0]?.value ?? "";
-    const currentChoice = selected?.choice ?? options.find((o) => o.value === currentVal)?.choice;
-    const currentOption = options.find((o) => o.value === currentVal) ?? options[0];
 
     return (
-      <div key={item.id} className="relative flex items-center justify-between gap-3 py-1 text-xs">
-        {/* Branch elbow connector */}
-        <span className="pointer-events-none absolute -left-4 top-1/2 w-4 border-t border-dashed border-border/80" aria-hidden="true" />
-
-        {/* Leaf icon + Clean label */}
-        <div className="flex items-center gap-1.5 w-36 sm:w-44 shrink-0">
-          <FileText size={13} className="text-amber-600/70 shrink-0" />
-          <span className="text-xs font-medium text-foreground truncate block" title={item.label}>
-            {item.label}
-          </span>
-        </div>
-
-        {/* Detected value / Dropdown */}
-        <div className="min-w-0 flex-1">
-          {options.length > 1 ? (
-            <Select
-              value={currentVal}
-              onValueChange={(val) => {
-                const opt = options.find((o) => o.value === val);
-                setSelectedValues((prev) => ({ ...prev, [item.id]: { value: val, choice: opt?.choice } }));
-              }}
-            >
-              <SelectTrigger className="h-7 w-full max-w-md px-2.5 py-0 text-xs justify-between rounded border border-border/70 bg-background hover:bg-muted/40 text-foreground font-normal">
-                <span className="truncate font-mono text-xs">
-                  {currentVal}
-                  {currentOption?.label && (
-                    <span className="text-[10px] text-muted-foreground ml-1.5 font-sans">
-                      ({currentOption.label})
-                    </span>
-                  )}
-                </span>
-              </SelectTrigger>
-              <SelectContent>
-                {options.map((opt, i) => (
-                  <SelectItem key={`${opt.value}-${i}`} value={opt.value} className="text-xs">
-                    <div className="flex flex-col py-0.5 max-w-sm sm:max-w-md">
-                      <span className="font-mono text-xs font-medium truncate">{opt.value}</span>
-                      <span className="text-[10px] text-muted-foreground">{opt.label}</span>
-                    </div>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : options.length === 1 ? (
-            <div className="flex items-center h-7 px-2.5 text-xs text-foreground font-mono truncate" title={currentVal}>
-              <span>{currentVal}</span>
-              {currentOption?.label && (
-                <span className="text-[10px] text-muted-foreground ml-1.5 font-sans">
-                  ({currentOption.label})
-                </span>
-              )}
-            </div>
-          ) : (
-            <div className="flex items-center h-7 px-2.5 text-xs text-muted-foreground italic truncate">
-              Not detected in documents
-            </div>
-          )}
-        </div>
-
-        {/* Action button */}
-        <div className="shrink-0">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => void handleConfirmGroup(item, currentVal, currentChoice)}
-            className="h-7 px-2.5 text-xs font-medium border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-400"
-          >
-            <Check size={12} className="mr-1" /> Confirm
-          </Button>
-        </div>
-      </div>
+      <ReviewTreeItem
+        key={item.id}
+        item={item}
+        options={options}
+        selected={selected}
+        autoSave={dialogAutoSave}
+        busy={busy}
+        onSave={async (val, choice, unit, currency) => {
+          setSelectedValues((prev) => ({ ...prev, [item.id]: { value: val, choice, unit, currency } }));
+          await handleConfirmGroup(item, val, choice, unit, currency);
+        }}
+      />
     );
   }
 
@@ -1455,7 +1659,38 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                 All detected values across shipment documents organized by hierarchy. Select or confirm values to proceed.
               </p>
             </div>
-            <DialogCloseButton label="Close review dialog" />
+
+            {/* Auto-save Switcher (replaces close toggle) */}
+            <div className="flex items-center gap-2 select-none" title="Toggle automatic saving on edits">
+              <span className="text-xs font-medium text-muted-foreground">Auto save</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dialogAutoSave}
+                aria-label="Toggle auto save"
+                onClick={() => {
+                  setDialogAutoSave((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem("harborway-dialog-autosave", String(next));
+                    } catch {}
+                    return next;
+                  });
+                }}
+                className={cn(
+                  "relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                  dialogAutoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none inline-block size-3.5 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
+                    dialogAutoSave ? "translate-x-4" : "translate-x-0.5"
+                  )}
+                />
+              </button>
+            </div>
           </div>
 
           <div className="max-h-[65vh] overflow-y-auto px-5 py-3 space-y-4">
