@@ -1,5 +1,6 @@
 from datetime import UTC, date, datetime
 from hashlib import sha256
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -36,6 +37,8 @@ from .review import (
     latest_review,
     review_payload,
 )
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/intakes", tags=["staff approval"])
 mutation = [Depends(browser_origin)]
@@ -319,6 +322,17 @@ def reject(case_id: UUID, request: Decision, db: DB, user: Staff):
     audit(db, case, user, "intake_rejected", "rejected")
     case.review_reason = "Intake rejected by staff."
     db.commit()
+    from shipping_ai.integrations.telegram import notify_case_status
+
+    try:
+        with db.begin_nested():
+            notify_case_status(
+                db, case, event_type="rejected", actor_id=user.id, details={"notes": request.notes}
+            )
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.warning("Telegram status notification error on reject: %s", exc)
     return result(event)
 
 
@@ -457,6 +471,15 @@ def approve(case_id: UUID, request: Decision, db: DB, user: Staff):
     case.detected_reference = record.invoice_no
     case.review_reason = "Staff approved the import."
     db.commit()
+    from shipping_ai.integrations.telegram import notify_case_status
+
+    try:
+        with db.begin_nested():
+            notify_case_status(db, case, event_type="approved", actor_id=user.id)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        log.warning("Telegram status notification error on approve: %s", exc)
     return result(event)
 
 

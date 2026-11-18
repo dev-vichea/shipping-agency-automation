@@ -1,3 +1,4 @@
+import hashlib
 import html
 import json
 import logging
@@ -15,9 +16,12 @@ from shipping_ai.core.config import settings
 from shipping_ai.models import (
     ActivityEvent,
     Company,
+    CompanyMember,
     DocumentExtraction,
     IntakeCase,
     ReviewSnapshot,
+    StaffReview,
+    TelegramDelivery,
     TelegramRecipient,
     User,
     WorkspaceMember,
@@ -158,6 +162,40 @@ def safe_edit_or_send(
         parse_mode=parse_mode,
         link_preview_options=link_preview_options,
     )
+
+
+def safe_edit_message(
+    chat_id: str | int,
+    text: str,
+    message_id: int,
+    reply_markup: dict | None = None,
+    parse_mode: str | None = "HTML",
+    link_preview_options: dict | None = None,
+) -> bool:
+    payload: dict = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+    }
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
+    if link_preview_options:
+        payload["link_preview_options"] = link_preview_options
+    try:
+        api("editMessageText", payload)
+        return True
+    except TelegramError as exc:
+        if "message is not modified" in str(exc).lower():
+            return True
+        log.info("Telegram editMessageText skipped (%s)", exc)
+        return False
+
+
+def enabled_bot() -> bool:
+    token = settings().telegram_bot_token
+    return bool(token and re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]+", token.get_secret_value()))
 
 
 def field_value(documents, roles, keys):
@@ -438,15 +476,18 @@ def card_buttons(case, review=None) -> list[list[dict]]:
     action_row: list[dict] = []
     if is_public:
         if origin.scheme == "https":
-            if review:
+            if review and case.state in ("needs_review", "ready_for_approval"):
                 action_row.extend([
                     {"text": "✅ Quick Approve", "web_app": {"url": f"{url}&decision=approve"}},
                     {"text": "❌ Quick Reject", "web_app": {"url": f"{url}&decision=reject"}},
                 ])
+            elif case.state == "approved":
+                action_row.append({"text": "📋 View Import in Telegram", "web_app": {"url": url}})
             else:
                 action_row.append({"text": "🔍 Review in Telegram", "web_app": {"url": url}})
         else:
-            action_row.append({"text": "🔍 Open in Harborway ↗", "url": url})
+            action_label = "📋 View Import Record ↗" if case.state == "approved" else "🔍 Open in Harborway ↗"
+            action_row.append({"text": action_label, "url": url})
 
     action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
     rows.append(action_row)
@@ -572,7 +613,7 @@ def format_card(case, company, snapshot, extracted, review) -> tuple[str, bool, 
         f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
         f"🚦 <b>Approval Status:</b> {approval_text}",
         "",
-        f"🔗 <a href='{url}'>Open Draft in Harborway ↗</a>",
+        f"🔗 <a href='{url}'>{'Open Accepted Import in Harborway ↗' if case.state == 'approved' else 'Open Rejected Intake in Harborway ↗' if case.state == 'rejected' else 'Open Draft in Harborway ↗'}</a>",
     ]
     buttons = card_buttons(case, review if quick else None)
     return "\n".join(lines), quick, buttons
@@ -824,6 +865,353 @@ def format_bl_card(case, company_name: str | None, payload: dict, all_docs: dict
         ],
     ]
     return "\n".join(lines), buttons
+
+
+def format_status_notification(
+    case: IntakeCase,
+    company_name: str | None,
+    snapshot: ReviewSnapshot | None,
+    payloads: list[dict],
+    review: StaffReview | None,
+    event_type: str,
+    actor_name: str | None = None,
+    details: dict | None = None,
+) -> tuple[str, list[list[dict]]]:
+    source = review.payload["documents"] if review and review.ready else payloads
+    documents = [Extraction.model_validate(item) for item in source]
+    ref = (
+        case.detected_reference
+        or field_value(documents, ("invoice",), ("invoice_no",))
+        or str(case.id)[:8]
+    )
+    inv_val = invoice_value(documents)
+    excerpts = []
+    for doc in documents:
+        excerpts.extend(getattr(doc, "source_excerpt", []))
+    bl_val = resolve_bl_no(documents, excerpts)
+    port_val = resolve_port(documents, excerpts)
+    container_val = resolve_container(documents, excerpts)
+    url = draft_url(case)
+    origin = settings().web_origin
+    is_public = is_public_url(str(origin))
+
+    approval_map = {
+        "approved": "✅ Approved",
+        "rejected": "❌ Rejected",
+        "ready_for_approval": "🟢 Ready for Approval",
+        "awaiting_updated_document": "⏳ Awaiting Updated Document",
+        "manual_matching": "🔍 Manual Matching Required",
+    }
+    approval_text = approval_map.get(case.state, "🟡 Review Required")
+
+    status_icon = (
+        "✅"
+        if snapshot and snapshot.outcome == "PASS"
+        else "⚠️"
+        if snapshot and snapshot.outcome == "MISMATCH"
+        else "ℹ️"
+    )
+    outcome_text = snapshot.outcome.replace("_", " ").title() if snapshot else "Pending"
+    issues = sum(
+        finding.get("outcome") != "PASS" for finding in (snapshot.findings if snapshot else [])
+    )
+
+    if event_type == "approved":
+        lines = [
+            "✅ <b>Shipment Approved &amp; Import Created</b>",
+            "",
+            f"🚢 <b>Reference:</b> <code>{html.escape(ref)}</code>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+            f"👤 <b>Approved by:</b> {html.escape(actor_name or 'Staff')}",
+            f"💰 <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
+            f"📄 <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
+        ]
+        if port_val and port_val != "Pending":
+            lines.append(f"📍 <b>Discharge Port:</b> {html.escape(port_val)}")
+        if container_val and container_val != "Pending":
+            lines.append(f"📦 <b>Container:</b> {html.escape(container_val)}")
+        lines.extend([
+            "",
+            "🚦 <b>Status:</b> ✅ Accepted — CDC import record created",
+            "",
+            f"🔗 <a href='{url}'>Open Accepted Record in Harborway ↗</a>",
+        ])
+        action_row: list[dict] = []
+        if is_public:
+            if origin.scheme == "https":
+                action_row.append({"text": "📋 View Import in Telegram", "web_app": {"url": url}})
+            else:
+                action_row.append({"text": "📋 View Import Record ↗", "url": url})
+        action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
+        buttons = [
+            [
+                {"text": "📄 Invoice", "callback_data": f"doc:inv:{ref}"},
+                {"text": "📦 Packing List", "callback_data": f"doc:pl:{ref}"},
+                {"text": "🚢 B/L", "callback_data": f"doc:bl:{ref}"},
+            ],
+            action_row,
+        ]
+        return "\n".join(lines), buttons
+
+    elif event_type == "rejected":
+        notes = (details or {}).get("notes") or "Rejected by staff."
+        lines = [
+            "❌ <b>Shipment Rejected</b>",
+            "",
+            f"🚢 <b>Reference:</b> <code>{html.escape(ref)}</code>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+            f"👤 <b>Rejected by:</b> {html.escape(actor_name or 'Staff')}",
+            f"📝 <b>Reason:</b> {html.escape(notes)}",
+            "",
+            "🚦 <b>Status:</b> ❌ Rejected",
+            "",
+            f"🔗 <a href='{url}'>View Intake in Harborway ↗</a>",
+        ]
+        action_row = []
+        if is_public:
+            if origin.scheme == "https":
+                action_row.append({"text": "🔍 View in Telegram", "web_app": {"url": url}})
+            else:
+                action_row.append({"text": "🔍 View in Harborway ↗", "url": url})
+        action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
+        buttons = [
+            [
+                {"text": "📄 Invoice", "callback_data": f"doc:inv:{ref}"},
+                {"text": "📦 Packing List", "callback_data": f"doc:pl:{ref}"},
+                {"text": "🚢 B/L", "callback_data": f"doc:bl:{ref}"},
+            ],
+            action_row,
+        ]
+        return "\n".join(lines), buttons
+
+    elif event_type == "revision_received":
+        v_diff = (
+            (details or {}).get("version_diff")
+            or (getattr(snapshot, "version_diff", None) if snapshot else {})
+            or {}
+        )
+        desc = (
+            v_diff.get("summary")
+            if isinstance(v_diff.get("summary"), str)
+            else (
+                v_diff.get("summary", {}).get("description")
+                if isinstance(v_diff.get("summary"), dict)
+                else (
+                    v_diff.get("details", {}).get("description")
+                    if isinstance(v_diff.get("details"), dict)
+                    else None
+                )
+            )
+        )
+        lines = [
+            "🔄 <b>Document Revision Received</b>",
+            "",
+            f"🚢 <b>Reference:</b> <code>{html.escape(ref)}</code> <i>(Revision #{case.analysis_revision})</i>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+        ]
+        if v_diff.get("is_final_bl"):
+            lines.append("• 🚢 <b>Final B/L (Telex / Original) received</b>")
+        if desc:
+            lines.append(f"• <b>Update:</b> {html.escape(desc)}")
+        lines.extend([
+            f"💰 <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
+            f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
+            f"🚦 <b>Status:</b> {approval_text}",
+            "",
+            f"🔗 <a href='{url}'>Review Updated Draft in Harborway ↗</a>",
+        ])
+        buttons = card_buttons(case, review)
+        return "\n".join(lines), buttons
+
+    else:
+        lines = [
+            "🔔 <b>Shipment Status Update</b>",
+            "",
+            f"🚢 <b>Reference:</b> <code>{html.escape(ref)}</code>",
+            f"🏢 <b>Company:</b> {html.escape(company_name or 'Unassigned')}",
+            f"💰 <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
+            f"📄 <b>B/L No:</b> <code>{html.escape(bl_val)}</code>",
+            f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
+            f"🚦 <b>Status:</b> {approval_text}",
+            "",
+            f"🔗 <a href='{url}'>Open Draft in Harborway ↗</a>",
+        ]
+        buttons = card_buttons(case, review)
+        return "\n".join(lines), buttons
+
+
+def update_previous_deliveries(
+    db,
+    case: IntakeCase,
+    snapshot: ReviewSnapshot,
+    payloads: list[dict],
+    review: StaffReview | None,
+) -> int:
+    deliveries = db.scalars(
+        select(TelegramDelivery).where(
+            TelegramDelivery.case_id == case.id,
+            TelegramDelivery.provider_message_id.is_not(None),
+            TelegramDelivery.state == "sent",
+        )
+    ).all()
+    if not deliveries:
+        return 0
+    company = db.get(Company, case.company_id) if case.company_id else None
+    card_text, _, buttons = format_card(
+        case, company.name if company else None, snapshot, payloads, review
+    )
+    edited = 0
+    seen: set[tuple[str, str]] = set()
+    for delivery in deliveries:
+        if not delivery.provider_message_id:
+            continue
+        key = (delivery.chat_id, delivery.provider_message_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            ok = safe_edit_message(
+                chat_id=delivery.chat_id,
+                text=card_text,
+                message_id=int(delivery.provider_message_id),
+                reply_markup={"inline_keyboard": buttons} if buttons else None,
+                parse_mode="HTML",
+                link_preview_options={"is_disabled": True},
+            )
+            if ok:
+                edited += 1
+        except Exception as exc:
+            log.warning("Could not update previous delivery %s: %s", delivery.id, exc)
+    return edited
+
+
+def notify_case_status(
+    db,
+    case: IntakeCase,
+    event_type: str,
+    actor_id: UUID | None = None,
+    details: dict | None = None,
+) -> int:
+    if not enabled_bot():
+        return 0
+
+    snapshot = db.scalar(
+        select(ReviewSnapshot).where(
+            ReviewSnapshot.intake_case_id == case.id,
+            ReviewSnapshot.revision == case.analysis_revision,
+        )
+    )
+    payloads = (
+        db.scalars(
+            select(DocumentExtraction.payload).where(
+                DocumentExtraction.snapshot_id == snapshot.id
+            )
+        ).all()
+        if snapshot
+        else []
+    )
+    company = db.get(Company, case.company_id) if case.company_id else None
+    from shipping_ai.approvals.review import latest_review
+
+    review = latest_review(db, case)
+
+    actor_name = None
+    if actor_id:
+        actor = db.get(User, actor_id)
+        if actor:
+            actor_name = actor.email
+
+    # 1. Update existing Telegram messages for this case to reflect current state
+    if snapshot:
+        update_previous_deliveries(db, case, snapshot, payloads, review)
+
+    # 2. Find eligible recipients in this workspace
+    query = (
+        select(TelegramRecipient)
+        .join(User, TelegramRecipient.user_id == User.id)
+        .join(WorkspaceMember, WorkspaceMember.user_id == User.id)
+        .where(
+            TelegramRecipient.workspace_id == case.workspace_id,
+            WorkspaceMember.workspace_id == case.workspace_id,
+            User.active.is_(True),
+        )
+    )
+    if case.company_id:
+        operators = select(CompanyMember.user_id).where(CompanyMember.company_id == case.company_id)
+        query = query.where((WorkspaceMember.role == "admin") | User.id.in_(operators))
+    else:
+        query = query.where(WorkspaceMember.role == "admin")
+
+    recipients = db.scalars(query).all()
+    if not recipients:
+        return 0
+
+    # 3. Format notification text & buttons
+    text, buttons = format_status_notification(
+        case=case,
+        company_name=company.name if company else None,
+        snapshot=snapshot,
+        payloads=payloads,
+        review=review,
+        event_type=event_type,
+        actor_name=actor_name,
+        details=details,
+    )
+    payload_hash = hashlib.sha256(text.encode()).hexdigest()
+
+    count = 0
+    for recipient in recipients:
+        existing = db.scalar(
+            select(TelegramDelivery).filter_by(
+                case_id=case.id,
+                chat_id=recipient.chat_id,
+                revision=case.analysis_revision,
+                payload_hash=payload_hash,
+            )
+        )
+        if existing and existing.state == "sent":
+            continue
+
+        try:
+            sent = safe_send_message(
+                chat_id=recipient.chat_id,
+                text=text,
+                reply_markup={"inline_keyboard": buttons} if buttons else None,
+                parse_mode="HTML",
+                link_preview_options={"is_disabled": True},
+            )
+            msg_id = sent.get("message_id") if isinstance(sent, dict) else None
+
+            db.execute(
+                insert(TelegramDelivery)
+                .values(
+                    case_id=case.id,
+                    actor_id=actor_id or recipient.user_id,
+                    chat_id=recipient.chat_id,
+                    revision=case.analysis_revision,
+                    payload_hash=payload_hash,
+                    state="sent",
+                    provider_message_id=str(msg_id) if msg_id else None,
+                )
+                .on_conflict_do_update(
+                    constraint="uq_telegram_delivery",
+                    set_={"state": "sent", "provider_message_id": str(msg_id) if msg_id else None},
+                )
+            )
+            count += 1
+        except Exception as exc:
+            log.warning("Failed to send status notification to %s: %s", recipient.chat_id, exc)
+
+    if count > 0:
+        db.add(
+            ActivityEvent(
+                actor_type="staff" if actor_id else "worker",
+                actor_id=actor_id,
+                intake_case_id=case.id,
+                event_type=f"telegram_status_{event_type}",
+            )
+        )
+    return count
 
 
 def setup_bot_menus(chat_id: str | int | None = None) -> bool:

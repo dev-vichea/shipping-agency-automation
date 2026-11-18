@@ -203,7 +203,7 @@ def read_analysis(case_id: UUID, revision: int) -> Analysis | None:
     with session_factory()() as db:
         version_diff = compute_snapshot_version_diff(db, case.id, extractions)
     return Analysis(
-        extractions,
+        active_extractions,
         findings,
         candidates,
         reference,

@@ -590,3 +590,138 @@ def test_telegram_pairing_token_and_update_processing(staff, monkeypatch):
     with session_factory().begin() as db:
         assert telegram.process_update(db, redis, bl_cb) is True
     assert any("Bill of Lading Details" in s.get("text", "") for s in sent)
+
+
+def test_telegram_status_notifications_on_approval_rejection_and_revision(staff, monkeypatch):
+    from shipping_ai.core.config import settings
+    from shipping_ai.core.db import session_factory
+    from shipping_ai.integrations import telegram
+    from shipping_ai.models import ActivityEvent, IntakeCase, ReviewSnapshot, TelegramDelivery
+
+    workspace(staff, "Telegram Status Updates Workspace")
+    company = new_company(staff, COMPANY)
+    path = archive(staff, company_id=company)
+    case_id = UUID(path.split("/")[-1])
+    current, mappings = apply_master(staff, path, analysis(staff, path), balance="72")
+    review = save(staff, path, current, mappings=mappings, verify_cdc_mappings=True)
+
+    config = settings()
+    monkeypatch.setattr(config, "telegram_bot_token", SecretStr("1234:status_test_key"))
+
+    calls = []
+
+    def fake_api(method, payload):
+        calls.append({"method": method, "payload": payload})
+        if method == "getChat":
+            return {"id": int(payload["chat_id"]), "type": "private", "first_name": "Ops Staff"}
+        return {"message_id": 100 + len(calls)}
+
+    monkeypatch.setattr(telegram, "api", fake_api)
+
+    email = staff.get(f"{API}/auth/me").json()["email"]
+    linked = staff.post(
+        f"{API}/integrations/telegram/recipients",
+        json={"email": email, "chat_id": "55512345"},
+    )
+    assert linked.status_code == 201
+
+    # Send initial draft notification card
+    preview = staff.get(f"{path}/telegram").json()
+    send_resp = staff.post(
+        f"{path}/telegram",
+        json={
+            "recipient_id": linked.json()["id"],
+            "revision": preview["revision"],
+            "payload_hash": preview["payload_hash"],
+        },
+    )
+    assert send_resp.status_code == 200
+    assert any(c["method"] == "sendMessage" for c in calls)
+    calls.clear()
+
+    # 1. Test Status Notification on Approve
+    approved = staff.post(f"{path}/approve", json=decision(current, review))
+    assert approved.status_code == 200
+
+    # Verify both editMessageText (to update old card) and sendMessage (to alert staff of approval)
+    edit_calls = [c for c in calls if c["method"] == "editMessageText"]
+    send_calls = [c for c in calls if c["method"] == "sendMessage"]
+    assert len(edit_calls) >= 1
+    assert "Approved" in edit_calls[0]["payload"]["text"]
+
+    assert len(send_calls) >= 1
+    approval_msg = send_calls[0]["payload"]["text"]
+    assert "Shipment Approved" in approval_msg
+    assert "INV-FIXTURE-101" in approval_msg
+    assert email in approval_msg
+
+    with session_factory().begin() as db:
+        event = db.scalar(
+            select(ActivityEvent).filter_by(
+                intake_case_id=case_id, event_type="telegram_status_approved"
+            )
+        )
+        assert event is not None
+
+    # 2. Test Status Notification on Reject
+    calls.clear()
+    path2 = archive(staff, company_id=company)
+    case_id2 = UUID(path2.split("/")[-1])
+    current2, mappings2 = apply_master(staff, path2, analysis(staff, path2), balance="72")
+    review2 = save(staff, path2, current2, mappings=mappings2, verify_cdc_mappings=True)
+
+    preview2 = staff.get(f"{path2}/telegram").json()
+    staff.post(
+        f"{path2}/telegram",
+        json={
+            "recipient_id": linked.json()["id"],
+            "revision": preview2["revision"],
+            "payload_hash": preview2["payload_hash"],
+        },
+    )
+    calls.clear()
+
+    reject_notes = "Missing carrier stamp on draft B/L"
+    rejected = staff.post(
+        f"{path2}/reject", json={**decision(current2, review2), "notes": reject_notes}
+    )
+    assert rejected.status_code == 200
+
+    reject_sends = [c for c in calls if c["method"] == "sendMessage"]
+    assert len(reject_sends) >= 1
+    reject_msg = reject_sends[0]["payload"]["text"]
+    assert "Shipment Rejected" in reject_msg
+    assert reject_notes in reject_msg
+
+    with session_factory().begin() as db:
+        reject_event = db.scalar(
+            select(ActivityEvent).filter_by(
+                intake_case_id=case_id2, event_type="telegram_status_rejected"
+            )
+        )
+        assert reject_event is not None
+
+    # 3. Test Revision Received Notification
+    calls.clear()
+    with session_factory().begin() as db:
+        case = db.get(IntakeCase, case_id)
+        count = telegram.notify_case_status(
+            db,
+            case,
+            event_type="revision_received",
+            details={
+                "version_diff": {
+                    "has_revisions": True,
+                    "is_final_bl": True,
+                    "summary": "Telex release final B/L received",
+                }
+            },
+        )
+        assert count >= 1
+
+    revision_sends = [c for c in calls if c["method"] == "sendMessage"]
+    assert len(revision_sends) >= 1
+    rev_msg = revision_sends[0]["payload"]["text"]
+    assert "Document Revision Received" in rev_msg
+    assert "Final B/L (Telex / Original) received" in rev_msg
+

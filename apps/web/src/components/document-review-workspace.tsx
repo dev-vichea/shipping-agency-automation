@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
+import { AlertCircle, Check, ChevronLeft, ChevronRight, FileText, Folder, ScanSearch, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
@@ -17,7 +17,6 @@ import { Empty, Section, Status } from "@/components/workspace";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { write } from "@/lib/client-api";
 import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
@@ -94,7 +93,9 @@ function ReviewTreeItem({
   const [unit, setUnit] = useState(initialUnit);
   const [chosenChoice, setChosenChoice] = useState<FieldChoice | undefined>(selected?.choice ?? initialOpt?.choice);
   const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const dirty = amount.trim() !== initialVal.trim() || (isDimensioned && unit.trim() !== initialUnit.trim());
 
@@ -120,12 +121,20 @@ function ReviewTreeItem({
     };
   }, [amount, unit, autoSave, dirty, busy, isDimensioned, fallbackUnit, chosenChoice, onSave]);
 
+  useEffect(() => {
+    return () => {
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+    };
+  }, []);
+
   const handleSelectOption = (opt: typeof options[0]) => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
     setAmount(opt.value);
     const newUnit = opt.unit || fallbackUnit;
     if (isDimensioned) setUnit(newUnit);
     setChosenChoice(opt.choice);
+    setIsDropdownOpen(false);
 
     if (autoSave) {
       setSaveStatus("saving");
@@ -149,8 +158,18 @@ function ReviewTreeItem({
     }
   };
 
+  const query = amount.trim().toLowerCase();
+  const filteredOptions = options.filter((opt) => {
+    if (!query) return true;
+    return (
+      opt.value.toLowerCase().includes(query) ||
+      (opt.unit && opt.unit.toLowerCase().includes(query)) ||
+      opt.label.toLowerCase().includes(query)
+    );
+  });
+
   return (
-    <div key={item.id} className="grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1 text-xs">
+    <div key={item.id} className="grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1.5 text-xs">
       {/* Leaf icon + Clean label */}
       <div className="flex items-center gap-1.5 min-w-0">
         <FileText size={13} className="text-amber-600/70 shrink-0" />
@@ -159,114 +178,198 @@ function ReviewTreeItem({
         </span>
       </div>
 
-      {/* Edit input: segmented [ amount | unit ] for dimensioned, or text input */}
+      {/* Edit input: Value + Unit (separate fields if dimensioned) */}
       <div className="min-w-0 flex items-center gap-2">
         {isDimensioned ? (
-          <div className="flex items-center rounded border border-border/70 bg-transparent overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors max-w-xs w-full h-7">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Value input with focus/search suggestions dropdown */}
+            <div className="relative flex-1 min-w-0">
+              <input
+                type="text"
+                value={amount}
+                onChange={(e) => {
+                  setAmount(e.target.value);
+                  setChosenChoice(undefined);
+                  setIsDropdownOpen(true);
+                }}
+                onFocus={() => setIsDropdownOpen(true)}
+                onBlur={() => {
+                  blurTimeoutRef.current = setTimeout(() => setIsDropdownOpen(false), 200);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setIsDropdownOpen(false);
+                }}
+                disabled={busy}
+                className="h-8 w-full rounded-md border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
+                placeholder={item.name.toLowerCase().includes("weight") ? "1000" : "0"}
+              />
+
+              {/* Suggestions Dropdown on Focus / Search */}
+              {isDropdownOpen && options.length > 0 && (
+                <div
+                  className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-md border border-border/80 bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-black/5 animate-in fade-in-0 zoom-in-95 duration-100"
+                  onMouseDown={(e) => e.preventDefault()}
+                >
+                  <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                    Suggestions ({filteredOptions.length})
+                  </div>
+                  {filteredOptions.length > 0 ? (
+                    filteredOptions.map((opt, i) => {
+                      const isCurrent =
+                        opt.value.trim() === amount.trim() &&
+                        (!opt.unit || opt.unit.trim() === unit.trim());
+                      return (
+                        <button
+                          key={`${opt.value}-${i}`}
+                          type="button"
+                          onClick={() => handleSelectOption(opt)}
+                          className={cn(
+                            "flex w-full flex-col items-start rounded px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
+                            isCurrent
+                              ? "bg-primary/10 text-primary font-medium"
+                              : "hover:bg-muted/70 text-foreground"
+                          )}
+                        >
+                          <div className="flex w-full items-center justify-between gap-2">
+                            <span className="font-mono text-xs font-medium truncate">
+                              {opt.value}
+                              {opt.unit && (
+                                <span className="ml-1 text-[11px] font-semibold uppercase text-muted-foreground">
+                                  {opt.unit}
+                                </span>
+                              )}
+                            </span>
+                            {isCurrent && <Check size={12} className="text-primary shrink-0" />}
+                          </div>
+                          <span className="text-[10px] text-muted-foreground truncate w-full">
+                            {opt.label}
+                          </span>
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <div className="px-2 py-2 text-center text-xs text-muted-foreground">
+                      No matching suggestions
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Dedicated Unit input */}
+            <div className="relative w-18 shrink-0">
+              <input
+                type="text"
+                value={unit}
+                onChange={(e) => {
+                  setUnit(e.target.value);
+                  setChosenChoice(undefined);
+                }}
+                disabled={busy}
+                maxLength={8}
+                placeholder={fallbackUnit || "KG"}
+                className="h-8 w-full rounded-md border border-border/70 bg-transparent px-1.5 py-0 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
+                title="Unit of measure (e.g. KG, CBM, PKG, USD)"
+              />
+            </div>
+          </div>
+        ) : (
+          <div className="relative flex-1 min-w-0">
             <input
               type="text"
               value={amount}
               onChange={(e) => {
                 setAmount(e.target.value);
                 setChosenChoice(undefined);
+                setIsDropdownOpen(true);
+              }}
+              onFocus={() => setIsDropdownOpen(true)}
+              onBlur={() => {
+                blurTimeoutRef.current = setTimeout(() => setIsDropdownOpen(false), 200);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setIsDropdownOpen(false);
               }}
               disabled={busy}
-              className="flex-1 min-w-0 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none border-none placeholder:text-muted-foreground/50"
-              placeholder={item.name.toLowerCase().includes("weight") ? "1000" : "0"}
+              className="h-8 w-full rounded-md border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
+              placeholder={`Enter ${item.label.toLowerCase()}…`}
             />
-            <span className="px-2 text-muted-foreground/40 font-mono text-xs select-none" aria-hidden="true">
-              |
-            </span>
-            <input
-              type="text"
-              value={unit}
-              onChange={(e) => {
-                setUnit(e.target.value);
-                setChosenChoice(undefined);
-              }}
-              disabled={busy}
-              maxLength={8}
-              placeholder={fallbackUnit || "KG"}
-              className="w-14 bg-transparent px-1.5 py-0 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none border-none placeholder:text-muted-foreground/50"
-              title="Unit of measure"
-            />
-          </div>
-        ) : (
-          <input
-            type="text"
-            value={amount}
-            onChange={(e) => {
-              setAmount(e.target.value);
-              setChosenChoice(undefined);
-            }}
-            disabled={busy}
-            className="h-7 w-full max-w-xs rounded border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
-            placeholder={`Enter ${item.label.toLowerCase()}…`}
-          />
-        )}
 
-        {/* Source options dropdown if available */}
-        {options.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                type="button"
-                variant="ghost"
-                size="xs"
-                className="h-7 px-2 text-[11px] text-muted-foreground hover:text-foreground border border-border/60 shrink-0 gap-1 font-normal cursor-pointer"
-                title="Select from detected document sources"
+            {/* Suggestions Dropdown on Focus / Search */}
+            {isDropdownOpen && options.length > 0 && (
+              <div
+                className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-md border border-border/80 bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-black/5 animate-in fade-in-0 zoom-in-95 duration-100"
+                onMouseDown={(e) => e.preventDefault()}
               >
-                <span>Sources</span>
-                <ChevronDown size={11} className="opacity-60" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start" className="w-64 max-h-56 overflow-y-auto p-1">
-              {options.map((opt, i) => (
-                <DropdownMenuItem
-                  key={`${opt.value}-${i}`}
-                  onClick={() => handleSelectOption(opt)}
-                  className="flex flex-col items-start py-1.5 px-2 text-xs cursor-pointer"
-                >
-                  <div className="flex items-center gap-1.5 font-mono text-xs font-medium text-foreground">
-                    <span>{opt.value}</span>
-                    {(opt.unit || (isDimensioned && fallbackUnit)) && (
-                      <>
-                        <span className="text-muted-foreground/40 select-none">|</span>
-                        <span className="text-muted-foreground font-semibold uppercase">{opt.unit || fallbackUnit}</span>
-                      </>
-                    )}
+                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                  Suggestions ({filteredOptions.length})
+                </div>
+                {filteredOptions.length > 0 ? (
+                  filteredOptions.map((opt, i) => {
+                    const isCurrent = opt.value.trim() === amount.trim();
+                    return (
+                      <button
+                        key={`${opt.value}-${i}`}
+                        type="button"
+                        onClick={() => handleSelectOption(opt)}
+                        className={cn(
+                          "flex w-full flex-col items-start rounded px-2.5 py-1.5 text-left text-xs transition-colors cursor-pointer",
+                          isCurrent
+                            ? "bg-primary/10 text-primary font-medium"
+                            : "hover:bg-muted/70 text-foreground"
+                        )}
+                      >
+                        <div className="flex w-full items-center justify-between gap-2">
+                          <span className="font-mono text-xs font-medium truncate">
+                            {opt.value}
+                          </span>
+                          {isCurrent && <Check size={12} className="text-primary shrink-0" />}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground truncate w-full">
+                          {opt.label}
+                        </span>
+                      </button>
+                    );
+                  })
+                ) : (
+                  <div className="px-2 py-2 text-center text-xs text-muted-foreground">
+                    No matching suggestions
                   </div>
-                  <span className="text-[10px] text-muted-foreground">{opt.label}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                )}
+              </div>
+            )}
+          </div>
         )}
       </div>
 
-      {/* Action / Auto-save Status */}
-      <div className="shrink-0 flex items-center gap-2 min-w-20 justify-end">
+      {/* Action: Hide when autoSave is ON; show simple check border icon button with tinted circle hover when autoSave is OFF */}
+      <div className="shrink-0 flex items-center gap-2 min-w-8 justify-end">
         {saveStatus === "saving" && (
           <span className="text-[10px] text-muted-foreground animate-pulse font-mono">
-            Auto-saving…
+            Saving…
           </span>
         )}
-        {saveStatus === "saved" && (
+        {autoSave && saveStatus === "saved" && (
           <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-            <Check size={11} /> Saved
+            <Check size={12} />
           </span>
         )}
-        {(!autoSave || saveStatus === "idle") && (
-          <Button
+        {!autoSave && (
+          <button
             type="button"
-            variant="outline"
-            size="sm"
             disabled={busy || !amount.trim()}
             onClick={handleManualConfirm}
-            className="h-7 px-2.5 text-xs font-medium border-emerald-600/30 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/30 dark:text-emerald-400 cursor-pointer"
+            title="Confirm value"
+            aria-label="Confirm value"
+            className={cn(
+              "size-7 rounded-full border flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500 disabled:opacity-40 disabled:pointer-events-none",
+              saveStatus === "saved"
+                ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                : "border-border/80 bg-transparent text-muted-foreground hover:border-emerald-500 hover:bg-emerald-500/15 hover:text-emerald-600 dark:hover:bg-emerald-500/20"
+            )}
           >
-            <Check size={12} className="mr-1" /> Confirm
-          </Button>
+            <Check size={14} className="stroke-[2.2]" />
+          </button>
         )}
       </div>
     </div>

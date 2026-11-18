@@ -170,6 +170,18 @@ def finish(job: Claim, error: str | None, result=None) -> None:
                 enqueue(db, case.id, case.analysis_revision)
             elif job.stage == "analysis" and result is not None:
                 save_analysis(db, run, case, result)
+                if current and result.version_diff and result.version_diff.get("has_revisions"):
+                    from shipping_ai.integrations.telegram import notify_case_status
+
+                    try:
+                        notify_case_status(
+                            db,
+                            case,
+                            event_type="revision_received",
+                            details={"version_diff": result.version_diff},
+                        )
+                    except Exception as exc:
+                        log.warning("Telegram revision notification error: %s", exc)
             elif job.stage == "ai":
                 snapshot = db.scalar(
                     select(ReviewSnapshot).filter_by(
