@@ -3,10 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FileSpreadsheet, FileText, Folder, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus, FileSpreadsheet, FileText, Folder, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
+import { PermitDraftPreview } from "@/components/permit-draft-preview";
 import { ConnectorLine } from "@/components/connector-line";
 import { IntakeStudioPanel, intakeStatus, type InspectedField } from "@/components/intake-studio-panel";
 import { ReviewAuditControls, ReviewCdcMappings, reviewDraft, reviewKey, type ReviewDraft } from "@/components/staff-review";
@@ -1412,6 +1413,20 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     }
   }
 
+  async function handleCreateDraft() {
+    setActionError("");
+    setSaving(true);
+    try {
+      await handleVerifyAll();
+      toast.saved("Draft created! Review CDC verification and preview.");
+      setWorkspaceTab("verification");
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Failed to create draft.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function caseAction(kind: "approve" | "processed") {
     setActionError("");
     if (kind === "approve") {
@@ -1501,15 +1516,29 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   Review ({groupedIssues.length})
                 </Button>
               )}
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy}
-                onClick={() => caseAction("approve")}
-                className="font-semibold shadow-xs"
-              >
-                <Check aria-hidden /> Approve
-              </Button>
+              {workspaceTab === "documents" ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy}
+                  onClick={handleCreateDraft}
+                  className="font-semibold shadow-xs"
+                  title="Save document extractions and prepare draft for CDC verification"
+                >
+                  <FilePlus aria-hidden className="size-3.5 mr-1" /> Create Draft
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => caseAction("approve")}
+                  className="font-semibold shadow-xs"
+                  title="Approve shipment and finalize permit draft"
+                >
+                  <Check aria-hidden className="size-3.5 mr-1" /> Approve
+                </Button>
+              )}
             </>
           )}
           {requiresFinalConfirmation && (
@@ -1653,98 +1682,126 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       </header>
 
       {workspaceTab === "verification" ? (
-        <div className="space-y-4 pt-2">
-          {/* 1. CDC Master List Selector */}
-          <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border bg-card">
-            <div className="flex items-center gap-3">
-              <div className="grid size-9 place-items-center rounded-md bg-primary/10 text-primary">
-                <FileSpreadsheet className="size-5" />
-              </div>
-              <div>
-                <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">CDC Master List</div>
-                <div className="text-sm font-semibold">
-                  {analysis.selected_master?.approval_ref
-                    ? `Master List ${analysis.selected_master.approval_ref} (${analysis.selected_master.year})`
-                    : analysis.analyzed_master?.approval_ref
-                    ? `Master List ${analysis.analyzed_master.approval_ref} (${analysis.analyzed_master.year})`
-                    : "No Master List Selected"}
+        <div
+          className="relative grid min-w-0 items-start gap-gutter lg:gap-gutter-desktop xl:grid-cols-12"
+          role="region"
+          aria-label="CDC Verification and Draft Preview"
+        >
+          {/* Left Column: Verification Controls */}
+          <div className="min-w-0 space-y-3 xl:col-span-5">
+            {/* 1. CDC Master List Selector */}
+            <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border bg-card">
+              <div className="flex items-center gap-3">
+                <div className="grid size-9 place-items-center rounded-md bg-primary/10 text-primary">
+                  <FileSpreadsheet className="size-5" />
                 </div>
-              </div>
-            </div>
-            <ReviewActions
-              caseId={item.id}
-              revision={analysis.revision}
-              selected={analysis.selected_master ?? master ?? undefined}
-              versions={versions}
-              companyId={item.company_id ?? undefined}
-              canRegister={admin}
-              pending={processing}
-              showReprocess={false}
-            />
-          </div>
-
-          {/* 2. CDC Item Matching */}
-          <div className="rounded-lg border bg-card overflow-hidden">
-            <div className="border-b px-4 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="size-4 text-primary" />
-                <h2 className="text-sm font-semibold">CDC Item Matching</h2>
-              </div>
-              <div className="flex items-center gap-2">
-                {analysis.outcome && <Status value={analysis.outcome} />}
-              </div>
-            </div>
-            <div className="p-4">
-              {candidates.length > 0 ? (
-                <ReviewCdcMappings
-                  key={saved?.id ?? "none"}
-                  candidates={candidates}
-                  saved={saved}
-                  busy={busy}
-                  openInitially
-                  onSave={async (mappings) => {
-                    await saveReview({ ...reviewDraft(saved), mappings, verify_cdc_mappings: mappings.length > 0 });
-                    toast.updated("CDC mappings updated!");
-                  }}
-                />
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                    No CDC candidates available. Select a CDC Master List above to run matching.
-                </p>
-              )}
-            </div>
-          </div>
-
-          {/* 3. Audit Checks & Findings */}
-          <div className="rounded-lg border bg-card overflow-hidden">
-            <div className="border-b px-4 py-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Sparkles className="size-4 text-primary" />
-                <h2 className="text-sm font-semibold">Audit Checks &amp; Findings</h2>
-              </div>
-              <span className="text-xs font-mono text-muted-foreground">
-                {analysis.findings?.length ?? 0} checks
-              </span>
-            </div>
-            <div className="divide-y text-xs">
-              {analysis.findings && analysis.findings.length > 0 ? (
-                analysis.findings.map((f, idx) => (
-                  <div key={idx} className="flex items-start justify-between gap-3 p-3">
-                    <div className="space-y-0.5 min-w-0">
-                      <div className="font-semibold text-foreground">
-                        {f.field ? documentFieldLabel(f.field) : f.group ? label(f.group) : `Check #${idx + 1}`}
-                      </div>
-                      {f.explanation && <div className="text-muted-foreground">{f.explanation}</div>}
-                    </div>
-                    <Status value={f.outcome} />
+                <div>
+                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">CDC Master List</div>
+                  <div className="text-sm font-semibold">
+                    {analysis.selected_master?.approval_ref
+                      ? `Master List ${analysis.selected_master.approval_ref} (${analysis.selected_master.year})`
+                      : analysis.analyzed_master?.approval_ref
+                      ? `Master List ${analysis.analyzed_master.approval_ref} (${analysis.analyzed_master.year})`
+                      : "No Master List Selected"}
                   </div>
-                ))
-              ) : (
-                <div className="p-4 text-xs text-muted-foreground">
-                  No findings recorded for this analysis revision.
                 </div>
-              )}
+              </div>
+              <ReviewActions
+                caseId={item.id}
+                revision={analysis.revision}
+                selected={analysis.selected_master ?? master ?? undefined}
+                versions={versions}
+                companyId={item.company_id ?? undefined}
+                canRegister={admin}
+                pending={processing}
+                showReprocess={false}
+              />
             </div>
+
+            {/* 2. CDC Item Matching */}
+            <div className="rounded-lg border bg-card overflow-hidden">
+              <div className="border-b px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ShieldCheck className="size-4 text-primary" />
+                  <h2 className="text-sm font-semibold">CDC Item Matching</h2>
+                </div>
+                <div className="flex items-center gap-2">
+                  {analysis.outcome && <Status value={analysis.outcome} />}
+                </div>
+              </div>
+              <div className="p-4">
+                {candidates.length > 0 ? (
+                  <ReviewCdcMappings
+                    key={saved?.id ?? "none"}
+                    candidates={candidates}
+                    saved={saved}
+                    busy={busy}
+                    openInitially
+                    onSave={async (mappings) => {
+                      await saveReview({ ...reviewDraft(saved), mappings, verify_cdc_mappings: mappings.length > 0 });
+                      toast.updated("CDC mappings updated!");
+                    }}
+                  />
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No CDC candidates available. Select a CDC Master List above to run matching.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* 3. Audit Checks & Findings */}
+            <div className="rounded-lg border bg-card overflow-hidden">
+              <div className="border-b px-4 py-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="size-4 text-primary" />
+                  <h2 className="text-sm font-semibold">Audit Checks &amp; Findings</h2>
+                </div>
+                <span className="text-xs font-mono text-muted-foreground">
+                  {analysis.findings?.length ?? 0} checks
+                </span>
+              </div>
+              <div className="divide-y text-xs">
+                {analysis.findings && analysis.findings.length > 0 ? (
+                  analysis.findings.map((f, idx) => (
+                    <div key={idx} className="flex items-start justify-between gap-3 p-3">
+                      <div className="space-y-0.5 min-w-0">
+                        <div className="font-semibold text-foreground">
+                          {f.field ? documentFieldLabel(f.field) : f.group ? label(f.group) : `Check #${idx + 1}`}
+                        </div>
+                        {f.explanation && <div className="text-muted-foreground">{f.explanation}</div>}
+                      </div>
+                      <Status value={f.outcome} />
+                    </div>
+                  ))
+                ) : (
+                  <div className="p-4 text-xs text-muted-foreground">
+                    No findings recorded for this analysis revision.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: PDF / Draft Print Preview Artboard */}
+          <div
+            tabIndex={-1}
+            role="region"
+            aria-label="Permit draft print preview"
+            className="min-w-0 scroll-mt-20 xl:col-span-7 xl:sticky xl:top-4 outline-none"
+          >
+            <PermitDraftPreview
+              invoiceExt={invoiceExt}
+              packingExt={packingExt}
+              blExt={analysis.extractions.find((e) => e.role === "final_bl") ?? analysis.extractions.find((e) => e.role === "draft_bl")}
+              selectedMaster={analysis.selected_master ?? analysis.analyzed_master ?? master ?? undefined}
+              mappings={saved?.mappings ?? []}
+              candidates={candidates}
+              reviewedFields={reviewedFields}
+              companyName={item.company}
+              reference={reference}
+              state={item.state}
+            />
           </div>
         </div>
       ) : (
