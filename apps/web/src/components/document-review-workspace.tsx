@@ -24,11 +24,21 @@ import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, E
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-type WorkspaceTab = {
+type MainTab = "B/L" | "Invoice" | "Packing list";
+
+type MainTabItem = {
+  key: MainTab;
+  label: string;
+  badge?: string;
+  badgeVariant?: "final" | "draft";
+  count: number | null;
+};
+
+type BlSubTabItem = {
   key: string;
   label: string;
-  role: "draft_bl" | "final_bl" | "invoice" | "packing_list";
-  documentId?: string;
+  role: "draft_bl" | "final_bl";
+  documentId: string;
   badge?: string;
   badgeVariant?: "final" | "draft";
   count: number | null;
@@ -47,7 +57,8 @@ const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
   item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
 }) {
-  const [chosenTabKey, setChosenTabKey] = useState<string>();
+  const [chosenMainTab, setChosenMainTab] = useState<MainTab>();
+  const [chosenBlSubTabKey, setChosenBlSubTabKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
   const [selection, setSelection] = useState<Evidence>();
   const [partyPreview, setPartyPreview] = useState<{ source: ConsigneeSourceRef; evidence: Evidence }>();
@@ -107,96 +118,89 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       return (b.version_number ?? 1) - (a.version_number ?? 1);
     });
 
-  const transportExtractions = analysis.extractions.filter(
-    (e) => e.role === "draft_bl" || e.role === "final_bl"
-  );
+  const blSubTabs: BlSubTabItem[] = transportDocs.map((doc) => {
+    const ext = analysis.extractions.find((e) => e.document_id === doc.id);
+    const isFinal = doc.classification === "final_bl" || ext?.role === "final_bl";
+    const count = ext ? (ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length) : null;
+    return {
+      key: `bl:${doc.id}`,
+      label: isFinal ? "Final B/L" : "Draft B/L",
+      role: isFinal ? "final_bl" : "draft_bl",
+      documentId: doc.id,
+      badge: isFinal ? "FINAL" : (doc.version_number ?? 1) > 1 ? `v${doc.version_number}` : "v1",
+      badgeVariant: isFinal ? "final" : "draft",
+      count,
+    };
+  });
 
-  const tabs: WorkspaceTab[] = [];
-
-  if (transportDocs.length > 0) {
-    if (transportDocs.length === 1) {
-      const doc = transportDocs[0];
-      const ext = analysis.extractions.find((e) => e.document_id === doc.id)
-        ?? analysis.extractions.find((e) => e.role === doc.classification);
-      const isFinal = doc.classification === "final_bl" || ext?.role === "final_bl";
-      const count = ext ? (ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length) : null;
-      tabs.push({
-        key: `transport:${doc.id}`,
-        label: "B/L",
-        role: isFinal ? "final_bl" : "draft_bl",
-        documentId: doc.id,
-        badge: isFinal ? "FINAL" : (doc.version_number ?? 1) > 1 ? `v${doc.version_number}` : undefined,
-        badgeVariant: isFinal ? "final" : "draft",
-        count,
-      });
-    } else {
-      for (const doc of transportDocs) {
-        const ext = analysis.extractions.find((e) => e.document_id === doc.id);
-        const isFinal = doc.classification === "final_bl" || ext?.role === "final_bl";
-        const count = ext ? (ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length) : null;
-        tabs.push({
-          key: `transport:${doc.id}`,
-          label: "B/L",
-          role: isFinal ? "final_bl" : "draft_bl",
-          documentId: doc.id,
-          badge: isFinal ? "FINAL" : "DRAFT",
-          badgeVariant: isFinal ? "final" : "draft",
-          count,
-        });
-      }
-    }
-  } else if (transportExtractions.length > 0) {
-    for (const ext of transportExtractions) {
+  if (blSubTabs.length === 0) {
+    const transportExts = analysis.extractions.filter((e) => e.role === "draft_bl" || e.role === "final_bl");
+    for (const ext of transportExts) {
       const isFinal = ext.role === "final_bl";
       const count = ext.items?.length || Object.values(ext.fields).filter((f) => f?.value).length;
-      tabs.push({
-        key: `transport:${ext.document_id}`,
-        label: "B/L",
+      blSubTabs.push({
+        key: `bl:${ext.document_id}`,
+        label: isFinal ? "Final B/L" : "Draft B/L",
         role: isFinal ? "final_bl" : "draft_bl",
         documentId: ext.document_id,
-        badge: isFinal ? "FINAL" : "DRAFT",
+        badge: isFinal ? "FINAL" : "v1",
         badgeVariant: isFinal ? "final" : "draft",
         count,
       });
     }
-  } else {
-    tabs.push({
-      key: "transport:default",
-      label: "B/L",
-      role: "draft_bl",
-      count: null,
-    });
   }
 
-  // Invoice tab
+  const fallbackSubTab = blSubTabs.find((t) => t.documentId && selectedKey?.startsWith(t.documentId))
+    ?? blSubTabs[0];
+  const activeBlSubTab: BlSubTabItem | undefined = (chosenBlSubTabKey ? blSubTabs.find((t) => t.key === chosenBlSubTabKey) : undefined)
+    ?? fallbackSubTab
+    ?? blSubTabs[0];
+
+  const hasFinalBl = transportDocs.some((d) => d.classification === "final_bl")
+    || analysis.extractions.some((e) => e.role === "final_bl");
+
+  const blCount = activeBlSubTab?.count
+    ?? (blSubTabs.length > 0 ? blSubTabs[0]?.count : null);
+
   const invoiceExt = analysis.extractions.find((e) => e.role === "invoice");
-  const invoiceDoc = item.documents.find((d) => d.classification === "invoice");
   const invoiceCount = invoiceExt ? (invoiceExt.items?.length || Object.values(invoiceExt.fields).filter((f) => f?.value).length) : null;
-  tabs.push({
-    key: "invoice",
-    label: "Invoice",
-    role: "invoice",
-    documentId: invoiceExt?.document_id ?? invoiceDoc?.id,
-    count: invoiceCount,
-  });
 
-  // Packing list tab
   const packingExt = analysis.extractions.find((e) => e.role === "packing_list");
-  const packingDoc = item.documents.find((d) => d.classification === "packing_list");
   const packingCount = packingExt ? (packingExt.items?.length || Object.values(packingExt.fields).filter((f) => f?.value).length) : null;
-  tabs.push({
-    key: "packing_list",
-    label: "Packing list",
-    role: "packing_list",
-    documentId: packingExt?.document_id ?? packingDoc?.id,
-    count: packingCount,
-  });
 
-  const fallbackTab = tabs.find((t) => t.documentId && selectedKey?.startsWith(t.documentId))
-    ?? tabs.find((t) => t.role && selectedKey?.endsWith(`:${t.role}`))
-    ?? tabs[0];
-  const activeTab: WorkspaceTab = (chosenTabKey ? tabs.find((t) => t.key === chosenTabKey) : undefined) ?? fallbackTab ?? tabs[0];
-  const activeRole = activeTab.role;
+  const mainTabItems: MainTabItem[] = [
+    {
+      key: "B/L",
+      label: "B/L",
+      badge: hasFinalBl ? "FINAL" : undefined,
+      badgeVariant: "final",
+      count: blCount,
+    },
+    {
+      key: "Invoice",
+      label: "Invoice",
+      count: invoiceCount,
+    },
+    {
+      key: "Packing list",
+      label: "Packing list",
+      count: packingCount,
+    },
+  ];
+
+  const fallbackMainTab: MainTab = selectedKey?.includes(":invoice")
+    ? "Invoice"
+    : selectedKey?.includes(":packing_list")
+    ? "Packing list"
+    : "B/L";
+
+  const activeMainTab: MainTab = chosenMainTab ?? fallbackMainTab;
+
+  const activeRole: "draft_bl" | "final_bl" | "invoice" | "packing_list" = activeMainTab === "Invoice"
+    ? "invoice"
+    : activeMainTab === "Packing list"
+    ? "packing_list"
+    : (activeBlSubTab?.role ?? "draft_bl");
 
   const classifiedSources = item.documents.filter((doc) =>
     activeRole === "draft_bl" || activeRole === "final_bl"
@@ -209,10 +213,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const fallbackSource = classifiedSources.length === 1 ? classifiedSources[0].id
     : compatibleSources.length === 1 ? compatibleSources[0].id : undefined;
 
-  const targetOption = activeTab.documentId
-    ? options.find((opt) => opt.id === activeTab.documentId && (!activeTab.role || opt.key.endsWith(`:${activeTab.role}`)))
-      ?? options.find((opt) => opt.id === activeTab.documentId)
-    : options.find((opt) => opt.key.endsWith(`:${activeTab.role}`));
+  const targetOption = activeMainTab === "B/L"
+    ? (activeBlSubTab?.documentId
+        ? options.find((opt) => opt.id === activeBlSubTab.documentId && (!activeBlSubTab.role || opt.key.endsWith(`:${activeBlSubTab.role}`)))
+          ?? options.find((opt) => opt.id === activeBlSubTab.documentId)
+        : options.find((opt) => opt.key.endsWith(":draft_bl") || opt.key.endsWith(":final_bl"))
+      )
+    : activeMainTab === "Invoice"
+    ? options.find((opt) => opt.key.endsWith(":invoice") || (invoiceExt?.sheet && opt.sheet === invoiceExt.sheet))
+    : options.find((opt) => opt.key.endsWith(":packing_list") || (packingExt?.sheet && opt.sheet === packingExt.sheet));
 
   const previewOption = partyPreview && options.find((option) => option.id === partyPreview.source.document_id &&
     (option.key.endsWith(`:${partyPreview.source.role}`) || (matchesRole(partyPreview.source.role, "draft_bl") && matchesRole(option.key.split(":").pop() ?? "", "draft_bl"))) && option.sheet === partyPreview.evidence.sheet);
@@ -221,8 +230,14 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     ?? options.find((option) => option.id === fallbackSource)
     ?? options[0];
 
-  const activeDocument = (activeTab.documentId
-      ? extractionSources.find((doc) => doc.document_id === activeTab.documentId && (doc.role === activeTab.role || matchesRole(doc.role, activeTab.role)))
+  const activeDocument = (activeMainTab === "B/L" && activeBlSubTab?.documentId
+      ? extractionSources.find((doc) => doc.document_id === activeBlSubTab.documentId && (doc.role === activeBlSubTab.role || matchesRole(doc.role, activeBlSubTab.role)))
+      : undefined
+    )
+    ?? (activeMainTab === "Invoice"
+      ? extractionSources.find((doc) => doc.role === "invoice")
+      : activeMainTab === "Packing list"
+      ? extractionSources.find((doc) => doc.role === "packing_list")
       : undefined
     )
     ?? extractionSources.find((doc, index) => excerpts[index].key === current?.key)
@@ -265,19 +280,39 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return [];
   });
 
-  function handleSelectTab(tab: WorkspaceTab) {
-    setChosenTabKey(tab.key);
+  function handleSelectMainTab(tab: MainTab) {
+    setChosenMainTab(tab);
     setPartyPreview(undefined);
     setIssueSelection(undefined);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
 
-    const match = (tab.documentId
-      ? options.find((opt) => opt.id === tab.documentId && (!tab.role || opt.key.endsWith(`:${tab.role}`)))
-        ?? options.find((opt) => opt.id === tab.documentId)
-      : undefined
-    ) ?? options.find((opt) => opt.key.endsWith(`:${tab.role}`));
+    if (tab === "B/L") {
+      const sub = activeBlSubTab ?? blSubTabs[0];
+      const match = sub?.documentId
+        ? options.find((opt) => opt.id === sub.documentId && (!sub.role || opt.key.endsWith(`:${sub.role}`)))
+          ?? options.find((opt) => opt.id === sub.documentId)
+        : options.find((opt) => opt.key.endsWith(":draft_bl") || opt.key.endsWith(":final_bl"));
+      if (match) setSelectedKey(match.key);
+    } else if (tab === "Invoice") {
+      const match = options.find((opt) => opt.key.endsWith(":invoice") || (invoiceExt?.sheet && opt.sheet === invoiceExt.sheet));
+      if (match) setSelectedKey(match.key);
+    } else if (tab === "Packing list") {
+      const match = options.find((opt) => opt.key.endsWith(":packing_list") || (packingExt?.sheet && opt.sheet === packingExt.sheet));
+      if (match) setSelectedKey(match.key);
+    }
+  }
 
+  function handleSelectBlSubTab(subTab: BlSubTabItem) {
+    setChosenMainTab("B/L");
+    setChosenBlSubTabKey(subTab.key);
+    setPartyPreview(undefined);
+    setIssueSelection(undefined);
+    setSelection(undefined);
+    setActiveFieldInfo(undefined);
+
+    const match = options.find((opt) => opt.id === subTab.documentId && (!subTab.role || opt.key.endsWith(`:${subTab.role}`)))
+      ?? options.find((opt) => opt.id === subTab.documentId);
     if (match) {
       setSelectedKey(match.key);
     }
@@ -291,18 +326,17 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setActiveFieldInfo(undefined);
     const opt = options.find((o) => o.key === key);
     if (opt) {
-      const matchingTab = tabs.find((t) =>
-        (t.documentId && t.documentId === opt.id && key?.endsWith(`:${t.role}`)) ||
-        (t.documentId && t.documentId === opt.id) ||
-        (key && key.endsWith(`:${t.role}`))
-      );
-      if (matchingTab) {
-        setChosenTabKey(matchingTab.key);
+      const blMatch = blSubTabs.find((t) => t.documentId === opt.id);
+      if (blMatch) {
+        setChosenMainTab("B/L");
+        setChosenBlSubTabKey(blMatch.key);
+      } else if (key?.endsWith(":invoice")) {
+        setChosenMainTab("Invoice");
+      } else if (key?.endsWith(":packing_list")) {
+        setChosenMainTab("Packing list");
       }
     }
   }
-
-
 
   function inspect(evidence?: Evidence, meta?: InspectedField) {
     const documentId = evidence?.document_id ?? meta?.target?.document_id;
@@ -315,12 +349,16 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setIssueSelection(undefined);
     if (match) {
       setSelectedKey(match.key);
-      const matchingTab = tabs.find((entry) =>
-        (entry.documentId && entry.documentId === documentId && (!role || entry.role === role)) ||
-        (role && entry.role === role) ||
-        (entry.documentId && entry.documentId === documentId)
-      );
-      if (matchingTab) setChosenTabKey(matchingTab.key);
+      const docId = documentId ?? match.id;
+      const blMatch = blSubTabs.find((t) => t.documentId === docId);
+      if (blMatch) {
+        setChosenMainTab("B/L");
+        setChosenBlSubTabKey(blMatch.key);
+      } else if (match.key.endsWith(":invoice") || role === "invoice") {
+        setChosenMainTab("Invoice");
+      } else if (match.key.endsWith(":packing_list") || role === "packing_list") {
+        setChosenMainTab("Packing list");
+      }
     }
     setSelection(evidence ? { ...evidence } : undefined);
 
@@ -393,8 +431,13 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     if (evidence || target) {
       inspect(evidence, meta);
     } else {
-      const matchingTab = tabs.find((entry) => entry.role === issue.name);
-      if (matchingTab) handleSelectTab(matchingTab);
+      if (issue.name === "draft_bl" || issue.name === "final_bl") {
+        handleSelectMainTab("B/L");
+      } else if (issue.name === "invoice") {
+        handleSelectMainTab("Invoice");
+      } else if (issue.name === "packing_list") {
+        handleSelectMainTab("Packing list");
+      }
       setSelection(undefined);
       setPartyPreview(undefined);
       setActiveFieldInfo(meta);
@@ -1239,15 +1282,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           )}
 
           <div className="panel overflow-hidden">
-            {/* Document Intake Tabs */}
+            {/* Main Document Intake Tabs */}
             <nav className="flex border-b bg-background px-2" aria-label="Document intake tabs">
-              {tabs.map((tab) => {
-                const active = activeTab.key === tab.key;
+              {mainTabItems.map((tab) => {
+                const active = activeMainTab === tab.key;
                 return (
                   <button
                     key={tab.key}
                     type="button"
-                    onClick={() => handleSelectTab(tab)}
+                    onClick={() => handleSelectMainTab(tab.key)}
                     aria-pressed={active}
                     className={cn(
                       "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5",
@@ -1285,6 +1328,55 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                 );
               })}
             </nav>
+
+            {/* Sub Tab Bar for Bill of Lading (shown only when in B/L tab, hidden on Invoice & Packing list) */}
+            {activeMainTab === "B/L" && blSubTabs.length > 1 && (
+              <nav className="flex border-b bg-muted/20 px-2" aria-label="Bill of Lading versions">
+                {blSubTabs.map((subTab) => {
+                  const active = activeBlSubTab?.key === subTab.key;
+                  return (
+                    <button
+                      key={subTab.key}
+                      type="button"
+                      onClick={() => handleSelectBlSubTab(subTab)}
+                      aria-pressed={active}
+                      className={cn(
+                        "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5",
+                        active
+                          ? "border-primary text-primary font-bold"
+                          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                      )}
+                    >
+                      <span>{subTab.label}</span>
+                      {subTab.badge && (
+                        <span
+                          className={cn(
+                            "rounded px-1 py-0.2 text-[9px] font-bold",
+                            subTab.badgeVariant === "final"
+                              ? "bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                              : "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300"
+                          )}
+                        >
+                          {subTab.badge}
+                        </span>
+                      )}
+                      {typeof subTab.count === "number" && subTab.count > 0 && (
+                        <span
+                          className={cn(
+                            "rounded-control px-1.5 py-0.2 text-[10px] font-mono",
+                            active
+                              ? "bg-primary/10 text-primary font-bold"
+                              : "bg-muted text-muted-foreground"
+                          )}
+                        >
+                          {subTab.count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </nav>
+            )}
 
             <IntakeStudioPanel
               item={item}
