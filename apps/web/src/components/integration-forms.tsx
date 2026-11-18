@@ -3,6 +3,7 @@
 import { NativeSelect } from "@/components/ui/native-select";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { Send } from "lucide-react";
 import { useWrite } from "@/components/forms";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -212,9 +213,26 @@ export function TelegramSendForm({ caseId, preview }: { caseId: string; preview:
       setResult(state === "sent" ? "Message sent." : state === "failed" ? "Telegram rejected this delivery." : "Delivery could not be confirmed. Check the recipient’s chat.");
     });
   }}>
-    <pre className="rounded-lg border bg-muted p-3 text-xs leading-5 break-words whitespace-pre-wrap">{preview.message}</pre>
-    {preview.buttons.length > 0 && <div aria-label="Telegram buttons" className="flex flex-wrap gap-2">
-      {preview.buttons.map((button) => <span key={button} className="rounded-md border px-3 py-1 text-sm">{button}</span>)}
+    <div className="rounded-xl border bg-muted/50 p-4 shadow-2xs space-y-2.5">
+      <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground border-b border-border/60 pb-2">
+        <span className="flex items-center gap-1.5 font-semibold text-foreground">
+          <Send aria-hidden className="size-3 text-sky-500" /> Telegram Draft Preview
+        </span>
+        <span className="font-mono text-[10px] bg-background/80 px-2 py-0.5 rounded border">Rev #{preview.revision}</span>
+      </div>
+      <div className="whitespace-pre-wrap break-words font-sans text-xs sm:text-[13px] leading-relaxed text-foreground select-text">
+        {preview.message}
+      </div>
+    </div>
+    {preview.buttons.length > 0 && <div className="space-y-1.5">
+      <span className="text-[11px] font-medium text-muted-foreground">Action buttons:</span>
+      <div aria-label="Telegram buttons" className="flex flex-wrap gap-2">
+        {preview.buttons.map((button) => (
+          <span key={button} className="inline-flex items-center rounded-md border bg-background px-3 py-1 text-xs font-medium text-foreground shadow-2xs">
+            {button}
+          </span>
+        ))}
+      </div>
     </div>}
     {preview.configured && preview.recipients.length > 0 ? <>
       <label className="grid gap-1.5 font-medium">Recipient<NativeSelect name="recipient_id" defaultValue="" required>

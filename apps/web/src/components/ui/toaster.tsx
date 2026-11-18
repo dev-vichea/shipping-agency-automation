@@ -78,7 +78,7 @@ function ToastCard({ item }: { item: ToastItem }) {
     if (item.duration <= 0) return;
     timerRef.current = setTimeout(() => {
       setExiting(true);
-      setTimeout(() => dismissToast(item.id), 150);
+      setTimeout(() => dismissToast(item.id), 240);
     }, item.duration);
   }, [clearTimer, item.duration, item.id]);
 
@@ -90,7 +90,7 @@ function ToastCard({ item }: { item: ToastItem }) {
   const handleDismiss = () => {
     clearTimer();
     setExiting(true);
-    setTimeout(() => dismissToast(item.id), 150);
+    setTimeout(() => dismissToast(item.id), 240);
   };
 
   return (
@@ -101,7 +101,7 @@ function ToastCard({ item }: { item: ToastItem }) {
       onMouseLeave={startTimer}
       onClick={handleDismiss}
       className={cn(
-        "pointer-events-auto relative flex max-w-sm cursor-pointer items-center gap-2.5 rounded-xl border border-border/80 bg-card/98 px-3.5 py-2.5 text-foreground shadow-lg backdrop-blur-xs transition-all select-none hover:shadow-xl dark:border-border dark:bg-[#161b22]",
+        "pointer-events-auto relative flex max-w-sm cursor-pointer items-center gap-2.5 rounded-2xl border border-border/80 bg-card/98 px-4 py-2.5 text-foreground shadow-lg backdrop-blur-xs transition-shadow select-none hover:shadow-xl dark:border-border dark:bg-[#161b22]",
         exiting ? "toast-exit" : "toast-enter"
       )}
     >

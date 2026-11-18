@@ -206,7 +206,10 @@ def field_value(documents, roles, keys):
         for key in keys:
             field = entries[0].fields.get(key)
             if field and field.value:
-                return " ".join(part for part in (str(field.value), getattr(field, "currency", None), getattr(field, "unit", None)) if part)
+                val = str(field.value)
+                if key in ("packages", "package_count", "gross_weight", "net_weight", "measurement"):
+                    val = format_item_num(val)
+                return " ".join(part for part in (val, getattr(field, "currency", None), getattr(field, "unit", None)) if part)
     return "Pending"
 
 
@@ -373,7 +376,8 @@ def invoice_value(documents):
     reported = invoice.fields.get("amount")
     reported_value = decimal(usable(reported))
     if reported_value is not None and reported.currency:
-        return f"{reported_value:f} {reported.currency}"
+        formatted = format_item_num(reported_value, decimals=2, force_decimals=True)
+        return f"{formatted} {reported.currency}"
     fields = [line.fields.get("amount") for line in invoice.items]
     amounts = [decimal(usable(field)) for field in fields]
     currencies = {field.currency for field in fields if field}
@@ -383,7 +387,8 @@ def invoice_value(documents):
         and amounts
         and all(value is not None for value in amounts)
     ):
-        return f"{sum(amounts):f} {currencies.pop()}"
+        formatted = format_item_num(sum(amounts), decimals=2, force_decimals=True)
+        return f"{formatted} {currencies.pop()}"
     return "Pending"
 
 
@@ -409,12 +414,13 @@ def mini_app_buttons(case, review=None):
 def format_summary(case, company, snapshot, extracted, review):
     source = review.payload["documents"] if review and review.ready else extracted
     documents = [Extraction.model_validate(item) for item in source]
-    findings = snapshot.findings
+    findings = snapshot.findings if snapshot else []
     issues = sum(finding.get("outcome") != "PASS" for finding in findings)
     v_diff = getattr(snapshot, "version_diff", None) or {}
     quick = bool(
         case.state == "ready_for_approval"
         and case.company_id
+        and snapshot
         and snapshot.outcome == "PASS"
         and issues == 0
         and review
@@ -423,31 +429,101 @@ def format_summary(case, company, snapshot, extracted, review):
         and not review.payload.get("permit_pending")
         and not v_diff.get("requires_final_confirmation")
     )
-    approval = {
-        "approved": "Approved",
-        "rejected": "Rejected",
-        "ready_for_approval": "Ready for approval",
-        "awaiting_updated_document": "Awaiting Updated Document",
-        "manual_matching": "Manual Matching",
-    }.get(case.state, "Review required")
-    lines = ["Shipping draft", f"Company: {company or 'Unassigned'}"]
+    approval_map = {
+        "approved": "✅ Approved",
+        "rejected": "❌ Rejected",
+        "ready_for_approval": "🟢 Ready for Approval",
+        "awaiting_updated_document": "⏳ Awaiting Updated Document",
+        "manual_matching": "🔍 Manual Matching Required",
+    }
+    approval_text = approval_map.get(case.state, "🟡 Review Required")
+
+    status_icon = (
+        "✅"
+        if snapshot and snapshot.outcome == "PASS"
+        else "⚠️"
+        if snapshot and snapshot.outcome == "MISMATCH"
+        else "ℹ️"
+    )
+    outcome_text = snapshot.outcome.replace("_", " ").title() if snapshot else "Pending"
+
+    ref = (
+        case.detected_reference
+        or field_value(documents, ("invoice",), ("invoice_no",))
+        or str(case.id)[:8]
+    )
+
+    revision_str = f" (Revision #{case.analysis_revision})" if case.analysis_revision > 1 else ""
+    lines = [
+        "🚢 Shipping Draft",
+        "",
+        f"📄 Reference: {ref}{revision_str}",
+        f"🏢 Company: {company or 'Unassigned'}",
+    ]
+
     if v_diff.get("has_revisions"):
-        desc = v_diff.get("summary") if isinstance(v_diff.get("summary"), str) else (v_diff.get("summary", {}).get("description") if isinstance(v_diff.get("summary"), dict) else v_diff.get("details", {}).get("description"))
-        if desc:
-            lines.append(f"Revision updates: {desc}")
+        lines.append("")
         if v_diff.get("is_final_bl"):
-            lines.append("Final B/L received - confirmation required")
+            lines.append("• 🚢 Final B/L (Telex / Original) received")
+        diffs = v_diff.get("diffs") or []
+        change_bullets = []
+        for d in diffs:
+            for f, vals in (d.get("modified") or {}).items():
+                old_val = str(vals.get("old", ""))
+                new_val = str(vals.get("new", ""))
+                flabel = clean_field_label(f)
+                if len(new_val) > 40 or len(old_val) > 40:
+                    change_bullets.append(f"• {flabel}: Updated")
+                else:
+                    change_bullets.append(
+                        f"• {flabel}: {format_item_num(old_val)} → {format_item_num(new_val)}"
+                    )
+            for f, val in (d.get("added") or {}).items():
+                val_str = str(val)
+                flabel = clean_field_label(f)
+                if len(val_str) > 40:
+                    change_bullets.append(f"• {flabel}: Added")
+                else:
+                    change_bullets.append(
+                        f"• {flabel}: {format_item_num(val_str)} (added)"
+                    )
+        if change_bullets:
+            lines.append("📝 Key Updates:")
+            lines.extend(change_bullets[:5])
+        elif v_diff.get("summary") and isinstance(v_diff.get("summary"), str):
+            lines.append(f"• Revision updates: {v_diff['summary'][:120]}")
+
+    lines.extend([
+        "",
+        "📦 Shipment Summary:",
+    ])
+
+    excerpts = []
+    for doc in documents:
+        excerpts.extend(getattr(doc, "source_excerpt", []))
+
     for label, keys, roles in SHIPMENT_FIELDS:
         value = " ".join(field_value(documents, roles, keys).split())[:240]
-        lines.append(f"{label}: {value}")
-    lines.extend(
-        [
-            f"Invoice value: {invoice_value(documents)}",
-            f"Verification: {snapshot.outcome.replace('_', ' ').title()} ({issues} findings)",
-            f"Approval: {approval}",
-            f"{'Approve draft' if quick else 'Review draft'}: {draft_url(case, review if quick else None)}",
-        ]
-    )
+        if value == "Pending" and label == "Bill of lading":
+            fallback_bl = resolve_bl_no(documents, excerpts)
+            if fallback_bl and fallback_bl != "Pending":
+                value = fallback_bl
+        lines.append(f"• {label}: {value}")
+
+    port_val = resolve_port(documents, excerpts)
+    if port_val and port_val != "Pending":
+        lines.append(f"• Port / Border: {port_val}")
+
+    lines.append(f"• Invoice value: {invoice_value(documents)}")
+
+    lines.extend([
+        "",
+        f"🔍 Verification: {status_icon} {outcome_text} ({issues} findings)",
+        f"🚦 Status: {approval_text}",
+        "",
+        f"🔗 {'Approve draft' if quick else 'Review draft'}: {draft_url(case, review if quick else None)}",
+    ])
+
     return "\n".join(lines), quick
 
 
@@ -887,6 +963,36 @@ def format_bl_card(case, company_name: str | None, payload: dict, all_docs: dict
     return "\n".join(lines), buttons
 
 
+FIELD_DISPLAY_NAMES = {
+    "amount": "Invoice Amount",
+    "invoice_no": "Invoice No",
+    "invoice_date": "Invoice Date",
+    "gross_weight": "Gross Weight",
+    "net_weight": "Net Weight",
+    "packages": "Packages",
+    "measurement": "Measurement",
+    "origin": "Origin",
+    "destination": "Destination",
+    "port": "Port",
+    "loading_port": "Loading Port",
+    "discharge_port": "Discharge Port",
+    "vessel": "Vessel",
+    "voyage": "Voyage",
+    "carrier": "Carrier",
+    "container": "Container No",
+    "seal": "Seal No",
+    "shipper": "Shipper",
+    "supplier": "Supplier",
+    "consignee": "Consignee",
+    "bill_of_lading": "B/L No",
+    "bl_no": "B/L No",
+}
+
+
+def clean_field_label(f: str) -> str:
+    return FIELD_DISPLAY_NAMES.get(f.lower(), f.replace("_", " ").title())
+
+
 def format_status_notification(
     case: IntakeCase,
     company_name: str | None,
@@ -1010,19 +1116,6 @@ def format_status_notification(
             or (getattr(snapshot, "version_diff", None) if snapshot else {})
             or {}
         )
-        desc = (
-            v_diff.get("summary")
-            if isinstance(v_diff.get("summary"), str)
-            else (
-                v_diff.get("summary", {}).get("description")
-                if isinstance(v_diff.get("summary"), dict)
-                else (
-                    v_diff.get("details", {}).get("description")
-                    if isinstance(v_diff.get("details"), dict)
-                    else None
-                )
-            )
-        )
         lines = [
             "🔄 <b>Document Revision Received</b>",
             "",
@@ -1031,9 +1124,43 @@ def format_status_notification(
         ]
         if v_diff.get("is_final_bl"):
             lines.append("• 🚢 <b>Final B/L (Telex / Original) received</b>")
-        if desc:
-            lines.append(f"• <b>Update:</b> {html.escape(desc)}")
+
+        # Format clean, human-readable change bullets instead of dumping raw text
+        diffs = v_diff.get("diffs") or []
+        change_bullets = []
+        for d in diffs:
+            for f, vals in (d.get("modified") or {}).items():
+                old_val = str(vals.get("old", ""))
+                new_val = str(vals.get("new", ""))
+                flabel = clean_field_label(f)
+                if len(new_val) > 40 or len(old_val) > 40:
+                    change_bullets.append(f"• <b>{html.escape(flabel)}:</b> <i>Updated</i>")
+                else:
+                    old_formatted = format_item_num(old_val)
+                    new_formatted = format_item_num(new_val)
+                    change_bullets.append(
+                        f"• <b>{html.escape(flabel)}:</b> {html.escape(old_formatted)} → <code>{html.escape(new_formatted)}</code>"
+                    )
+            for f, val in (d.get("added") or {}).items():
+                val_str = str(val)
+                flabel = clean_field_label(f)
+                if len(val_str) > 40:
+                    change_bullets.append(f"• <b>{html.escape(flabel)}:</b> <i>Added</i>")
+                else:
+                    change_bullets.append(
+                        f"• <b>{html.escape(flabel)}:</b> <code>{html.escape(format_item_num(val_str))}</code> <i>(added)</i>"
+                    )
+
+        if change_bullets:
+            lines.append("")
+            lines.append("📝 <b>Key Updates:</b>")
+            lines.extend(change_bullets[:5])
+        elif v_diff.get("summary") and isinstance(v_diff.get("summary"), str):
+            short_summary = v_diff["summary"][:120]
+            lines.append(f"• <b>Update:</b> {html.escape(short_summary)}")
+
         lines.extend([
+            "",
             f"💰 <b>Invoice Value:</b> <code>{html.escape(inv_val)}</code>",
             f"🔍 <b>Verification:</b> {status_icon} <b>{outcome_text}</b> ({issues} findings)",
             f"🚦 <b>Status:</b> {approval_text}",
