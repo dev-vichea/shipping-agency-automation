@@ -169,7 +169,13 @@ function ReviewTreeItem({
   });
 
   return (
-    <div key={item.id} className="grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1.5 text-xs">
+    <div
+      key={item.id}
+      className={cn(
+        "grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1.5 text-xs relative",
+        isDropdownOpen ? "z-30" : "z-10"
+      )}
+    >
       {/* Leaf icon + Clean label */}
       <div className="flex items-center gap-1.5 min-w-0">
         <FileText size={13} className="text-amber-600/70 shrink-0" />
@@ -207,7 +213,7 @@ function ReviewTreeItem({
               {/* Suggestions Dropdown on Focus / Search */}
               {isDropdownOpen && options.length > 0 && (
                 <div
-                  className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-md border border-border/80 bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-black/5 animate-in fade-in-0 zoom-in-95 duration-100"
+                  className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[280px] overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-foreground shadow-2xl ring-1 ring-black/10 animate-in fade-in-0 zoom-in-95 duration-100"
                   onMouseDown={(e) => e.preventDefault()}
                 >
                   <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
@@ -298,7 +304,7 @@ function ReviewTreeItem({
             {/* Suggestions Dropdown on Focus / Search */}
             {isDropdownOpen && options.length > 0 && (
               <div
-                className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[260px] overflow-y-auto rounded-md border border-border/80 bg-popover p-1 text-popover-foreground shadow-lg ring-1 ring-black/5 animate-in fade-in-0 zoom-in-95 duration-100"
+                className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[280px] overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-foreground shadow-2xl ring-1 ring-black/10 animate-in fade-in-0 zoom-in-95 duration-100"
                 onMouseDown={(e) => e.preventDefault()}
               >
                 <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">

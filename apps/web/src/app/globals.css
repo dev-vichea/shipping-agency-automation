@@ -79,6 +79,8 @@
   --color-foreground: var(--workspace-chrome);
   --color-card: var(--surface-container-lowest);
   --color-card-foreground: var(--workspace-chrome);
+  --color-popover: var(--surface-container-lowest);
+  --color-popover-foreground: var(--workspace-chrome);
   --color-muted: var(--workspace-frame);
   --color-muted-foreground: var(--workspace-header);
   --color-accent: var(--workspace-selected);
