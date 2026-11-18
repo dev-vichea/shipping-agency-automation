@@ -102,12 +102,22 @@ export function EvidenceFieldCard({ name, value, evidence, uncertain, editor, on
                 setText(event.target.value);
                 setChosen(undefined);
               }} />
-            {editor.dimension && <input name={editor.dimension} aria-label={editor.dimension === "unit" ? "Unit" : "Currency"}
-              disabled={editor.busy} value={dimension} maxLength={editor.dimension === "unit" ? 24 : 3}
-              placeholder={editor.dimension === "unit" ? "Unit" : "CCY"}
-              className={`${textInput} field-sizing-content min-w-[3ch] max-w-[12ch]`}
-              onChange={(event) => { setDimension(event.target.value); setChosen(undefined); }} />}
-            {editor.dimension !== "unit" && editor.unit && <span>{editor.unit}</span>}
+            {editor.dimension && (
+              <>
+                <span className="text-muted-foreground/40 font-mono text-xs select-none px-1" aria-hidden="true">|</span>
+                <input name={editor.dimension} aria-label={editor.dimension === "unit" ? "Unit" : "Currency"}
+                  disabled={editor.busy} value={dimension} maxLength={editor.dimension === "unit" ? 24 : 5}
+                  placeholder={editor.dimension === "unit" ? "KG" : "USD"}
+                  className={`${textInput} field-sizing-content min-w-[3ch] max-w-[12ch] uppercase font-semibold`}
+                  onChange={(event) => { setDimension(event.target.value); setChosen(undefined); }} />
+              </>
+            )}
+            {editor.dimension !== "unit" && editor.unit && (
+              <>
+                <span className="text-muted-foreground/40 font-mono text-xs select-none px-1" aria-hidden="true">|</span>
+                <span className="text-muted-foreground font-semibold uppercase">{editor.unit}</span>
+              </>
+            )}
           </div>
           {showChoices && editor.choices.length > 0 && <ul aria-label="Field suggestions"
             className="mt-1 max-h-32 overflow-auto rounded-control border bg-popover p-0.5 font-sans font-normal shadow-sm">

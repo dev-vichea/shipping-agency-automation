@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { Anchor, Box, Check, DollarSign, FileText, Minus, Package, RotateCcw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Pagination } from "@/components/ui/pagination";
@@ -57,6 +57,24 @@ export function intakeStatus(field?: ExtractedField, needsReview = false) {
   return field?.value ? "present" : "missing";
 }
 
+function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string) {
+  if (!field?.value) return fallbackValue;
+  const unitOrCurrency = field.unit || field.currency;
+  if (!unitOrCurrency) return fallbackValue;
+
+  const displayVal = field.english?.value && ["source", "staff_verified", "verified_company_alias", "proposed"].includes(field.english.status)
+    ? field.english.value
+    : field.value;
+
+  return (
+    <span className="inline-flex items-center justify-end gap-1.5 font-mono">
+      <span>{displayVal}</span>
+      <span className="text-muted-foreground/40 font-normal select-none" aria-hidden="true">|</span>
+      <span className="text-muted-foreground font-semibold uppercase">{unitOrCurrency}</span>
+    </span>
+  );
+}
+
 function InlineReviewDrawer({
   editor,
   name,
@@ -77,33 +95,87 @@ function InlineReviewDrawer({
     editor.dimension ? (editor[editor.dimension] as string | undefined) ?? "" : ""
   );
   const [error, setError] = useState("");
-  const ValueInput = editor.multiline ? "textarea" : "input";
+  const [autoSave, setAutoSave] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("harborway-autosave");
+      return stored !== "false";
+    }
+    return true;
+  });
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
   const dirty =
     text.trim() !== (editor.value ?? "").trim() ||
     (!!editor.dimension && dimension.trim() !== ((editor[editor.dimension] as string | undefined) ?? "").trim());
 
+  const handleToggleAutoSave = () => {
+    setAutoSave((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem("harborway-autosave", String(next));
+      } catch {}
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!autoSave || !dirty || !text.trim() || editor.busy) return;
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    saveTimeoutRef.current = setTimeout(async () => {
+      setSaveStatus("saving");
+      try {
+        const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
+        const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
+        await editor.onSave({ value: text.trim(), unit, currency });
+        setSaveStatus("saved");
+        setTimeout(() => setSaveStatus("idle"), 2000);
+      } catch (err) {
+        setSaveStatus("idle");
+        setError(err instanceof Error ? err.message : "Failed to auto-save");
+      }
+    }, 600);
+
+    return () => {
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    };
+  }, [text, dimension, autoSave, dirty, editor]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     if (editor.busy || !text.trim() || (editor.reviewed && !dirty)) return;
     setError("");
+    setSaveStatus("saving");
     try {
-      const unit =
-        editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
-      const currency =
-        editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
+      const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
+      const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
       await editor.onSave({ value: text.trim(), unit, currency });
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2000);
     } catch (err) {
+      setSaveStatus("idle");
       setError(err instanceof Error ? err.message : "Failed to save field");
     }
   }
+
+  const ValueInput = editor.multiline ? "textarea" : "input";
 
   return (
     <div
       className="border-t border-border/40 bg-muted/20 px-3 py-2 space-y-2 text-xs"
       onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          onDismiss?.();
+        }
+      }}
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {status === "problem" && (
             <span className="text-[10px] font-medium text-rose-600 dark:text-rose-400">
               Source values conflict
@@ -128,30 +200,54 @@ function InlineReviewDrawer({
               <Check size={11} /> Confirm extracted
             </button>
           )}
+          {saveStatus === "saving" && (
+            <span className="text-[10px] text-muted-foreground animate-pulse font-mono">
+              Auto-saving…
+            </span>
+          )}
+          {saveStatus === "saved" && (
+            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium inline-flex items-center gap-0.5">
+              <Check size={10} /> Saved
+            </span>
+          )}
         </div>
 
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground ml-auto">
+        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground ml-auto shrink-0">
           {editor.reviewed && (
             <button
               type="button"
               disabled={editor.busy}
               onClick={() => void editor.onUndo()}
-              className="inline-flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer mr-1"
               title="Reset to original value"
             >
               <RotateCcw size={10} /> Reset
             </button>
           )}
-          {onDismiss && (
+
+          {/* Auto-save Switcher (replaces close toggle) */}
+          <div className="flex items-center gap-1.5 select-none" title="Toggle automatic saving on edits">
+            <span className="text-[10px] font-medium text-muted-foreground">Auto save</span>
             <button
               type="button"
-              onClick={onDismiss}
-              className="hover:text-foreground transition-colors p-0.5 rounded-sm cursor-pointer"
-              title="Close"
+              role="switch"
+              aria-checked={autoSave}
+              aria-label="Toggle auto save"
+              onClick={handleToggleAutoSave}
+              className={cn(
+                "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                autoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
+              )}
             >
-              <X size={12} />
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "pointer-events-none inline-block size-3 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
+                  autoSave ? "translate-x-3.5" : "translate-x-0.5"
+                )}
+              />
             </button>
-          )}
+          </div>
         </div>
       </div>
 
@@ -169,6 +265,9 @@ function InlineReviewDrawer({
                 type="button"
                 disabled={editor.busy}
                 onClick={() => {
+                  if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+                  setText(choice.value);
+                  if (editor.dimension) setDimension(choice[editor.dimension] ?? "");
                   editor.onPreview(choice);
                   void editor.onSave({
                     value: choice.value,
@@ -196,25 +295,42 @@ function InlineReviewDrawer({
 
       <form onSubmit={handleSubmit} className="space-y-1">
         <div className="flex items-center gap-1.5">
-          <ValueInput
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            disabled={editor.busy}
-            rows={editor.multiline ? 1 : undefined}
-            className="flex-1 min-w-0 resize-none rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-            placeholder={`Enter ${name.toLowerCase()}…`}
-          />
-          {editor.dimension && (
-            <input
-              value={dimension}
-              onChange={(e) => setDimension(e.target.value)}
+          {editor.dimension ? (
+            <div className="flex-1 min-w-0 flex items-center rounded border border-border/70 bg-background overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors">
+              <input
+                type="text"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                disabled={editor.busy}
+                className="flex-1 min-w-0 bg-transparent px-2.5 py-1 text-xs font-mono text-foreground outline-none border-none placeholder:text-muted-foreground/50"
+                placeholder={name.toLowerCase().includes("weight") ? "1000" : `Enter ${name.toLowerCase()}…`}
+              />
+              <span className="px-2 text-muted-foreground/40 font-mono text-xs select-none" aria-hidden="true">
+                |
+              </span>
+              <input
+                type="text"
+                value={dimension}
+                onChange={(e) => setDimension(e.target.value)}
+                disabled={editor.busy}
+                maxLength={editor.dimension === "unit" ? 24 : 5}
+                placeholder={editor.dimension === "unit" ? "KG" : "USD"}
+                className="w-16 bg-transparent px-2 py-1 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none border-none placeholder:text-muted-foreground/50"
+                title={editor.dimension === "unit" ? "Unit of measure (e.g. KG, CBM, PKG)" : "Currency (e.g. USD)"}
+              />
+            </div>
+          ) : (
+            <ValueInput
+              value={text}
+              onChange={(e) => setText(e.target.value)}
               disabled={editor.busy}
-              maxLength={editor.dimension === "unit" ? 24 : 3}
-              placeholder={editor.dimension === "unit" ? "Unit" : "CCY"}
-              className="w-16 rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono uppercase focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              rows={editor.multiline ? 1 : undefined}
+              className="flex-1 min-w-0 resize-none rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
+              placeholder={`Enter ${name.toLowerCase()}…`}
             />
           )}
-          {dirty && (
+
+          {!autoSave && dirty && (
             <>
               <button
                 type="button"
@@ -285,15 +401,23 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
     const label = name ? "Verified CDC description" : suggestion ? "Suggested CDC description"
       : text.label ?? documentFieldLabel(key);
     const detail = `${label} · ${reviewed ? "Reviewed" : statuses[status].label}`;
+    const isItemEditorOpen = selected && editor && activeField?.target?.name === key && activeField?.target?.row === row;
+    const formattedContent = key === "description" ? value : renderFieldValue(visibleField, value);
     const content = <>
       {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
-      <span>{value}</span>
+      <span>{formattedContent}</span>
       <span hidden id={`${descriptionId}-${id}`}>{detail}</span>
     </>;
     return evidence || (editable && field) ? <button type="button"
       data-connector-source={selected ? "true" : undefined}
       aria-pressed={selected} aria-describedby={`${descriptionId}-${id}`} title={evidence ? `${detail} · ${location(evidence)}` : detail}
-      onClick={() => inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" })}
+      onClick={() => {
+        if (isItemEditorOpen && onDismissField) {
+          onDismissField();
+        } else {
+          inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" });
+        }
+      }}
       className={cn("data-link flex items-start gap-2 rounded-sm text-left tabular-nums", selected && "bg-primary/10")}>{content}</button>
       : <span className="inline-flex items-start gap-2">{content}</span>;
   }
@@ -434,11 +558,21 @@ export function IntakeStudioPanel({
                     aria-pressed={interactive ? selected : undefined}
                     aria-describedby={`${descriptionId}-${id}`}
                     title={evidence ? `${reason} · ${location(evidence)}` : reason}
-                    onClick={interactive ? () => onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" }) : undefined}
+                    onClick={interactive ? () => {
+                      if (isFieldEditorOpen && onDismissField) {
+                        onDismissField();
+                      } else {
+                        onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
+                      }
+                    } : undefined}
                     onKeyDown={interactive ? (e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
+                        if (isFieldEditorOpen && onDismissField) {
+                          onDismissField();
+                        } else {
+                          onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
+                        }
                       }
                     } : undefined}
                     className={cn(
@@ -452,7 +586,7 @@ export function IntakeStudioPanel({
                       <span>{name}</span>
                     </span>
                     <span className={cn("min-w-0 break-words whitespace-normal text-right font-mono text-[11px]", selected && "font-bold text-primary")}>
-                      {value}
+                      {renderFieldValue(visibleField, value)}
                     </span>
                     <span hidden id={`${descriptionId}-${id}`}>{reason}</span>
                   </div>
