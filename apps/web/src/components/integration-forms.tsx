@@ -220,9 +220,10 @@ export function TelegramSendForm({ caseId, preview }: { caseId: string; preview:
         </span>
         <span className="font-mono text-[10px] bg-background/80 px-2 py-0.5 rounded border">Rev #{preview.revision}</span>
       </div>
-      <div className="whitespace-pre-wrap break-words font-sans text-xs sm:text-[13px] leading-relaxed text-foreground select-text">
-        {preview.message}
-      </div>
+      <div
+        className="whitespace-pre-wrap break-words font-sans text-xs sm:text-[13px] leading-relaxed text-foreground select-text"
+        dangerouslySetInnerHTML={{ __html: preview.message }}
+      />
     </div>
     {preview.buttons.length > 0 && <div className="space-y-1.5">
       <span className="text-[11px] font-medium text-muted-foreground">Action buttons:</span>

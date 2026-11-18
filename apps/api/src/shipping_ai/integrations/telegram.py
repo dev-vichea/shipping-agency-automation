@@ -97,6 +97,40 @@ def is_public_url(url_str: str) -> bool:
         return False
 
 
+def sanitize_button_url(url: str) -> str:
+    if "://localhost" in url:
+        return url.replace("://localhost", "://127.0.0.1")
+    return url
+
+
+def sanitize_reply_markup(reply_markup: dict | None) -> dict | None:
+    if not reply_markup or not isinstance(reply_markup, dict):
+        return reply_markup
+    keyboard = reply_markup.get("inline_keyboard")
+    if not keyboard or not isinstance(keyboard, list):
+        return reply_markup
+
+    cleaned_keyboard = []
+    for row in keyboard:
+        cleaned_row = []
+        for btn in row:
+            if isinstance(btn, dict):
+                cleaned_btn = dict(btn)
+                if "url" in cleaned_btn and isinstance(cleaned_btn["url"], str):
+                    cleaned_btn["url"] = sanitize_button_url(cleaned_btn["url"])
+                if "web_app" in cleaned_btn and isinstance(cleaned_btn["web_app"], dict):
+                    wa = dict(cleaned_btn["web_app"])
+                    if "url" in wa and isinstance(wa["url"], str):
+                        wa["url"] = sanitize_button_url(wa["url"])
+                    cleaned_btn["web_app"] = wa
+                cleaned_row.append(cleaned_btn)
+            else:
+                cleaned_row.append(btn)
+        cleaned_keyboard.append(cleaned_row)
+
+    return {**reply_markup, "inline_keyboard": cleaned_keyboard}
+
+
 def safe_send_message(
     chat_id: str | int,
     text: str,
@@ -104,6 +138,7 @@ def safe_send_message(
     parse_mode: str | None = "HTML",
     link_preview_options: dict | None = None,
 ) -> dict:
+    reply_markup = sanitize_reply_markup(reply_markup)
     payload: dict = {"chat_id": chat_id, "text": text}
     if parse_mode:
         payload["parse_mode"] = parse_mode
@@ -136,6 +171,7 @@ def safe_edit_or_send(
     parse_mode: str | None = "HTML",
     link_preview_options: dict | None = None,
 ) -> dict:
+    reply_markup = sanitize_reply_markup(reply_markup)
     if message_id:
         payload: dict = {
             "chat_id": chat_id,
@@ -172,6 +208,7 @@ def safe_edit_message(
     parse_mode: str | None = "HTML",
     link_preview_options: dict | None = None,
 ) -> bool:
+    reply_markup = sanitize_reply_markup(reply_markup)
     payload: dict = {
         "chat_id": chat_id,
         "message_id": message_id,
@@ -392,7 +429,7 @@ def invoice_value(documents):
     return "Pending"
 
 
-def draft_url(case, review=None):
+def draft_url(case, review=None) -> str:
     url = f"{settings().origin}/open/{case.id}?workspace={case.workspace_id}"
     if review:
         url += f"&revision={case.analysis_revision}&review={review.id}"

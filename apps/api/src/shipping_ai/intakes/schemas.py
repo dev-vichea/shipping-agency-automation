@@ -98,5 +98,5 @@ class CaseDetail(CaseSummary):
 
 class Receipt(BaseModel):
     case_id: UUID
-    run_id: UUID
+    run_id: UUID | None = None
     replayed: bool
