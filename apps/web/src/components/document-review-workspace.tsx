@@ -1688,37 +1688,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               </p>
             </div>
 
-            {/* Auto-save Switcher (replaces close toggle) */}
-            <div className="flex items-center gap-2 select-none" title="Toggle automatic saving on edits">
-              <span className="text-xs font-medium text-muted-foreground">Auto save</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={dialogAutoSave}
-                aria-label="Toggle auto save"
-                onClick={() => {
-                  setDialogAutoSave((prev) => {
-                    const next = !prev;
-                    try {
-                      localStorage.setItem("harborway-dialog-autosave", String(next));
-                    } catch {}
-                    return next;
-                  });
-                }}
-                className={cn(
-                  "relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
-                  dialogAutoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
-                )}
-              >
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "pointer-events-none inline-block size-3.5 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
-                    dialogAutoSave ? "translate-x-4" : "translate-x-0.5"
-                  )}
-                />
-              </button>
-            </div>
+            {/* Close icon top right */}
+            <DialogCloseButton label="Close review dialog" />
           </div>
 
           <div className="max-h-[65vh] overflow-y-auto px-5 py-3 space-y-4">
@@ -1779,16 +1750,39 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           </div>
 
           <div className="flex items-center justify-between border-t px-5 py-2.5 bg-muted/20">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setReviewDialogOpen(false)}
-              className="text-xs h-8"
-            >
-              Close
-            </Button>
-            {groupedIssues.length > 0 && (
+            {/* Auto-save Switcher in bottom left */}
+            <div className="flex items-center gap-2 select-none" title="Toggle automatic saving on edits">
+              <span className="text-xs font-medium text-muted-foreground">Auto save</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={dialogAutoSave}
+                aria-label="Toggle auto save"
+                onClick={() => {
+                  setDialogAutoSave((prev) => {
+                    const next = !prev;
+                    try {
+                      localStorage.setItem("harborway-dialog-autosave", String(next));
+                    } catch {}
+                    return next;
+                  });
+                }}
+                className={cn(
+                  "relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                  dialogAutoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "pointer-events-none inline-block size-3.5 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
+                    dialogAutoSave ? "translate-x-4" : "translate-x-0.5"
+                  )}
+                />
+              </button>
+            </div>
+
+            {groupedIssues.length > 0 ? (
               <Button
                 type="button"
                 size="sm"
@@ -1797,9 +1791,19 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                   await handleVerifyAll();
                   setReviewDialogOpen(false);
                 }}
-                className="text-xs font-semibold shadow-xs h-8"
+                className="text-xs font-semibold shadow-xs h-8 cursor-pointer"
               >
                 <Check size={13} className="mr-1" /> Confirm all ({groupedIssues.length})
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => setReviewDialogOpen(false)}
+                className="text-xs h-8 cursor-pointer"
+              >
+                Done
               </Button>
             )}
           </div>
