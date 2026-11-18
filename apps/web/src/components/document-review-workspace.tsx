@@ -1535,13 +1535,13 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         </div>
         {!item.company_id && !item.import_id && !["approved", "rejected"].includes(item.state) && <AssignCompanyForm companies={companies} caseId={item.id} revision={analysis.revision} />}
         {metadata.length > 0 && (
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-2 border-t px-4 py-2.5 sm:grid-cols-3 md:grid-flow-col md:auto-cols-fr">
+          <dl className="grid grid-cols-2 gap-px border-t bg-border sm:grid-cols-4 md:grid-cols-none md:grid-flow-col md:auto-cols-fr md:grid-rows-1">
             {metadata.map(({ key, title, field, target }) => {
               const text = intakeField(field);
               const cite = text.evidence;
               const needsReview = intakeStatus(field) === "review";
               return (
-                <div key={key} className="min-w-0 space-y-0.5">
+                <div key={key} className="min-w-0 bg-background px-3.5 py-2 space-y-0.5">
                   <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/80">
                     {title}
                   </dt>
