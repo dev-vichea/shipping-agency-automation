@@ -583,7 +583,10 @@ def card_buttons(case, review=None) -> list[list[dict]]:
             {"text": "📄 Invoice", "callback_data": f"doc:inv:{ref}"},
             {"text": "📦 Packing List", "callback_data": f"doc:pl:{ref}"},
             {"text": "🚢 B/L", "callback_data": f"doc:bl:{ref}"},
-        ]
+        ],
+        [
+            {"text": "🔄 Refresh", "callback_data": f"status:{ref}"},
+        ],
     ]
 
     action_row: list[dict] = []
@@ -598,11 +601,11 @@ def card_buttons(case, review=None) -> list[list[dict]]:
         else:
             action_row.append({"text": "🔍 Review in Telegram", "web_app": {"url": url}})
     else:
-        action_label = "📋 View Import Record ↗" if case.state == "approved" else "🔗 Open Detail ↗"
+        action_label = "📋 View Import Record" if case.state == "approved" else "🔗 Open Detail"
         action_row.append({"text": action_label, "url": url})
 
-    action_row.append({"text": "🔄 Refresh", "callback_data": f"status:{ref}"})
-    rows.append(action_row)
+    if action_row:
+        rows.append(action_row)
     return rows
 
 
