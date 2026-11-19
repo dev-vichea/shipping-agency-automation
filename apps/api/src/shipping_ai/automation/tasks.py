@@ -11,7 +11,14 @@ from shipping_ai.core.db import session_factory
 from shipping_ai.documents.storage import LocalStorage
 from shipping_ai.integrations.gmail import sync_all
 from shipping_ai.investigation.jobs import finish_investigation, investigate
-from shipping_ai.models import ActivityEvent, AutomationRun, Document, IntakeCase, ReviewSnapshot
+from shipping_ai.models import (
+    ActivityEvent,
+    AutomationRun,
+    Document,
+    IntakeCase,
+    ReviewSnapshot,
+    TelegramDelivery,
+)
 from shipping_ai.review.pipeline import (
     ArchiveUnavailable,
     advisory,
@@ -174,10 +181,25 @@ def finish(job: Claim, error: str | None, result=None) -> None:
                     from shipping_ai.integrations.telegram import notify_case_status
 
                     try:
-                        if result.version_diff and result.version_diff.get("has_revisions"):
+                        has_prior_delivery = (
+                            db.scalar(
+                                select(TelegramDelivery.id)
+                                .where(TelegramDelivery.case_id == case.id)
+                                .limit(1)
+                            )
+                            is not None
+                        )
+
+                        if not has_prior_delivery:
+                            event_type = (
+                                "manual_matching"
+                                if case.state == "manual_matching"
+                                else "new_intake"
+                            )
+                        elif result.version_diff and result.version_diff.get("has_revisions"):
                             event_type = "revision_received"
-                        elif run.input_revision == 1:
-                            event_type = "manual_matching" if case.state == "manual_matching" else "new_intake"
+                        elif run.input_revision > 1:
+                            event_type = "revision_received"
                         else:
                             event_type = None
 
