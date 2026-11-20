@@ -89,6 +89,7 @@ class CaseSummary(ORM):
     file_types: list[str] = Field(default_factory=list)
     issue_count: int = 0
     bill_of_lading: str | None = None
+    cargo_summary: str | None = None
 
 
 class CaseDetail(CaseSummary):

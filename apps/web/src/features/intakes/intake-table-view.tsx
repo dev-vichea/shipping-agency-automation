@@ -23,38 +23,156 @@ function FilesCell({ item }: { item: CaseSummary }) {
   return <FileAttachmentGroup types={types} count={item.attachment_count} />;
 }
 
-function roleChip(role: string) {
+function roleShortLabel(role: string): string {
   switch (role) {
     case "commercial_invoice":
     case "invoice":
-      return {
-        label: "INV",
-        title: "Commercial Invoice",
-        className:
-          "bg-emerald-100/90 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300/50",
-      };
+      return "INV";
     case "packing_list":
-      return {
-        label: "PL",
-        title: "Packing List",
-        className:
-          "bg-sky-100/90 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300 border-sky-300/50",
-      };
+      return "PL";
     case "draft_bl":
     case "final_bl":
-      return {
-        label: "B/L",
-        title: "Bill of Lading",
-        className:
-          "bg-indigo-100/90 text-indigo-800 dark:bg-indigo-950/60 dark:text-indigo-300 border-indigo-300/50",
-      };
+      return "B/L";
     default:
-      return {
-        label: role.slice(0, 3).toUpperCase(),
-        title: label(role),
-        className: "bg-muted text-muted-foreground border-border",
-      };
+      return role.slice(0, 3).toUpperCase();
   }
+}
+
+/**
+ * Formats extracted document roles into clean, plain-text labels (e.g. "INV · PL · B/L")
+ * without any heavy background badge styling.
+ */
+function formatDocRolesText(roles?: string[]): string {
+  if (!roles || roles.length === 0) return "";
+
+  const order = ["INV", "PL", "B/L"];
+  const formatted = Array.from(new Set(roles.map(roleShortLabel)));
+  formatted.sort((a, b) => {
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.localeCompare(b);
+  });
+
+  return formatted.join(" · ");
+}
+
+function isGenericSubject(subject?: string | null): boolean {
+  if (!subject) return true;
+  const s = subject.trim().toLowerCase();
+  return (
+    !s ||
+    s === "—" ||
+    s === "-" ||
+    s.startsWith("synthetic arrival") ||
+    s === "new upload" ||
+    s === "manual upload" ||
+    s === "file upload" ||
+    s === "no subject" ||
+    s === "(no subject)" ||
+    s.startsWith("fixture-") ||
+    s.startsWith("iw-fixture-")
+  );
+}
+
+function isHexReference(ref?: string | null): boolean {
+  if (!ref) return true;
+  return /^[0-9a-f]{8}$/i.test(ref.trim());
+}
+
+function formatDocPackageSummary(roles?: string[]): string {
+  if (!roles || roles.length === 0) return "Import Documents";
+
+  const hasInv = roles.some((r) => r === "commercial_invoice" || r === "invoice");
+  const hasPl = roles.some((r) => r === "packing_list");
+  const hasBl = roles.some((r) => r === "draft_bl" || r === "final_bl");
+
+  if (hasInv && hasPl && hasBl) {
+    return "Invoice, Packing List & Draft B/L";
+  }
+  if (hasInv && hasPl) {
+    return "Commercial Invoice & Packing List";
+  }
+  if (hasInv && hasBl) {
+    return "Commercial Invoice & Draft B/L";
+  }
+  if (hasPl && hasBl) {
+    return "Packing List & Draft B/L";
+  }
+  if (hasInv) {
+    return "Commercial Invoice";
+  }
+  if (hasPl) {
+    return "Packing List";
+  }
+  if (hasBl) {
+    return "Bill of Lading";
+  }
+  return "Import Documents";
+}
+
+/**
+ * Resolves a genuine or AI-derived subject from extracted documents, references, and companies.
+ */
+export function resolveCaseSubject(item: CaseSummary): string {
+  // If the intake already has a genuine email subject (e.g. from Gmail), prioritize it
+  if (!isGenericSubject(item.subject)) {
+    return item.subject!;
+  }
+
+  // Synthesize from AI analysis of extracted documents
+  const docsLabel = formatDocPackageSummary(item.document_roles);
+  const hasRealRef = item.detected_reference && !isHexReference(item.detected_reference);
+  const company = item.company && item.company !== "Unassigned" ? item.company : null;
+  const cargo = item.cargo_summary?.trim();
+
+  // Pattern 1: Real Reference (e.g. TK164, F0026CD046, 26THYN164)
+  if (hasRealRef) {
+    if (cargo) {
+      return `${item.detected_reference} Import · ${cargo} (${docsLabel})`;
+    }
+    if (company) {
+      return `${item.detected_reference} Import · ${company} (${docsLabel})`;
+    }
+    return `${item.detected_reference} Import · ${docsLabel}`;
+  }
+
+  // Pattern 2: Bill of Lading known
+  if (item.bill_of_lading) {
+    if (company) {
+      return `${company} · B/L ${item.bill_of_lading} · ${docsLabel}`;
+    }
+    return `B/L ${item.bill_of_lading} Import · ${docsLabel}`;
+  }
+
+  // Pattern 3: Company known
+  if (company) {
+    return `${company} Import · ${docsLabel}`;
+  }
+
+  // Pattern 4: Fallback for unassigned intake
+  return `Import Intake · ${docsLabel}`;
+}
+
+function resolveDetailSnippet(item: CaseSummary): string {
+  if (item.review_reason) {
+    return item.review_reason;
+  }
+  if (item.analysis_outcome === "PASS") {
+    return "All document comparisons passed";
+  }
+  if (item.state === "ready_for_approval" || item.state === "ready") {
+    return "Verified and ready for approval";
+  }
+  if (item.state === "approved") {
+    return "Approved by staff";
+  }
+  if (item.state === "processing" || item.state === "queued") {
+    return "AI analysis in progress";
+  }
+  return "Document findings ready for staff review";
 }
 
 function ChannelBadge({ channel }: { channel: string }) {
@@ -133,7 +251,7 @@ export function IntakeTableView({
         <TableHeader>
           <TableRow className="hover:bg-transparent">
             <TableHead className="w-36 pl-4">Reference</TableHead>
-            <TableHead className="min-w-64 max-w-xl">Subject & Cargo Details</TableHead>
+            <TableHead className="min-w-64 max-w-xl">Subject</TableHead>
             <TableHead className="w-32 font-mono">B/L Number</TableHead>
             <TableHead className="w-40">Company</TableHead>
             <TableHead className="w-36">{inbox ? "Source" : "Verification"}</TableHead>
@@ -150,7 +268,10 @@ export function IntakeTableView({
           {items.map((item) => {
             const href = scopedPath(`/review/${item.id}`, companyId);
             const refText = item.detected_reference ?? item.id.slice(0, 8);
-            const subjectText = item.subject ?? item.sender ?? "—";
+            const subjectText = resolveCaseSubject(item);
+            const hasRoles = Boolean(item.document_roles && item.document_roles.length > 0);
+            const rolesText = formatDocRolesText(item.document_roles);
+            const detailSnippet = resolveDetailSnippet(item);
             const isActionNeeded = [
               "needs_review",
               "manual_matching",
@@ -191,9 +312,10 @@ export function IntakeTableView({
                   </Link>
                 </TableCell>
 
-                {/* 2. Subject + Document Attachment Badges + Discrepancy snippet */}
-                <TableCell className="min-w-64 max-w-xl py-2.5 align-middle">
-                  <div className="space-y-1">
+                {/* 2. Subject & Details (Max 2 lines, clean text, no background badges) */}
+                <TableCell className="min-w-64 max-w-xl py-2 align-middle">
+                  <div className="flex flex-col justify-center min-w-0 max-w-full">
+                    {/* Line 1: Subject */}
                     <div
                       className={cn(
                         "truncate text-body-sm leading-snug",
@@ -206,45 +328,41 @@ export function IntakeTableView({
                       {subjectText}
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                      {/* Document Role Chips (Gmail Attachment Chips) */}
-                      {item.document_roles && item.document_roles.length > 0 ? (
-                        item.document_roles.map((role) => {
-                          const chip = roleChip(role);
-                          return (
-                            <span
-                              key={role}
-                              title={chip.title}
-                              className={cn(
-                                "inline-flex items-center rounded border px-1.5 py-0.2 text-[10px] font-mono font-medium tracking-tight",
-                                chip.className
-                              )}
-                            >
-                              {chip.label}
-                            </span>
-                          );
-                        })
+                    {/* Line 2: Details snippet (Clean text, no bg, max 1 line) */}
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground truncate leading-normal pt-0.5">
+                      {/* Document roles as clean text (e.g. INV · PL · B/L) or attachment count with paperclip icon (e.g. 📎 1 doc) */}
+                      {hasRoles ? (
+                        <span className="font-mono text-[11px] font-semibold text-foreground/75 shrink-0">
+                          {rolesText}
+                        </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                          <Paperclip size={11} className="shrink-0" />
+                        <span className="inline-flex items-center gap-1 text-[11px] font-medium text-foreground/75 shrink-0">
+                          <Paperclip className="size-3 text-muted-foreground shrink-0" aria-hidden />
                           <span>{item.attachment_count} {item.attachment_count === 1 ? "doc" : "docs"}</span>
                         </span>
                       )}
 
-                      {/* Issue snippet / Review Reason */}
-                      {typeof item.issue_count === "number" && item.issue_count > 0 ? (
-                        <span className="inline-flex items-center gap-1 rounded border border-amber-200/80 bg-amber-50 dark:border-amber-800/60 dark:bg-amber-950/40 px-1.5 py-0.2 text-[10px] font-medium text-amber-800 dark:text-amber-300">
-                          ⚠️ {item.issue_count} {item.issue_count === 1 ? "issue" : "issues"}
-                        </span>
-                      ) : null}
+                      {/* Issue count as clean text without bg and without warning emoji: e.g. 11 issues */}
+                      {typeof item.issue_count === "number" && item.issue_count > 0 && (
+                        <>
+                          <span className="text-muted-foreground/40 shrink-0">·</span>
+                          <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400 shrink-0">
+                            {item.issue_count} {item.issue_count === 1 ? "issue" : "issues"}
+                          </span>
+                        </>
+                      )}
 
-                      {item.review_reason && (
-                        <span
-                          className="max-w-64 truncate text-[11px] text-muted-foreground/80 italic"
-                          title={item.review_reason}
-                        >
-                          • {item.review_reason}
-                        </span>
+                      {/* Detail snippet */}
+                      {detailSnippet && (
+                        <>
+                          <span className="text-muted-foreground/40 shrink-0">·</span>
+                          <span
+                            className="truncate text-[11px] text-muted-foreground"
+                            title={item.review_reason ?? detailSnippet}
+                          >
+                            {detailSnippet}
+                          </span>
+                        </>
                       )}
                     </div>
                   </div>

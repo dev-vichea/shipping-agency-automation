@@ -222,7 +222,18 @@ def list_cases(
             .correlate(IntakeCase)
             .scalar_subquery()
         )
-        query = query.add_columns(ReviewSnapshot.findings, roles, bill, file_types_sub)
+        cargo = (
+            select(DocumentExtraction.payload["fields"]["cargo_summary"]["value"].astext)
+            .where(
+                DocumentExtraction.snapshot_id == ReviewSnapshot.id,
+                DocumentExtraction.payload["fields"]["cargo_summary"]["value"].astext.is_not(None),
+            )
+            .order_by(DocumentExtraction.document_id)
+            .limit(1)
+            .correlate(ReviewSnapshot)
+            .scalar_subquery()
+        )
+        query = query.add_columns(ReviewSnapshot.findings, roles, bill, file_types_sub, cargo)
     rows = db.execute(
         query.order_by(
             IntakeCase.created_at.asc() if oldest_first else IntakeCase.created_at.desc(),
@@ -243,8 +254,8 @@ def list_cases(
         if processing and case_item.state == "queued":
             item["state"] = "processing"
         if checks:
-            findings, roles, bill, *ft_opt = checks
-            file_types = ft_opt[0] if ft_opt else []
+            findings, roles, bill, file_types, *cargo_opt = checks
+            cargo_val = cargo_opt[0] if cargo_opt else None
             statuses = {}
             for finding in findings or []:
                 group, status = finding["group"], finding["outcome"]
@@ -252,6 +263,7 @@ def list_cases(
                     statuses[group] = status
             item.update(
                 bill_of_lading=bill,
+                cargo_summary=cargo_val,
                 review_checks=statuses,
                 document_roles=roles or [],
                 file_types=file_types or [],

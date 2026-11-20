@@ -17,6 +17,7 @@ export type CaseSummary = {
   file_types?: string[];
   issue_count?: number;
   bill_of_lading?: string | null;
+  cargo_summary?: string | null;
   created_at: string;
   updated_at: string;
   attachment_count: number;
