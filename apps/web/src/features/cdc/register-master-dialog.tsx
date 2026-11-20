@@ -2,7 +2,8 @@
 
 import { useEffect, useId, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { Check, FileSpreadsheet, ScanSearch } from "lucide-react";
+import { Check, ScanSearch } from "lucide-react";
+import { ExcelFileIcon, PdfFileIcon, FileAttachmentBadge } from "@/components/ui/file-icon";
 import { toast } from "@/lib/toast";
 import { useFormSubmission } from "@/lib/use-form-submission";
 import { Button } from "@/components/ui/button";
@@ -75,7 +76,7 @@ export function RegisterMasterDialog({ companyId, companies, openVersion, outlin
       <DialogTrigger asChild><Button type="button" variant={outline ? "outline" : "default"}>{trigger}</Button></DialogTrigger>
       <DialogContent className="max-w-2xl" aria-describedby={undefined}>
         <div className="sticky top-0 z-10 flex items-center gap-3 border-b bg-card px-5 py-4">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent text-primary"><FileSpreadsheet size={18} aria-hidden /></span>
+          <ExcelFileIcon size="xl" />
           <DialogTitle className="flex-1 text-headline-lg">Register Master List</DialogTitle>
           <DialogCloseButton />
         </div>
@@ -156,7 +157,9 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
     <div className="space-y-5 px-5 py-4">
       <div className="grid items-start gap-3 rounded-lg border border-dashed border-input bg-background p-3 sm:grid-cols-2">
         <div className="min-w-0 space-y-1.5">
-          <Label htmlFor={`${prefix}-workbook`}>Master List workbook</Label>
+          <Label htmlFor={`${prefix}-workbook`} className="flex items-center gap-1.5">
+            <ExcelFileIcon size="xs" /> Master List workbook
+          </Label>
           <Input id={`${prefix}-workbook`} name="file" type="file" accept=".xls,.xlsx" required onChange={(event) => {
             setWorkbook(event.target.files?.[0]);
             setSelection(undefined);
@@ -166,16 +169,26 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
             setVerified(false);
             setRevision((previous) => previous + 1);
           }} />
-          <p className="text-xs text-muted-foreground">XLS or XLSX</p>
+          {workbook ? (
+            <FileAttachmentBadge filename={workbook.name} size="xs" subtext={`${(workbook.size / 1024).toFixed(0)} KB`} className="mt-1" />
+          ) : (
+            <p className="text-xs text-muted-foreground">XLS or XLSX</p>
+          )}
         </div>
         <div className="min-w-0 space-y-1.5">
-          <Label htmlFor={`${prefix}-approval`}>Approval PDF <span className="text-muted-foreground">(optional)</span></Label>
+          <Label htmlFor={`${prefix}-approval`} className="flex items-center gap-1.5">
+            <PdfFileIcon size="xs" /> Approval PDF <span className="text-muted-foreground font-normal">(optional)</span>
+          </Label>
           <Input id={`${prefix}-approval`} name="approval_pdf" type="file" accept=".pdf,application/pdf" onChange={(event) => {
             setApproval(event.target.files?.[0]);
             setVerified(false);
             setRevision((previous) => previous + 1);
           }} />
-          <p className="text-xs text-muted-foreground">For suggestions. Scanned pages use OCR.</p>
+          {approval ? (
+            <FileAttachmentBadge filename={approval.name} size="xs" subtext={`${(approval.size / 1024).toFixed(0)} KB`} className="mt-1" />
+          ) : (
+            <p className="text-xs text-muted-foreground">For suggestions. Scanned pages use OCR.</p>
+          )}
         </div>
       </div>
 

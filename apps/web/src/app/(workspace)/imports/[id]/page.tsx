@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowUpRight, Download, FileSpreadsheet } from "lucide-react";
+import { ArrowUpRight, Download } from "lucide-react";
+import { ExcelFileIcon } from "@/components/ui/file-icon";
 import { Button } from "@/components/ui/button";
 import { PermitRelease } from "@/features/imports/permit-release";
 import { ListPagination } from "@/components/ui/pagination";
@@ -55,7 +56,7 @@ export default async function ImportPage({ params, searchParams }: {
       {drafts.map((draft) => <div className="space-y-3 border-b p-3 last:border-b-0" key={draft.id}>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex min-w-0 items-start gap-2.5">
-            <span className="grid size-8 shrink-0 place-items-center rounded-control border border-primary/20 bg-accent text-primary"><FileSpreadsheet aria-hidden size={16} /></span>
+            <ExcelFileIcon size="lg" />
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2"><h3 className="text-headline-sm">Permit INV / PL</h3><Status value="unsubmitted" /></div>
               <p className="font-mono text-code-tabular text-muted-foreground">Revision {draft.revision} · {timestamp(draft.created_at)}{!draft.current && " · Prior revision"}</p>

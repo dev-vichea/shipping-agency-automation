@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { ExcelFileIcon, PdfFileIcon } from "@/components/ui/file-icon";
 import { Button } from "@/components/ui/button";
 import { FormError, FormField } from "@/components/ui/form-field";
 import { Input } from "@/components/ui/input";
@@ -60,7 +61,11 @@ export function IntakeForm({ caseId, revisionChoices = [], companies = [], defau
       <div className="grid gap-3 sm:grid-cols-2">
         <FormField id="files" label="Attachments">
           <Input id="files" name="files" type="file" accept=".pdf,.xls,.xlsx" required={!caseId} multiple aria-describedby="file-limits" />
-          <p id="file-limits" className="text-body-sm text-muted-foreground">PDF, XLS or XLSX. Up to five files, 10 MB each.</p>
+          <p id="file-limits" className="flex items-center gap-1.5 text-body-sm text-muted-foreground">
+            <PdfFileIcon size="xs" />
+            <ExcelFileIcon size="xs" />
+            <span>PDF, XLS or XLSX. Up to five files, 10 MB each.</span>
+          </p>
         </FormField>
         <FormField id="classification" label="Attachment type">
           <NativeSelect id="classification" name="classification" className="w-full">

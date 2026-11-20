@@ -1,17 +1,17 @@
 import { NativeSelect } from "@/components/ui/native-select";
 import Link from "next/link";
-import { ArrowRight, Plug, Upload } from "lucide-react";
+import { Plug, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
-import { Empty, PageHeading, Section, Status } from "@/components/ui/page-layout";
+import { Empty, PageHeading, Section } from "@/components/ui/page-layout";
 import { ListPagination } from "@/components/ui/pagination";
 import { IntakeForm } from "@/features/intakes/intake-form";
+import { IntakeTableView } from "@/features/intakes/intake-table-view";
 import { LiveRefresh } from "@/lib/live-refresh";
 import { FormSheet } from "@/components/ui/form-sheet";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { api, workspaceList } from "@/lib/server-api";
 import type { CaseSummary, Company } from "@/lib/contracts";
-import { label, timestamp } from "@/lib/format";
+import { label } from "@/lib/format";
 import { pageSize, pageWindow, parseOffset } from "@/lib/pagination";
 import { companyParam, scopedPath } from "@/lib/scope";
 import { cn } from "@/lib/utils";
@@ -95,7 +95,7 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
         })}
       </nav>
 
-      <form action={path} className="flex flex-wrap items-center gap-2 border-b p-3" role="search">
+      <form action={path} className="flex flex-wrap items-center gap-2 border-b p-3 bg-background" role="search">
         {companyId && <input type="hidden" name="company_id" value={companyId} />}
         {filter && <input type="hidden" name="filter" value={filter} />}
         <SearchInput name="q" maxLength={160} aria-label="Search intakes" placeholder="Invoice, B/L, company, sender…" defaultValue={q} containerClassName="flex-1 sm:max-w-70" />
@@ -107,58 +107,16 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
         </NativeSelect>
         <Button size="sm" type="submit" variant="outline">Apply</Button>
       </form>
-      {items.length ? <Table className="min-w-[960px]">
-        <TableHeader><TableRow>
-          <TableHead className="w-36">Reference</TableHead>
-          <TableHead className="min-w-36 max-w-56">Subject</TableHead>
-          <TableHead className="w-32 font-mono">B/L Number</TableHead>
-          <TableHead className="w-36">Company</TableHead>
-          <TableHead className="w-32">{inbox ? "Source" : "Verification"}</TableHead>
-          <TableHead className="w-20 text-center">{inbox ? "Files" : "Findings"}</TableHead>
-          <TableHead className="w-40">Received</TableHead>
-          <TableHead className="w-24 text-center">Status</TableHead>
-          <TableHead className="w-20 text-right"><span className="sr-only">Details</span></TableHead>
-        </TableRow></TableHeader>
-        <TableBody>{items.map((item) => {
-          const href = scopedPath(`/review/${item.id}`, companyId);
-          const refText = item.detected_reference ?? item.id.slice(0, 8);
-          const subjectText = item.subject ?? item.sender ?? "—";
-          return <TableRow key={item.id}>
-            <TableCell className="max-w-36 truncate font-mono text-code-tabular font-medium">
-              <Link href={href} className="data-link block truncate" title={refText}>
-                {refText}
-              </Link>
-            </TableCell>
-            <TableCell className="max-w-56 truncate text-muted-foreground" title={subjectText}>
-              {subjectText}
-            </TableCell>
-            <TableCell className="max-w-32 truncate font-mono text-code-tabular">
-              {item.bill_of_lading ?? "—"}
-            </TableCell>
-            <TableCell className="max-w-36 truncate" title={item.company ?? undefined}>
-              {item.company ?? "Unassigned"}
-            </TableCell>
-            <TableCell className="whitespace-nowrap text-muted-foreground">
-              {inbox ? label(item.channel) : item.analysis_outcome ? <Status value={item.analysis_outcome} /> : "—"}
-            </TableCell>
-            <TableCell className="text-center tabular-nums whitespace-nowrap">
-              {inbox ? item.attachment_count : typeof item.issue_count === "number" ? item.issue_count : "—"}
-            </TableCell>
-            <TableCell className="whitespace-nowrap font-mono text-code-tabular text-muted-foreground">
-              {timestamp(item.received_at ?? item.created_at)}
-            </TableCell>
-            <TableCell className="text-center whitespace-nowrap">
-              <Status value={item.state} />
-            </TableCell>
-            <TableCell className="text-right whitespace-nowrap">
-              <Link href={href} aria-label={draftView ? "Review draft" : "Open case"} className="data-link inline-flex items-center gap-1 text-xs">
-                <span>Open</span>
-                <ArrowRight size={13} aria-hidden />
-              </Link>
-            </TableCell>
-          </TableRow>;
-        })}</TableBody>
-      </Table> : <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>}
+      {items.length ? (
+        <IntakeTableView
+          items={items}
+          companyId={companyId}
+          inbox={inbox}
+          draftView={draftView}
+        />
+      ) : (
+        <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>
+      )}
       <ListPagination path={search.size ? `${path}?${search}` : path} offset={offset} count={items.length} hasNext={hasNext} />
     </Section>
   </div>;

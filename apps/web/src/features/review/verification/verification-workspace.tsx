@@ -584,46 +584,34 @@ export function VerificationWorkspace({
   ) => {
     if (!document) return;
     await save((draft) => {
-      const nextMappings = [
-        ...draft.mappings.filter((m) => m.invoice_row !== row),
-        { invoice_row: row, master_row: candidate.master_row },
-      ];
-      const mappingDecision: FindingDecision = {
-        key: `cdc.row.${row}.mapping`,
-        action: "approved",
-        note: reason || `Selected CDC material ${candidate.serial ? `${candidate.serial} · ` : ""}${candidate.description}`,
-        master_row: candidate.master_row,
-      };
-
-      const withMapping = {
-        ...draft,
-        mappings: nextMappings,
-        verify_cdc_mappings: true,
-        finding_decisions: [
-          ...(draft.finding_decisions ?? []).filter((entry) => entry.key !== mappingDecision.key),
-          mappingDecision,
-        ],
-      };
-
       const descRef: ReviewField = {
         document_id: document.document_id,
         role: "invoice",
         row,
         name: "description",
       };
-
-      return replaceVerificationField(
-        withMapping,
-        {
-          ...descRef,
-          value: candidate.description,
-          unit: null,
-          currency: null,
-          note: `Matched CDC material ${candidate.master_row}`,
-          confirmed: true,
-        },
-        workflow
-      );
+      // Invalidate edits and mappings based on the previous description before
+      // writing the mapping the reviewer just selected for the new description.
+      const next = replaceVerificationField(draft, {
+        ...descRef,
+        value: candidate.description,
+        unit: null,
+        currency: null,
+        note: `Matched CDC material ${candidate.master_row}`,
+        confirmed: true,
+      }, workflow);
+      const mappingDecision: FindingDecision = {
+        key: `cdc.row.${row}.mapping`,
+        action: "approved",
+        note: reason || `Selected CDC material ${candidate.serial ? `${candidate.serial} · ` : ""}${candidate.description}`,
+        master_row: candidate.master_row,
+      };
+      return {
+        ...next,
+        mappings: [...next.mappings, { invoice_row: row, master_row: candidate.master_row }],
+        verify_cdc_mappings: true,
+        finding_decisions: [...(next.finding_decisions ?? []), mappingDecision],
+      };
     });
   };
 
@@ -702,7 +690,7 @@ export function VerificationWorkspace({
                   >
                     <Info className="size-3.5" />
                   </button>
-                  <div className="pointer-events-none absolute left-0 bottom-full mb-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-50 w-72 rounded-md bg-slate-900 px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-md dark:bg-slate-800 dark:text-slate-100">
+                  <div className="pointer-events-none absolute right-0 bottom-full mb-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-50 w-56 sm:right-auto sm:left-0 sm:w-72 rounded-md bg-slate-900 px-3 py-2 text-[11px] leading-relaxed text-slate-100 shadow-md dark:bg-slate-800 dark:text-slate-100">
                     Compare cited document values and CDC candidates. All suggestions require staff review and cannot auto-deduct stock.
                   </div>
                 </div>

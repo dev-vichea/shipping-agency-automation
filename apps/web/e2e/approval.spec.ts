@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import type { ImportDetail, MasterVersion, PermitDraft, ReviewAnalysis, StaffReview } from "../src/lib/contracts";
+import type { CaseDetail, ImportDetail, MasterVersion, PermitDraft, ReviewAnalysis, ReviewWorkflow, StaffReview } from "../src/lib/contracts";
 
 const fixture = (name: string) => resolve("../api/tests/fixtures", name);
 const origin = process.env.SHIPPING_E2E_URL ?? "http://localhost:3000";
@@ -17,6 +17,10 @@ test("staff corrects a discrepancy and approves one import with a permit and rep
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
+  const headers = { Origin: origin };
+  const workspace = await page.request.post("/api/v1/workspaces", { headers, data: { name: subject } });
+  expect(workspace.ok()).toBe(true);
+  await page.goto("/home");
   await page.getByRole("link", { name: "Upload documents", exact: true }).click();
   await page.getByLabel("Subject").fill(subject);
   await page.getByLabel("Attachments", { exact: true }).setInputFiles([
@@ -26,7 +30,6 @@ test("staff corrects a discrepancy and approves one import with a permit and rep
   await expect(page).toHaveURL(/\/review\/[0-9a-f-]{36}$/);
   const caseId = new URL(page.url()).pathname.split("/").at(-1);
   const path = `/api/v1/intakes/${caseId}`;
-  const headers = { Origin: origin };
   const read = async (): Promise<ReviewAnalysis> => (await page.request.get(`${path}/analysis`)).json();
   await expect.poll(async () => (await read()).state, { timeout: 45_000 }).toBe("available");
   const workbook = await readFile(fixture("cdc-approval.xlsx"));
@@ -63,38 +66,46 @@ test("staff corrects a discrepancy and approves one import with a permit and rep
   const updated = () => page.waitForResponse((response) =>
     response.url().endsWith(`${path}/review`) && response.request().method() === "POST");
 
-  await expect(page.getByRole("region", { name: "Staff review" })).toHaveCount(0);
-  await expect(approve).toBeDisabled();
+  await expect(approve).toHaveCount(0);
   await expect(processed).toHaveCount(0);
+  const premature = await page.request.post(`${path}/approve`, {
+    headers, data: { expected_revision: (await read()).revision, review_id: null, notes: "Attempt before reviewing the discrepancy." },
+  });
+  expect(premature.status()).toBe(409);
+  const original: CaseDetail = await (await page.request.get(path)).json();
+  expect(original.import_id).toBeNull();
+
   await tabs.getByRole("button", { name: /^Packing list(?:\s|$)/ }).click();
   const goods = page.getByRole("region", { name: "Goods items" });
   await goods.getByRole("button", { name: "10 PCS", exact: true }).click();
   await expect(source.getByLabel("Worksheet")).toHaveValue("PackingList");
   await expect(source.locator('td[data-connector-target="true"]')).toHaveText("10");
-  const quantity = source.getByRole("region", { name: "Edit Quantity" });
-  await quantity.getByRole("textbox", { name: "Quantity value" }).fill("12");
+  await goods.getByRole("switch", { name: "Toggle auto save" }).click();
+  const quantity = goods.getByPlaceholder("Enter row 11: quantity…", { exact: true });
+  await quantity.fill("12");
   const firstSave = updated();
-  await quantity.getByRole("button", { name: "Save Quantity" }).click();
+  await goods.getByRole("button", { name: "Save", exact: true }).click();
   expect(((await (await firstSave).json()) as StaffReview).ready).toBe(false);
   await expect(goods.getByRole("button", { name: "12 PCS", exact: true }).locator("[data-field-status=present]")).toBeVisible();
-  await expect(approve).toBeDisabled();
 
   const undone = updated();
-  await quantity.getByRole("button", { name: "Undo Quantity review" }).click();
+  await goods.getByRole("button", { name: "Reset", exact: true }).click();
   expect(((await (await undone).json()) as StaffReview).changes).toHaveLength(0);
   await expect(goods.getByRole("button", { name: "10 PCS", exact: true })).toBeVisible();
-  await quantity.getByRole("textbox", { name: "Quantity value" }).fill("12");
+  await quantity.fill("12");
   const secondSave = updated();
-  await quantity.getByRole("button", { name: "Save Quantity" }).click();
+  await goods.getByRole("button", { name: "Save", exact: true }).click();
   expect((await secondSave).ok()).toBe(true);
   await expect(goods.getByRole("button", { name: "12 PCS", exact: true })).toBeVisible();
 
-  const priceButton = goods.getByRole("row").filter({ hasText: "Woven label" }).getByRole("button", { name: /USD/ }).first();
-  await priceButton.click();
-  const price = source.getByRole("region", { name: "Edit Unit Price" });
-  await price.getByRole("textbox", { name: "Unit Price value" }).fill("2.50");
+  await goods.getByRole("row").filter({ hasText: "Woven label" }).getByRole("button", { name: /^2\.75(?:\s|$)/ }).click();
+  const price = goods.getByPlaceholder("Enter row 11: unit price…", { exact: true });
+  await price.fill("2.50");
+  await goods.getByRole("textbox", { name: "Currency (e.g. USD)", exact: true }).fill("USD");
+  const priceBeforeSave: ReviewWorkflow = await (await page.request.get(`${path}/review`)).json();
+  expect(priceBeforeSave.review?.corrections.some(({ name }) => name === "unit_price")).toBe(false);
   const priceSave = updated();
-  await price.getByRole("button", { name: "Save Unit Price" }).click();
+  await goods.getByRole("button", { name: "Save", exact: true }).click();
   expect((await priceSave).ok()).toBe(true);
 
   await tabs.getByRole("button", { name: /^B\/L(?:\s|$)/ }).click();
@@ -103,18 +114,13 @@ test("staff corrects a discrepancy and approves one import with a permit and rep
   await expect(weightRow.locator("[data-field-status=problem]")).toBeVisible();
   await weightRow.click();
   await expect(source.getByRole("img", { name: "Source citation bounding box" })).toBeVisible();
-  const weight = source.getByRole("region", { name: "Edit Gross Weight" });
-  const weightValue = weight.getByRole("textbox", { name: "Gross Weight value" });
-  await weightValue.click();
-  await weight.getByRole("button", { name: /Original extraction/ }).click();
-  await expect(weightValue).toBeFocused();
-  await weightValue.fill("24");
+  await details.getByPlaceholder("1000", { exact: true }).fill("24");
   const weightSave = updated();
-  await weight.getByRole("button", { name: "Save Gross Weight" }).click();
+  await details.getByRole("button", { name: "Save", exact: true }).click();
   expect((await weightSave).ok()).toBe(true);
   await expect(weightRow.locator("[data-field-status=present]")).toBeVisible();
   await page.reload();
-  await expect(weightRow).toContainText("24 KG");
+  await expect(weightRow).toHaveAccessibleName("Gross Weight 24 KG");
   await expect(weightRow.locator("[data-field-status=present]")).toBeVisible();
 
   await page.getByRole("button", { name: /Audit & findings/ }).click();
@@ -138,16 +144,20 @@ test("staff corrects a discrepancy and approves one import with a permit and rep
   await page.getByRole("button", { name: "Save CDC matches" }).click();
   const review: StaffReview = await (await ready).json();
   expect(review.blockers).toEqual([]);
+  await page.getByRole("button", { name: /^Verification/ }).click();
   await expect(approve).toBeEnabled();
 
   const confirmation = page.waitForResponse((response) => response.url().endsWith(`${path}/approve`));
   await approve.click();
-  const approval = await (await confirmation).json();
+  const approved = await confirmation;
+  expect(approved.ok(), await approved.text()).toBe(true);
+  const approval = await approved.json();
   await expect(page).toHaveURL(/\/review\//);
   await processed.click();
   await expect(page.getByText("Processed", { exact: true })).toBeVisible();
   await page.getByRole("link", { name: "Linked import" }).click();
-  await expect(page.getByRole("heading", { name: "INV-FIXTURE-101" })).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/imports/${approval.import_id}$`));
+  await expect(page.getByRole("heading", { name: "INV-FIXTURE-101", level: 1, exact: true })).toBeVisible();
   const recordPath = `/api/v1/imports/${approval.import_id}`;
   const record: ImportDetail = await (await page.request.get(recordPath)).json();
   expect(record.state).toBe("approved");

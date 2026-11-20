@@ -154,7 +154,7 @@ function InlineReviewDrawer({
 
   const handleBlur = () => {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    if (!dirty || !text.trim() || editor.busy) return;
+    if (!autoSave || !dirty || !text.trim() || editor.busy) return;
     const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
     const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
     setSaveStatus("saving");

@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { CheckCheck, ChevronDown, FileText, History } from "lucide-react";
+import { CheckCheck, ChevronDown, History } from "lucide-react";
+import { FileTypeIcon } from "@/components/ui/file-icon";
 import { ReviewActions } from "@/features/review/review-actions";
 import { VerificationCardSkeleton } from "@/features/review/verification/verification-skeleton";
 import { VerificationCdcCleanOptions } from "@/features/review/verification/verification-cdc-row";
@@ -161,18 +162,7 @@ function VerificationDescriptionWithCdc({
       disabled={disabled}
       open={open}
       onOpenChange={setOpen}
-      onSelectCandidate={async (candidate, reason) => {
-        if (typeof window !== "undefined") {
-          const el = window.document.getElementById(
-            `verify-${role}-${line.row}-description`
-          ) as HTMLTextAreaElement | HTMLInputElement | null;
-          if (el) {
-            el.value = candidate.description;
-            el.dispatchEvent(new Event("input", { bubbles: true }));
-          }
-        }
-        await onSelectCandidate(line.row, candidate, reason);
-      }}
+      onSelectCandidate={(candidate, reason) => onSelectCandidate(line.row, candidate, reason)}
       onClearMapping={async () => {
         await onClearCandidate(line.row);
       }}
@@ -180,8 +170,8 @@ function VerificationDescriptionWithCdc({
       <div
         data-cdc-anchor={line.row}
         className="w-full min-w-0 relative flex items-center gap-1.5"
-        onFocus={() => {
-          setOpen(true);
+        onFocus={(event) => {
+          if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) setOpen(true);
         }}
         onClick={() => {
           setOpen(true);
@@ -211,7 +201,7 @@ function VerificationDescriptionWithCdc({
           type="button"
           aria-label="Review CDC material"
           title="Review CDC material"
-          tabIndex={-1}
+          aria-expanded={open}
           onClick={(e) => {
             e.stopPropagation();
             setOpen((prev) => !prev);
@@ -513,7 +503,7 @@ export function VerificationDocumentCard({
       {/* Card Sub-Header: Title, Version, Lines, Sheet Switcher, Autosave Status */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/60 px-4 py-2.5 bg-card">
         <div className="flex items-center gap-2 min-w-0">
-          <FileText className="size-4 text-primary shrink-0" aria-hidden />
+          <FileTypeIcon filename={original?.original_filename} mime={original?.mime} size="sm" />
           <h2 className="font-semibold text-xs truncate text-foreground">
             {role === "invoice" ? "Commercial Invoice" : "Packing List"}
             {invoiceNo && <span className="text-muted-foreground font-normal"> · {invoiceNo}</span>}

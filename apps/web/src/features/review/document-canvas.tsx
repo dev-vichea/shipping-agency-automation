@@ -6,13 +6,11 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  FileSpreadsheet,
-  FileText,
   Maximize2,
   Minimize2,
-  Sparkles,
   X,
 } from "lucide-react";
+import { FileTypeIcon } from "@/components/ui/file-icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/features/review/document-canvas-surface";
@@ -272,13 +270,12 @@ export function DocumentCanvas({
       <div className="flex shrink-0 items-center justify-between gap-2 border-b border-slate-200/80 bg-white/95 px-3 py-2 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95 z-20">
         {/* Document Filename & Type Indicator */}
         <div className="flex items-center gap-2 min-w-0">
-          {file?.fileType === "PDF" ? (
-            <FileText size={15} className="shrink-0 text-red-500" />
-          ) : file?.fileType === "CDC" ? (
-            <Sparkles size={15} className="shrink-0 text-amber-500" />
-          ) : (
-            <FileSpreadsheet size={15} className="shrink-0 text-emerald-600" />
-          )}
+          <FileTypeIcon
+            filename={file?.name ?? currentOption?.title}
+            type={file?.fileType === "CDC" ? "excel" : file?.fileType}
+            badge={file?.fileType === "CDC" ? "CDC" : undefined}
+            size="sm"
+          />
           <span className="truncate text-xs font-semibold text-foreground">
             {file?.name ?? currentOption?.title ?? "Document"}
           </span>

@@ -1,7 +1,8 @@
 import { NativeSelect } from "@/components/ui/native-select";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowDownToLine, FileSpreadsheet, Search, Upload } from "lucide-react";
+import { ArrowDownToLine, Search, Upload } from "lucide-react";
+import { ExcelFileIcon } from "@/components/ui/file-icon";
 import { RegisterMasterDialog } from "@/features/cdc/register-master-dialog";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
@@ -216,11 +217,14 @@ export default async function CDCMasterPage({ searchParams }: {
           </Section>
         </div>
 
-        <Section title="Workbook details" action={<FileSpreadsheet size={16} aria-hidden className="text-primary" />}>
+        <Section title="Workbook details" action={<ExcelFileIcon size="sm" />}>
           <div className="divide-y">
             <div className="p-3">
               <p className="panel-label">Workbook</p>
-              <p className="mt-1 break-all text-label-lg">{version.original_filename}</p>
+              <div className="mt-1 flex items-center gap-2">
+                <ExcelFileIcon size="sm" />
+                <p className="break-all text-label-lg font-medium">{version.original_filename}</p>
+              </div>
               <p className="mt-0.5 text-body-sm text-muted-foreground">{label(version.layout)}</p>
             </div>
             {selected && <div className="space-y-3 p-3">

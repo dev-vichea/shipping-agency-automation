@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
@@ -10,7 +10,7 @@ test("staff manage multiple watched folders and see their arrivals in the Inbox"
   const origin = new URL(baseURL).origin;
   const headers = { Origin: origin };
   expect((await page.request.post("/api/v1/auth/login", { headers, data: { email, password } })).ok()).toBe(true);
-  expect((await page.request.post("/api/v1/workspaces", { headers, data: { name: "Watched folder test" } })).ok()).toBe(true);
+  expect((await page.request.post("/api/v1/workspaces", { headers, data: { name: `Watched folder test ${randomUUID().slice(0, 8)}` } })).ok()).toBe(true);
   const company = await page.request.post("/api/v1/companies", { headers, data: { name: "Folder Fixture Factory" } });
   expect(company.ok()).toBe(true);
   await page.goto("/inbox");
@@ -33,7 +33,13 @@ test("staff manage multiple watched folders and see their arrivals in the Inbox"
     expect(link.searchParams.get("server")).toBe(origin);
     expect(link.searchParams.has("key")).toBe(false);
     await dialog.getByRole("button", { name: "Close", exact: true }).click();
-    await expect(page.getByRole("row").filter({ hasText: name })).toContainText("Awaiting setup");
+    const source = page.getByRole("row").filter({ has: page.getByRole("cell", { name, exact: true }) });
+    await expect(source.getByRole("cell", { name: "Setup", exact: true })).toBeVisible();
+    const sources = await page.request.get("/api/v1/integrations/folders");
+    expect(sources.ok()).toBe(true);
+    expect(await sources.json()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: link.searchParams.get("source"), status: "awaiting_setup" }),
+    ]));
     return { source_id: link.searchParams.get("source"), code: link.searchParams.get("code") };
   }
 
@@ -69,7 +75,7 @@ test("staff manage multiple watched folders and see their arrivals in the Inbox"
   await page.getByLabel("Intake source").selectOption("folder");
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page).toHaveURL(/source=folder/);
-  await expect(page.getByRole("row").filter({ hasText: "Shipment originals" })).toContainText("Watched folder");
+  await expect(page.getByRole("row").filter({ hasText: "Shipment 47" })).toContainText("Watched folder");
   await page.getByLabel("Intake source").selectOption("manual");
   await page.getByRole("button", { name: "Apply" }).click();
   await expect(page.getByText("No cases match these filters.")).toBeVisible();

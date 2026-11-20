@@ -2,7 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, FileText, Printer, Maximize2, Minimize2 } from "lucide-react";
+import { Check, Printer, Maximize2, Minimize2 } from "lucide-react";
+import { PdfFileIcon } from "@/components/ui/file-icon";
 import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/features/review/document-canvas-surface";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -230,6 +231,8 @@ export function PermitDraftPreview({
   reference,
   state,
   sheetTab: controlledSheetTab = "inv",
+  onSheetTabChange,
+  switchingDisabled,
   template: controlledTemplate,
   onTemplateChange,
   embedded = false,
@@ -629,12 +632,22 @@ export function PermitDraftPreview({
       <header className="z-20 shrink-0 border-b border-slate-200/80 bg-white/95 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95">
         <div className="flex items-center justify-between gap-2 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
-            <FileText className="size-4 shrink-0 text-red-500" />
+            <PdfFileIcon size="sm" />
             <span className="truncate text-xs font-semibold">{sheetTab === "inv" ? "Invoice" : "Packing List"} · {invoiceNo}</span>
             <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">PDF</span>
             <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">{isApproved ? "Approved" : "Draft"}</span>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
+            {onSheetTabChange && (
+              <div role="group" aria-label="Print document" className="flex gap-1">
+                <Button type="button" size="xs" variant={sheetTab === "inv" ? "default" : "outline"}
+                  aria-label="INV (Invoice)" aria-pressed={sheetTab === "inv"}
+                  disabled={switchingDisabled} onClick={() => onSheetTabChange("inv")}>INV</Button>
+                <Button type="button" size="xs" variant={sheetTab === "pl" ? "default" : "outline"}
+                  aria-label="PL (Packing List)" aria-pressed={sheetTab === "pl"}
+                  disabled={switchingDisabled} onClick={() => onSheetTabChange("pl")}>PL</Button>
+              </div>
+            )}
             <Button type="button" variant="outline" size="xs" onClick={() => window.print()} title="Print or export as PDF" aria-label="Print Preview" className="h-7 gap-1.5 text-xs"><Printer className="size-3.5" /><span className="hidden sm:inline">Print Preview</span></Button>
             <Button type="button" variant="outline" size="icon-xs" onClick={() => setIsExpanded(!isExpanded)} title={isExpanded ? "Exit fullscreen" : "Fullscreen preview"} className="size-7">{isExpanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}</Button>
           </div>

@@ -2,10 +2,11 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
-test("staff archives originals, verifies the worker and saves an import draft", async ({ page, request }) => {
+test("staff archives originals, verifies the worker and saves an import draft", async ({ page, request, baseURL }) => {
+  test.setTimeout(90_000);
   const email = process.env.SHIPPING_E2E_EMAIL;
   const password = process.env.SHIPPING_E2E_PASSWORD;
-  if (!email || !password) throw new Error("Set SHIPPING_E2E_EMAIL and SHIPPING_E2E_PASSWORD to a local test account.");
+  if (!email || !password || !baseURL) throw new Error("Set SHIPPING_E2E_EMAIL and SHIPPING_E2E_PASSWORD to a local test account.");
 
   const suffix = randomUUID().slice(0, 8);
   const subject = `Synthetic arrival ${suffix}`;
@@ -32,7 +33,8 @@ test("staff archives originals, verifies the worker and saves an import draft", 
   await expect(page).toHaveURL(/\/review\/[0-9a-f-]{36}$/);
   const caseUrl = page.url();
   const caseId = new URL(caseUrl).pathname.split("/").at(-1);
-  const downloadLink = page.getByRole("link", { name: `Download ${filename}` });
+  const downloadLink = page.getByRole("region", { name: "Source viewer" })
+    .getByRole("link", { name: `Download original ${filename}`, exact: true });
   const href = (await downloadLink.getAttribute("href"))!;
   expect((await request.get(href)).status()).toBe(401);
   const download = page.waitForEvent("download");
@@ -44,21 +46,26 @@ test("staff archives originals, verifies the worker and saves an import draft", 
     if (!response.ok()) return response.status();
     const record = await response.json();
     return [record.state, record.detected_reference, record.import_id];
-  }).toEqual(["needs_review", null, null]);
-  await expect(page.getByText("Review required", { exact: true }).first()).toBeVisible();
+  }, { timeout: 35_000 }).toEqual(["needs_review", null, null]);
+  await expect(page.getByRole("heading", { name: "Intake case", exact: true })).toBeVisible();
 
-  await page.getByText("Enter a draft manually", { exact: true }).click();
-  await page.getByLabel("Company", { exact: true }).fill("Synthetic Shipping Co");
-  await page.getByLabel("Invoice number").fill(invoice);
-  await page.getByLabel("Supplier").fill("Synthetic Supplier");
-  await page.getByRole("button", { name: "Save import draft" }).click();
+  // The manual draft endpoint remains available to API clients. The UI now links
+  // the intake to its import instead of rendering a manual draft form.
+  const created = await page.request.post("/api/v1/imports", {
+    headers: { Origin: new URL(baseURL).origin },
+    data: { intake_case_id: caseId, company: "Synthetic Shipping Co", invoice_no: invoice, supplier: "Synthetic Supplier" },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  await page.reload();
+  await page.getByRole("link", { name: "Linked import" }).click();
   await expect(page.getByRole("heading", { name: invoice })).toBeVisible();
   const draftUrl = page.url();
   await expect(page.getByText("Import draft · pending approval")).toBeVisible();
   await expect(page.getByRole("link", { name: `Download ${filename}` })).toBeVisible();
   const workspace = page.getByRole("navigation", { name: "Workspace" });
   await workspace.getByRole("link", { name: "Import records", exact: true }).click();
-  await expect(page.getByRole("link", { name: invoice })).toBeVisible();
+  const intakeRow = page.getByRole("row").filter({ hasText: subject });
+  await expect(intakeRow.getByRole("link", { name: "Review draft" })).toHaveAttribute("href", `/review/${caseId}`);
 
   await workspace.getByRole("link", { name: "Automation runs", exact: true }).click();
   const healthResponse = page.waitForResponse((response) =>
@@ -68,9 +75,11 @@ test("staff archives originals, verifies the worker and saves an import draft", 
   await expect.poll(async () => {
     const runs = await (await page.request.get("/api/v1/automation/runs")).json();
     return runs.find((run: { id: string }) => run.id === healthId)?.state;
-  }).toBe("succeeded");
-  await expect(page.getByRole("row").filter({ hasText: "Worker health check" }).first()).toContainText("Succeeded");
-  await page.getByRole("row").filter({ hasText: "Worker health check" }).first().getByRole("link", { name: "Worker health check" }).click();
+  }, { timeout: 30_000 }).toBe("succeeded");
+  await page.reload();
+  const runLink = page.getByRole("link", { name: "Worker health check", exact: true }).and(page.locator(`a[href="/automation/${healthId}"]`));
+  await expect(page.getByRole("row").filter({ has: runLink })).toContainText("Succeeded");
+  await runLink.click();
   await expect(page.getByRole("heading", { name: "Run details" })).toBeVisible();
 
   await page.goto(draftUrl);

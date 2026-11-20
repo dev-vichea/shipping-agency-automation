@@ -86,6 +86,7 @@ class CaseSummary(ORM):
         default_factory=dict
     )
     document_roles: list[str] = Field(default_factory=list)
+    file_types: list[str] = Field(default_factory=list)
     issue_count: int = 0
     bill_of_lading: str | None = None
 

@@ -20,6 +20,7 @@ import { AdvisoryPanel, Findings, sourceKey } from "@/features/review/review-fin
 import { Empty, Section, Status } from "@/components/ui/page-layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { FileTypeIcon } from "@/components/ui/file-icon";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
 import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -1221,9 +1222,12 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               {analysis.version_diff.diffs.map((diff) => (
                 <div key={diff.document_id} className="rounded border bg-card p-2.5 space-y-1">
                   <div className="flex items-center justify-between font-medium">
-                    <span className="font-semibold text-foreground">{diff.original_filename} (v{diff.version_number})</span>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <FileTypeIcon filename={diff.original_filename} size="xs" />
+                      <span className="font-semibold text-foreground truncate">{diff.original_filename} (v{diff.version_number})</span>
+                    </div>
                     {diff.parent_filename && (
-                      <span className="text-[10px] text-muted-foreground">replaces {diff.parent_filename}</span>
+                      <span className="text-[10px] text-muted-foreground shrink-0">replaces {diff.parent_filename}</span>
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1.5 pt-1">

@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from sqlalchemy import column, func, or_, select, true
+from sqlalchemy import case, column, func, or_, select, true
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile
@@ -193,7 +193,36 @@ def list_cases(
             .correlate(ReviewSnapshot)
             .scalar_subquery()
         )
-        query = query.add_columns(ReviewSnapshot.findings, roles, bill)
+        file_types_sub = (
+            select(func.array_agg(
+                case(
+                    (Document.mime.ilike("%pdf%") | Document.original_filename.ilike("%.pdf"), "pdf"),
+                    (
+                        Document.mime.ilike("%excel%")
+                        | Document.mime.ilike("%spreadsheet%")
+                        | Document.mime.ilike("%sheet%")
+                        | Document.mime.ilike("%csv%")
+                        | Document.original_filename.ilike("%.xlsx")
+                        | Document.original_filename.ilike("%.xls")
+                        | Document.original_filename.ilike("%.csv"),
+                        "excel",
+                    ),
+                    (
+                        Document.mime.ilike("%image%")
+                        | Document.original_filename.ilike("%.png")
+                        | Document.original_filename.ilike("%.jpg")
+                        | Document.original_filename.ilike("%.jpeg")
+                        | Document.original_filename.ilike("%.webp"),
+                        "image",
+                    ),
+                    else_="other",
+                )
+            ))
+            .where(Document.intake_case_id == IntakeCase.id)
+            .correlate(IntakeCase)
+            .scalar_subquery()
+        )
+        query = query.add_columns(ReviewSnapshot.findings, roles, bill, file_types_sub)
     rows = db.execute(
         query.order_by(
             IntakeCase.created_at.asc() if oldest_first else IntakeCase.created_at.desc(),
@@ -204,17 +233,18 @@ def list_cases(
     )
     output = []
     priority = {"PASS": 0, "WARNING": 1, "NEEDS_REVIEW": 2, "MISMATCH": 3}
-    for case, count, title, sender, received, result, company, processing, *checks in rows:
+    for case_item, count, title, sender, received, result, company, processing, *checks in rows:
         item = {
-            **summary(case, count, title, company),
+            **summary(case_item, count, title, company),
             "sender": sender,
             "received_at": received,
             "analysis_outcome": result,
         }
-        if processing and case.state == "queued":
+        if processing and case_item.state == "queued":
             item["state"] = "processing"
         if checks:
-            findings, roles, bill = checks
+            findings, roles, bill, *ft_opt = checks
+            file_types = ft_opt[0] if ft_opt else []
             statuses = {}
             for finding in findings or []:
                 group, status = finding["group"], finding["outcome"]
@@ -224,6 +254,7 @@ def list_cases(
                 bill_of_lading=bill,
                 review_checks=statuses,
                 document_roles=roles or [],
+                file_types=file_types or [],
                 issue_count=sum(finding["outcome"] != "PASS" for finding in findings or []),
             )
         output.append(item)

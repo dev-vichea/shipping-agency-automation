@@ -14,6 +14,7 @@ export type CaseSummary = {
   analysis_outcome?: Finding["outcome"] | null;
   review_checks?: Record<string, Finding["outcome"]>;
   document_roles?: string[];
+  file_types?: string[];
   issue_count?: number;
   bill_of_lading?: string | null;
   created_at: string;

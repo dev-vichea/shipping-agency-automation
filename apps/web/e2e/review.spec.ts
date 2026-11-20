@@ -2,21 +2,25 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
-import type { CaseDetail, ImportDetail, ReviewAnalysis } from "../src/lib/contracts";
+import type { CaseDetail, ImportDetail, ReviewAnalysis, ReviewWorkflow } from "../src/lib/contracts";
 
 const fixture = (name: string) => resolve("../api/tests/fixtures", name);
 
-test("staff can review an analyzed shipment and save a draft linked to the original documents", async ({ page }) => {
+test("staff can review an analyzed shipment and save a draft linked to the original documents", async ({ page, baseURL }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   const email = process.env.SHIPPING_E2E_EMAIL;
   const password = process.env.SHIPPING_E2E_PASSWORD;
-  if (!email || !password) throw new Error("Configure the local E2E staff account.");
+  if (!email || !password || !baseURL) throw new Error("Configure the local E2E staff account.");
   const subject = `Sanitized document review ${randomUUID().slice(0, 8)}`;
   await page.goto("/login");
   await page.getByLabel("Work email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
   await expect(page.getByRole("heading", { name: "Operations overview" })).toBeVisible();
+  const headers = { Origin: new URL(baseURL).origin };
+  const workspace = await page.request.post("/api/v1/workspaces", { headers, data: { name: subject } });
+  expect(workspace.ok()).toBe(true);
+  await page.goto("/home");
   await page.getByRole("link", { name: "Upload documents", exact: true }).click();
   await page.getByLabel("Subject").fill(subject);
   await page.getByLabel("Attachments", { exact: true }).setInputFiles([
@@ -34,38 +38,39 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
   expect(analysis.outcome).toBe("MISMATCH");
   const original: CaseDetail = await (await page.request.get(intakePath)).json();
   expect(original.import_id).toBeNull();
-  await page.getByRole("button", { name: "Refresh" }).click();
-  await page.getByRole("button", { name: "Line items", exact: true }).click();
-  const matrix = page.getByRole("region", { name: "Cargo line items" });
-  const line = matrix.getByRole("row").filter({ hasText: "580710" });
-  await expect(line).toContainText("-2 PCS");
-  await line.getByRole("button", { name: "10 PCS", exact: true }).click();
+  expect(analysis.line_items).toEqual(expect.arrayContaining([
+    expect.objectContaining({ invoice_row: 10, packing_row: 11, quantity_delta: "-2", delta_unit: "PCS", outcome: "MISMATCH" }),
+  ]));
+  await page.reload();
+  const tabs = page.getByRole("navigation", { name: "Document intake tabs" });
+  const goods = page.getByRole("region", { name: "Goods items" });
   const source = page.getByRole("region", { name: "Source viewer" });
-  await source.getByRole("button", { name: "Workbook sheet" }).click();
+  await tabs.getByRole("button", { name: /^Packing list(?:\s|$)/ }).click();
+  await goods.getByRole("row").filter({ hasText: "Woven label" }).getByRole("button", { name: "10 PCS", exact: true }).click();
   await expect(source.getByLabel("Worksheet")).toHaveValue("PackingList");
-  await source.getByRole("button", { name: "Evidence excerpt" }).click();
-  await expect(source.getByText(/PackingList · D11/i).first()).toBeVisible();
-  const exportFile = page.waitForEvent("download");
-  await matrix.getByRole("button", { name: "Export CSV" }).click();
-  expect(await readFile((await (await exportFile).path())!, "utf-8")).toContain("580710");
-  await page.getByRole("button", { name: "Comparison", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Comparison findings" })).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: /quantity.*mismatch/i }).first()).toBeVisible();
-  await page.getByRole("button", { name: /supplier-review.xlsx · invoice · D10/i }).first().click();
-  await expect(source.getByText(/invoice · D10/i).first()).toBeVisible();
-  await page.getByRole("button", { name: /draft-bl-review.pdf · Page 1/ }).first().click();
-  await expect(source.getByRole("link", { name: "Download draft-bl-review.pdf" })).toBeVisible();
-  await expect(source.getByText(/Page 1 · Line/).first()).toBeVisible();
-  await expect(source.getByRole("img", { name: /Source highlight, line/ })).toBeVisible();
+  await expect(source.locator('td[data-connector-target="true"]')).toHaveText("10");
+  await source.getByRole("button", { name: "Raw Excerpt" }).click();
+  await expect(source.locator('[data-connector-target="true"]')).toContainText("10");
+  await source.getByRole("button", { name: "Document Canvas" }).click();
+
+  await tabs.getByRole("button", { name: /^B\/L(?:\s|$)/ }).click();
+  const bill = source.getByRole("img", { name: "draft-bl-review.pdf, page 1" });
+  await expect(bill).toBeVisible();
+  await expect.poll(() => bill.evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+  await expect(source.getByRole("link", { name: "Download original draft-bl-review.pdf", exact: true })).toBeVisible();
   const rotate = page.waitForResponse((response) => response.url().includes("/image?rotation=90") && response.ok());
-  await source.getByRole("button", { name: "Rotate page" }).click();
+  const controls = source.getByRole("group", { name: "Canvas controls" });
+  await controls.getByRole("button", { name: "Rotate Page" }).click();
   await rotate;
-  await source.getByRole("button", { name: "Expand PDF preview" }).click();
-  await expect(page.getByRole("dialog", { name: "Expanded PDF preview" })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await source.getByRole("button", { name: "Reset page rotation" }).click();
-  await page.getByRole("button", { name: "CDC", exact: true }).click();
-  await page.getByText("Register a verified workbook", { exact: true }).click();
+  await controls.getByRole("button", { name: "Expand canvas" }).click();
+  const collapse = page.getByRole("group", { name: "Canvas controls" }).getByRole("button", { name: "Collapse canvas" });
+  await expect(collapse).toBeVisible();
+  await collapse.click();
+  await expect(controls.getByRole("button", { name: "Expand canvas" })).toBeVisible();
+
+  await tabs.getByRole("button", { name: /^Invoice(?:\s|$)/ }).click();
+  await page.getByText("Select CDC Master List", { exact: true }).click();
+  await page.getByRole("button", { name: "Register a verified workbook", exact: true }).click();
   const registration = page.getByRole("dialog", { name: "Register Master List" });
   await registration.getByLabel("Master List workbook").setInputFiles(fixture("cdc-review.xlsx"));
   await registration.getByRole("button", { name: "Apply suggestions" }).click();
@@ -73,9 +78,11 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
   await expect(registration.getByLabel("Approval year")).toHaveValue("2026");
   await registration.getByRole("checkbox", { name: /I checked this workbook/ }).check();
   const registered = page.waitForResponse((response) =>
-    response.url().endsWith("/api/v1/cdc/versions") && [200, 201].includes(response.status()));
+    response.url().endsWith("/api/v1/cdc/versions") && response.request().method() === "POST");
   await registration.getByRole("button", { name: "Register workbook" }).click();
-  const version = await (await registered).json();
+  const registrationResponse = await registered;
+  expect(registrationResponse.ok(), await registrationResponse.text()).toBe(true);
+  const version = await registrationResponse.json();
   await expect(registration).toBeHidden();
   await page.getByLabel("CDC Master List version").selectOption(version.id);
   await page.getByRole("button", { name: "Apply version" }).click();
@@ -83,41 +90,32 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
     const result = await read();
     return [result.state, result.analyzed_master?.id];
   }, { timeout: 25_000 }).toEqual(["available", version.id]);
-  await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(page.getByRole("heading", { name: "CDC candidates" })).toBeVisible();
-  await expect(page.getByRole("row").filter({ hasText: /Woven label/i }).first()).toBeVisible();
-  await expect(page.getByRole("link", { name: "Download CDC original", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Review import draft" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Approve intake" })).toHaveCount(0);
+  const compared = await read();
+  expect(compared.candidates).toEqual(expect.arrayContaining([
+    expect.objectContaining({ description: expect.stringMatching(/Woven label/i) }),
+  ]));
+  await page.reload();
+  await tabs.getByRole("button", { name: /^Invoice(?:\s|$)/ }).click();
+  await page.getByText("Select CDC Master List", { exact: true }).click();
+  await expect(page.getByRole("link", { name: "Download selected workbook" })).toHaveAttribute("href", `/api/v1/cdc/versions/${version.id}/download`);
+  await expect(page.getByRole("button", { name: "Create Draft", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Approve", exact: true })).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Comparison", exact: true }).click();
-  await expect(page.getByRole("row").filter({ hasText: /unit.*mismatch/i }).first()).toBeVisible();
-  await page.getByRole("button", { name: "Line items", exact: true }).click();
-  await source.getByRole("button", { name: "Draft B/L", exact: true }).click();
-  await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1" })).toBeVisible();
-  await expect.poll(async () => source.getByRole("img", { name: "draft-bl-review.pdf, page 1" }).evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
-  const [sourceBounds, matrixBounds] = await Promise.all([source.boundingBox(), matrix.boundingBox()]);
-  expect(sourceBounds!.width).toBeLessThan(matrixBounds!.width);
-  expect(sourceBounds!.x).toBeLessThan(matrixBounds!.x);
-  const compactSource = source.getByRole("button", { name: "Compact source pane" });
-  await compactSource.click();
-  await expect.poll(async () => (await source.boundingBox())?.width).toBe(320);
-  await compactSource.click();
-  await page.evaluate(() => window.scrollTo(0, 0));
   await page.screenshot({ path: process.env.SHIPPING_REVIEW_SCREENSHOT ?? test.info().outputPath("review-center.png") });
-  await page.getByRole("button", { name: "Audit & findings" }).click();
+  await page.getByRole("button", { name: /Audit & findings/ }).click();
   const audit = page.getByRole("dialog", { name: "Audit & Compliance" });
-  const traceId = (await read()).trace_id;
-  expect(traceId).toBeTruthy();
-  await expect(audit.getByText(traceId!, { exact: true })).toBeVisible();
+  expect(compared.trace_id).toBeTruthy();
+  await expect(audit.getByText(compared.trace_id!, { exact: true })).toBeVisible();
   await audit.getByRole("button", { name: /^Passed/ }).click();
   await expect(audit.getByRole("row").filter({ hasText: /invoice subtotal.*pass/i }).first()).toBeVisible();
   await audit.getByRole("button", { name: /^Blockers/ }).click();
-  await expect(audit.getByRole("row").filter({ hasText: /quantity.*mismatch/i }).first()).toBeVisible();
+  const mismatch = audit.getByRole("row").filter({ hasText: /quantity.*mismatch/i }).first();
+  await expect(mismatch).toBeVisible();
   await expect(audit.getByRole("button", { name: /^Blockers/ })).toHaveAttribute("aria-pressed", "true");
   await page.screenshot({ path: process.env.SHIPPING_AUDIT_SCREENSHOT ?? test.info().outputPath("review-audit.png") });
-  await page.keyboard.press("Escape");
+  await mismatch.getByRole("button", { name: /supplier-review.xlsx · invoice · D10/i }).click();
   await expect(audit).toBeHidden();
+  await expect(source.locator('td[data-connector-target="true"]')).toHaveText("12");
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(source).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
@@ -130,11 +128,11 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
   await expect(reviewRow).toHaveCount(1);
   await expect(reviewRow.getByText("Mismatch", { exact: true })).not.toHaveCount(0);
   await page.getByRole("searchbox", { name: "Search intakes" }).fill(subject);
-  await page.getByRole("combobox", { name: "Status" }).selectOption("needs_review");
   await page.getByRole("button", { name: "Apply", exact: true }).click();
+  const statuses = page.getByRole("navigation", { name: "Queue status filter tabs" });
+  await statuses.getByRole("link", { name: "Review", exact: true }).click();
   await expect(page.getByRole("row").filter({ hasText: subject })).toHaveCount(1);
-  await page.getByRole("combobox", { name: "Status" }).selectOption("approved");
-  await page.getByRole("button", { name: "Apply", exact: true }).click();
+  await statuses.getByRole("link", { name: "Approved", exact: true }).click();
   await expect(page.getByText("No cases match these filters.")).toBeVisible();
 
   await page.goto(`/cdc?version=${version.id}`);
@@ -147,11 +145,19 @@ test("staff can review an analyzed shipment and save a draft linked to the origi
   await expect(page.getByRole("link", { name: "Download workbook" })).toBeVisible();
 
   await page.goto(reviewUrl);
-  await page.getByText("Enter a draft manually", { exact: true }).click();
-  await page.getByLabel("Company", { exact: true }).fill("Harbor Demo Co., Ltd.");
+  await page.getByRole("button", { name: "Create Draft", exact: true }).click();
+  await expect(page.getByRole("region", { name: "Verification document editor" })).toBeVisible();
+  const workflow: ReviewWorkflow = await (await page.request.get(`${intakePath}/review`)).json();
+  expect(workflow.review).toMatchObject({ ready: false });
+  expect((await (await page.request.get(intakePath)).json()).import_id).toBeNull();
+
   const reference = `FLOW-${randomUUID().slice(0, 8)}`;
-  await page.getByLabel("Invoice number").fill(reference);
-  await page.getByRole("button", { name: "Save import draft" }).click();
+  const created = await page.request.post("/api/v1/imports", {
+    headers, data: { intake_case_id: caseId, company: "Harbor Demo Co., Ltd.", invoice_no: reference },
+  });
+  expect(created.status(), await created.text()).toBe(201);
+  await page.reload();
+  await page.getByRole("link", { name: "Linked import" }).click();
   await expect(page.getByRole("heading", { name: reference, exact: true })).toBeVisible();
   const importId = new URL(page.url()).pathname.split("/").at(-1);
   const response = await page.request.get(`/api/v1/imports/${importId}`);

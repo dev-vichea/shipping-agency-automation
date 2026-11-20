@@ -81,7 +81,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await billNumber.click();
   await expectConnectorAtTarget();
 
-  await details.getByRole("button", { name: /^Shipper/ }).click();
+  await details.getByRole("button", { name: "Shipper Fabric Demo Co., Ltd.", exact: true }).click();
   await expectConnectorAtTarget();
   await expect(source.getByRole("button", { name: "Raw Excerpt", exact: true })).toBeVisible();
   await source.getByRole("button", { name: "Raw Excerpt", exact: true }).click();
@@ -98,7 +98,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(connector).toBeHidden();
   await expect(details.getByText("Invoice Number", { exact: true })).toBeVisible();
   await expect(details.getByText("B/L Number", { exact: true })).toHaveCount(0);
-  const consignee = details.getByRole("button", { name: /^Consignee / });
+  const consignee = details.getByRole("button", { name: /^Consignee Harbor Demo Co\./ });
   await consignee.click({ position: { x: 3, y: 8 } });
   await expect(consignee).toHaveAttribute("aria-pressed", "true");
   await expect(details.getByPlaceholder("Enter consignee…", { exact: true })).toBeVisible();
