@@ -58,7 +58,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await page.getByRole("region", { name: "Goods", exact: true })
     .getByRole("button", { name: /Description of Goods Woven label/i }).click();
   await expect(source.getByRole("img", { name: "Source citation bounding box" })).toBeVisible();
-  await expect(source.getByText("Page 1", { exact: true })).toBeVisible();
+  await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1", exact: true })).toBeVisible();
   await expect(source.getByText("99% match")).toHaveCount(0);
   await expectConnectorAtTarget();
   const billNumber = details.getByRole("button", { name: "B/L Number DEMOBL0001" });
@@ -70,12 +70,14 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(source.getByRole("img", { name: "draft-bl-review.pdf, page 1" })).toBeVisible();
   await expectConnectorAtTarget();
   expect(legacyLineRequests).toHaveLength(0);
-  await expect(source.getByRole("textbox", { name: "B/L Number value" })).toHaveValue("DEMOBL0001");
+  await expect(details.getByPlaceholder("Enter b/l number…", { exact: true })).toHaveValue("DEMOBL0001");
   await source.getByRole("button", { name: "Zoom In" }).click();
   await expectConnectorAtTarget();
 
   await viewport.evaluate((node) => node.scrollTo({ top: node.scrollHeight, behavior: "instant" }));
   await expect(connector).toBeHidden();
+  // The selected field toggles its inline editor closed on the first click.
+  await billNumber.click();
   await billNumber.click();
   await expectConnectorAtTarget();
 
@@ -99,7 +101,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   const consignee = details.getByRole("button", { name: /^Consignee / });
   await consignee.click({ position: { x: 3, y: 8 } });
   await expect(consignee).toHaveAttribute("aria-pressed", "true");
-  await expect(source.getByRole("region", { name: "Edit Consignee" })).toBeVisible();
+  await expect(details.getByPlaceholder("Enter consignee…", { exact: true })).toBeVisible();
   await expect(source.locator('td[data-connector-target="true"]')).toContainText("Harbor Demo Co., Ltd.");
   await expect(goods.getByRole("columnheader", { name: "Unit Price" })).toBeVisible();
   const invoiceItem = goods.getByRole("row").filter({ hasText: "Woven label" });
@@ -116,6 +118,14 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(goods.getByRole("columnheader", { name: "Gross Weight" })).toBeVisible();
   await expectConnectorAtTarget();
 
+  const separator = page.getByRole("separator", { name: "Resize editor and preview" });
+  await expect(separator).toBeVisible();
+  const beforeWidth = (await details.boundingBox())!.width;
+  await separator.press("ArrowRight");
+  await separator.press("ArrowRight");
+  await expect(separator).toHaveAttribute("aria-valuenow", "46");
+  expect((await details.boundingBox())!.width).toBeGreaterThan(beforeWidth);
+
   const workflow: ReviewWorkflow = await (await page.request.get(`${intakePath}/review`)).json();
   const issueCount = workflow.issues?.length ?? 0;
   expect(issueCount).toBeGreaterThan(1);
@@ -128,7 +138,7 @@ test("intake review shows detected fields and links goods to their source", asyn
   await expect(issues.getByRole("status")).toContainText(`1 / ${issueCount}`);
   await expect(source.getByLabel("Worksheet")).toHaveValue("invoice");
   await expect(source.locator('td[data-connector-target="true"]')).toHaveText("12");
-  await expect(source.getByRole("textbox", { name: "Quantity value" })).toHaveValue("12");
+  await expect(goods.getByPlaceholder("Enter row 10: quantity…", { exact: true })).toHaveValue("12");
   await nextIssue.click();
   await expect(issues.getByRole("status")).toContainText(`2 / ${issueCount}`);
   await previousIssue.click();

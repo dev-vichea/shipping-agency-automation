@@ -35,7 +35,7 @@ export function WorkspaceShell({ children, initiallyExpanded, companies, ...head
   return <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
     <div data-sidebar={expanded ? "expanded" : "collapsed"} className="workspace-shell min-h-screen bg-background lg:flex">
       <a className="sr-only focus:not-sr-only focus:fixed focus:z-60 focus:bg-card focus:p-3" href="#main">Skip to content</a>
-      <Sidebar expanded={expanded} companies={companies} />
+      <Sidebar expanded={expanded} companies={companies} profile={header.profile} counts={header.counts} />
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <Header {...header} sidebarControl={<>
           <Button type="button" size="icon-sm" variant="ghost" className="hidden lg:inline-flex" aria-controls="desktop-sidebar"
@@ -49,9 +49,9 @@ export function WorkspaceShell({ children, initiallyExpanded, companies, ...head
         </main>
       </div>
     </div>
-    <SheetContent side="left" className="max-w-[min(18rem,calc(100%_-_2rem))] overflow-hidden border-[#064e67]" aria-describedby={undefined}>
+    <SheetContent side="left" className="max-w-[min(18rem,calc(100%_-_2rem))] overflow-hidden border-[#064e67] bg-[#075e7b] p-0" aria-describedby={undefined}>
       <SheetTitle className="sr-only">Navigation</SheetTitle>
-      <SidebarContents expanded companies={companies} onNavigate={() => setMobileOpen(false)} close={
+      <SidebarContents expanded companies={companies} profile={header.profile} counts={header.counts} onNavigate={() => setMobileOpen(false)} close={
         <DialogCloseButton label="Close navigation" className="ml-auto shrink-0 text-white hover:bg-white/15 hover:text-white focus-visible:ring-white/60" />
       } />
     </SheetContent>

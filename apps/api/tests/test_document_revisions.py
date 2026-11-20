@@ -347,12 +347,16 @@ def test_final_bl_confirmation_workflow(staff):
     assert case_after_telex["state"] == "needs_review"
     assert "Final B/L" in (case_after_telex["review_reason"] or "")
 
-    confirm_res = staff.post(f"{API}/intakes/{case_id}/confirm-final-bl")
+    latest = staff.get(f"{API}/intakes/{case_id}/analysis").json()
+    assert staff.post(f"{API}/intakes/{case_id}/confirm-final-bl", json={"expected_revision": rev}).status_code == 409
+    confirm_res = staff.post(f"{API}/intakes/{case_id}/confirm-final-bl", json={"expected_revision": latest["revision"]})
     assert confirm_res.status_code == 200
     assert confirm_res.json()["status"] == "confirmed"
 
     case_confirmed = staff.get(f"{API}/intakes/{case_id}").json()
-    assert case_confirmed["state"] == "approved"
+    assert case_confirmed["state"] == "needs_review"
+    assert case_confirmed["final_bl_confirmed_revision"] == latest["revision"]
+    assert staff.get(f"{API}/intakes/{case_id}/review").json()["review"] is None
 
 
 def test_stale_approval_rejection_409(staff):

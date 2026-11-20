@@ -94,6 +94,7 @@ class CaseDetail(CaseSummary):
     messages: list[MessageView]
     documents: list[DocumentView]
     import_id: UUID | None
+    final_bl_confirmed_revision: int | None = None
 
 
 class Receipt(BaseModel):

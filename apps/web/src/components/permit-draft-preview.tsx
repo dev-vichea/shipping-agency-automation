@@ -1,20 +1,123 @@
 "use client";
 
-import { useState } from "react";
-import {
-  FileSpreadsheet,
-  Printer,
-  ZoomIn,
-  ZoomOut,
-  Maximize2,
-  Minimize2,
-  RotateCcw,
-} from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Check, FileText, Printer, Maximize2, Minimize2 } from "lucide-react";
+import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/components/document-canvas-surface";
+import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { Extraction, ExtractedField, ReviewAnalysis, ReviewField } from "@/lib/contracts";
 import { reviewKey, type ReviewDraft } from "@/components/staff-review";
 
 export type PermitTemplate = "cdc_classic" | "freight_agency" | "commercial_billing";
+
+const templateOptions = [
+  {
+    id: "cdc_classic" as const,
+    name: "CDC Classic",
+    title: "CDC Classic (12-RE2612048)",
+    thumbnail: (
+      <div className="flex h-full w-full flex-col justify-between overflow-hidden rounded-3xs bg-white p-1 text-slate-800 shadow-2xs dark:bg-slate-950 dark:text-slate-200">
+        {/* Centered serif header */}
+        <div className="flex flex-col items-center gap-0.5 pt-0.5">
+          <div className="h-0.5 w-6 rounded-full bg-slate-900 dark:bg-slate-100" />
+          <div className="h-px w-4 rounded-full bg-slate-500" />
+          <div className="mt-0.5 h-px w-5 rounded-full bg-slate-700 dark:bg-slate-300" />
+        </div>
+        {/* Classical double-border ledger table */}
+        <div className="my-auto space-y-0.5 border-y border-double border-slate-700 py-0.5 dark:border-slate-300">
+          <div className="grid grid-cols-4 gap-0.5">
+            <div className="h-px bg-slate-700 dark:bg-slate-300" />
+            <div className="col-span-2 h-px bg-slate-500 dark:bg-slate-400" />
+            <div className="h-px bg-slate-700 dark:bg-slate-300" />
+          </div>
+          <div className="grid grid-cols-4 gap-0.5">
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="col-span-2 h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+          </div>
+          <div className="grid grid-cols-4 gap-0.5">
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="col-span-2 h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+          </div>
+          <div className="grid grid-cols-4 gap-0.5">
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="col-span-2 h-px bg-slate-300 dark:bg-slate-700" />
+            <div className="h-px bg-slate-300 dark:bg-slate-700" />
+          </div>
+        </div>
+        {/* Double-line footer */}
+        <div className="flex justify-between border-t border-double border-slate-700 pt-0.5 dark:border-slate-300">
+          <div className="h-px w-3 bg-slate-500" />
+          <div className="h-px w-3 bg-slate-900 dark:bg-slate-100" />
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "freight_agency" as const,
+    name: "Freight Agency",
+    title: "Freight Agency (Global Wing Format)",
+    thumbnail: (
+      <div className="flex h-full w-full flex-col justify-between overflow-hidden rounded-3xs bg-white p-1 shadow-2xs dark:bg-slate-950">
+        {/* Bold top agency banner */}
+        <div className="flex flex-col gap-0.5 border-b border-primary/40 bg-primary/15 px-1 py-0.5 rounded-3xs">
+          <div className="h-0.5 w-6 rounded-full bg-primary" />
+          <div className="h-px w-3 rounded-full bg-primary/70" />
+        </div>
+        {/* Metadata & modern table */}
+        <div className="space-y-0.5 py-0.5">
+          <div className="flex justify-between gap-1">
+            <div className="h-px w-3 bg-slate-400 dark:bg-slate-500" />
+            <div className="h-px w-3 bg-slate-400 dark:bg-slate-500" />
+          </div>
+          <div className="h-px w-full bg-slate-200 dark:bg-slate-800" />
+          <div className="h-px w-full bg-slate-300 dark:bg-slate-700" />
+          <div className="h-px w-full bg-slate-200 dark:bg-slate-800" />
+          <div className="h-px w-full bg-slate-300 dark:bg-slate-700" />
+        </div>
+        {/* Right-aligned boxed summary */}
+        <div className="flex justify-end">
+          <div className="rounded-3xs border border-slate-400 bg-slate-100 px-1 py-0.2 dark:border-slate-600 dark:bg-slate-800">
+            <div className="h-0.5 w-3 bg-slate-800 dark:bg-slate-200" />
+          </div>
+        </div>
+      </div>
+    ),
+  },
+  {
+    id: "commercial_billing" as const,
+    name: "Corporate",
+    title: "Commercial Billing (Corporate Standard)",
+    thumbnail: (
+      <div className="flex h-full w-full flex-col justify-between overflow-hidden rounded-3xs bg-white p-1 shadow-2xs dark:bg-slate-950">
+        {/* Split corporate header: logo left, box right */}
+        <div className="flex items-start justify-between">
+          <div className="space-y-0.5">
+            <div className="h-0.5 w-4 rounded-full bg-slate-800 dark:bg-slate-200" />
+            <div className="h-px w-2.5 rounded-full bg-slate-400 dark:bg-slate-500" />
+          </div>
+          <div className="rounded-3xs border border-slate-300 bg-slate-50 px-0.5 dark:border-slate-700 dark:bg-slate-900">
+            <div className="h-px w-2 bg-slate-600 dark:bg-slate-400" />
+          </div>
+        </div>
+        {/* Minimal clean horizontal rules */}
+        <div className="space-y-0.5 py-0.5">
+          <div className="h-px w-full bg-slate-300 dark:bg-slate-700" />
+          <div className="h-px w-full bg-slate-200 dark:bg-slate-800" />
+          <div className="h-px w-full bg-slate-300 dark:bg-slate-700" />
+          <div className="h-px w-full bg-slate-200 dark:bg-slate-800" />
+        </div>
+        {/* Clean footer line */}
+        <div className="flex justify-between border-t border-slate-300 pt-0.5 dark:border-slate-700">
+          <div className="h-px w-2 bg-slate-400" />
+          <div className="h-px w-3 bg-slate-700 dark:bg-slate-300" />
+        </div>
+      </div>
+    ),
+  },
+];
 
 function formatNumber(value: number): string {
   if (value === 0) return "—";
@@ -94,7 +197,50 @@ type PermitDraftPreviewProps = {
   companyName?: string | null;
   reference?: string | null;
   state?: string;
+  sheetTab?: "inv" | "pl";
+  onSheetTabChange?: (tab: "inv" | "pl") => void;
+  template?: PermitTemplate;
+  onTemplateChange?: (template: PermitTemplate) => void;
+  switchingDisabled?: boolean;
+  embedded?: boolean;
+  searchQuery?: string;
+  onMatchCountChange?: (count: number) => void;
 };
+
+export function highlightMatch(val: unknown, query?: string): React.ReactNode {
+  if (val == null || val === "") return "";
+  const str = String(val);
+  if (!query || !query.trim()) return str;
+  const q = query.trim();
+  const lowerStr = str.toLowerCase();
+  const lowerQ = q.toLowerCase();
+  const matchIndex = lowerStr.indexOf(lowerQ);
+  if (matchIndex === -1) return str;
+
+  const parts: React.ReactNode[] = [];
+  let startIndex = 0;
+  let curr = matchIndex;
+  let key = 0;
+  while (curr !== -1) {
+    if (curr > startIndex) {
+      parts.push(str.slice(startIndex, curr));
+    }
+    parts.push(
+      <mark
+        key={key++}
+        className="rounded-2xs bg-amber-300 text-black px-0.5 font-bold shadow-2xs dark:bg-amber-400 dark:text-black print:[background:transparent] print:p-0"
+      >
+        {str.slice(curr, curr + q.length)}
+      </mark>
+    );
+    startIndex = curr + q.length;
+    curr = lowerStr.indexOf(lowerQ, startIndex);
+  }
+  if (startIndex < str.length) {
+    parts.push(str.slice(startIndex));
+  }
+  return <>{parts}</>;
+}
 
 type PermitInvoiceItem = {
   cdc: number | string;
@@ -104,25 +250,6 @@ type PermitInvoiceItem = {
   price: number;
   amount: number;
 };
-
-// Authentic sample rows from 12-RE2612048.xlsx for fallback display
-const SAMPLE_INV_ITEMS: PermitInvoiceItem[] = [
-  { cdc: 4, desc: "KNITTED FABRIC", qty: 6734.81, unit: "Kg", price: 4.5, amount: 30306.65 },
-  { cdc: 5, desc: "INTER LINING FABRIC", qty: 4961, unit: "Yd", price: 0.25, amount: 1240.25 },
-  { cdc: 29, desc: "DRAWSTRING", qty: 215, unit: "Kg", price: 3.0, amount: 645.0 },
-  { cdc: 41, desc: "HANG TAG", qty: 5250, unit: "Doz", price: 0.15, amount: 787.5 },
-  { cdc: 61, desc: "PLASTIC STOPPER", qty: 220, unit: "Gross", price: 1.0, amount: 220.0 },
-  { cdc: 100, desc: "WAIST TAG", qty: 5250, unit: "Doz", price: 0.1, amount: 525.0 },
-];
-
-const SAMPLE_PL_ITEMS = [
-  { pkgs: 361, desc: "KNITTED FABRIC", qty: 6734.81, unit: "Kg", nw: 6734.81, gw: 7407.76 },
-  { pkgs: 50, desc: "INTER LINING FABRIC", qty: 4961, unit: "Yd", nw: 2203.19, gw: 2352.24 },
-  { pkgs: 10, desc: "DRAWSTRING", qty: 215, unit: "Kg", nw: 215, gw: 236 },
-  { pkgs: 16, desc: "HANG TAG", qty: 5250, unit: "Doz", nw: 271, gw: 311 },
-  { pkgs: 2, desc: "PLASTIC STOPPER", qty: 220, unit: "Gross", nw: 21, gw: 26 },
-  { pkgs: 8, desc: "WAIST TAG", qty: 5250, unit: "Doz", nw: 137, gw: 157 },
-];
 
 export function PermitDraftPreview({
   invoiceExt,
@@ -135,11 +262,55 @@ export function PermitDraftPreview({
   companyName,
   reference,
   state,
+  sheetTab: controlledSheetTab = "inv",
+  template: controlledTemplate,
+  onTemplateChange,
+  embedded = false,
+  searchQuery,
+  onMatchCountChange,
 }: PermitDraftPreviewProps) {
-  const [sheetTab, setSheetTab] = useState<"inv" | "pl">("inv");
-  const [template, setTemplate] = useState<PermitTemplate>("cdc_classic");
+  const sheetTab = controlledSheetTab;
+  const [internalTemplate, setInternalTemplate] = useState<PermitTemplate>("cdc_classic");
+  const template = controlledTemplate ?? internalTemplate;
+  const setTemplate = (next: PermitTemplate) => {
+    if (onTemplateChange) onTemplateChange(next);
+    else setInternalTemplate(next);
+  };
+  const [templateDrawerOpen, setTemplateDrawerOpen] = useState<boolean>(false);
   const [zoom, setZoom] = useState<number>(0.92);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
+  const viewport = useRef<HTMLDivElement>(null);
+  const fitZoom = useRef(0.92);
+  useEffect(() => {
+    const element = viewport.current;
+    if (!embedded || !element) return;
+    let previousWidth = 0;
+    const observer = new ResizeObserver(() => {
+      if (element.clientWidth === previousWidth) return;
+      previousWidth = element.clientWidth;
+      const style = getComputedStyle(element);
+      fitZoom.current = Math.max(0.2, Math.min(0.92, (element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 820));
+      setZoom(fitZoom.current);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [embedded, isExpanded]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isExpanded]);
+
+  const hl = (val: unknown) => highlightMatch(val, searchQuery);
 
   // Helper to extract reviewed or fallback field value
   function getFieldValue(role: string, name: string, row?: number, docId?: string): string {
@@ -147,7 +318,7 @@ export function PermitDraftPreview({
       role: role as ReviewField["role"],
       name: name as ReviewField["name"],
       row: row ?? null,
-      document_id: docId ?? "",
+      document_id: docId ?? (role === "invoice" ? invoiceExt : role === "packing_list" ? packingExt : blExt)?.document_id ?? "",
     });
     const reviewed = reviewedFields.get(fieldKey);
     if (reviewed?.value) return reviewed.value;
@@ -178,58 +349,25 @@ export function PermitDraftPreview({
     return "";
   }
 
-  // Header Metadata (matching 12-RE2612048.xlsx layout)
-  const supplier =
-    getFieldValue("invoice", "supplier") ||
-    invoiceExt?.fields.supplier?.value ||
-    "WEALDONE LIMITED";
-  const supplierAddress =
-    getFieldValue("invoice", "supplier_address") ||
-    invoiceExt?.fields.supplier_address?.value ||
-    "FLAT/RM P, 4/F, LLADRO CENTRE, 72 HOI YUEN ROAD, KWUN TONG 999077 KOWLOON CITY, HONGKONG";
-  const consignee =
-    getFieldValue("invoice", "consignee") ||
-    invoiceExt?.fields.consignee?.value ||
-    companyName ||
-    "XIN CAI FU (CAMBODIA) CO., LTD.";
-  const consigneeAddressRaw =
-    getFieldValue("invoice", "consignee_address") ||
-    invoiceExt?.fields.consignee_address?.value ||
-    "PHUM DOMNAK TROYEOUNG, SANGKAT CHOM CHAO II, KHAN POR SEN CHEY PHNOM PENH, KINGDOM OF CAMBODIA.";
-  const vatNo =
-    getFieldValue("invoice", "vat") ||
-    invoiceExt?.fields.vat?.value ||
-    "LO01-902303477";
-  const invoiceNo =
-    getFieldValue("invoice", "invoice_no") ||
-    invoiceExt?.fields.invoice_no?.value ||
-    reference ||
-    "RE2612048";
-  const invoiceDate =
-    getFieldValue("invoice", "invoice_date") ||
-    invoiceExt?.fields.invoice_date?.value ||
-    "17-Nov-26";
-  const blNo =
-    blExt?.fields.bl_no?.value ||
-    getFieldValue("draft_bl", "bl_no") ||
-    "KEEPNH19080037";
-  const vessel =
-    blExt?.fields.vessel?.value ||
-    getFieldValue("draft_bl", "vessel") ||
-    "BY TRUCK";
-  const container =
-    blExt?.fields.container?.value ||
-    getFieldValue("draft_bl", "container") ||
-    "1X45 HQ PART OF CFS/CFS";
-  const originCountry =
-    blExt?.fields.origin?.value ||
-    getFieldValue("invoice", "origin") ||
-    "CHINA";
-  const pol = blExt?.fields.port_of_loading?.value || "JIANGSU, CHINA";
-  const pod = blExt?.fields.port_of_discharge?.value || "PHNOM PENH, CAMBODIA";
+  // Shared shipment headers use the active document's saved review values.
+  const header = (name: string) => getFieldValue(sheetTab === "inv" ? "invoice" : "packing_list", name) || getFieldValue("invoice", name);
+  const bill = (name: string) => getFieldValue(blExt?.role ?? "draft_bl", name);
+  const supplier = header("supplier") || "—";
+  const supplierAddress = header("supplier_address");
+  const consignee = header("consignee") || companyName || "—";
+  const consigneeAddressRaw = header("consignee_address");
+  const vatNo = header("vat") || "—";
+  const invoiceNo = header("invoice_no") || reference || "—";
+  const invoiceDate = header("invoice_date") || "—";
+  const blNo = bill("bl_no") || "—";
+  const vessel = header("shipping_mode") || bill("shipping_mode") || bill("vessel") || "—";
+  const container = bill("container") || header("container") || "—";
+  const originCountry = header("country_of_origin") || header("origin") || bill("origin") || "—";
+  const pol = header("origin") || bill("port_of_loading") || "—";
+  const pod = header("destination") || bill("port_of_discharge") || "—";
   const route = `${pol} TO ${pod}`;
-  const borderPoint = "DAP PREY VOR BORDER, CAMBODIA";
-  const approvalShort = selectedMaster?.approval_ref || "211/26";
+  const borderPoint = [header("incoterms"), header("port") || bill("port")].filter(Boolean).join(" ") || "—";
+  const approvalShort = selectedMaster?.approval_ref || "—";
   const categoryHeader =
     (selectedMaster as Record<string, unknown> | null | undefined)?.category as string ||
     "II - RAW MATERIALS AND ACCESSORIES";
@@ -241,7 +379,7 @@ export function PermitDraftPreview({
     .filter(Boolean);
 
   // Items for Commercial Invoice
-  const extractedInvItems = (invoiceExt?.items || []).map((item, idx) => {
+  const extractedInvItems: PermitInvoiceItem[] = (invoiceExt?.items || []).map((item, idx) => {
     const row = item.row;
     const docId = invoiceExt?.document_id;
     const description =
@@ -255,7 +393,7 @@ export function PermitDraftPreview({
     const unit =
       getFieldValue("invoice", "unit", row, docId) ||
       item.fields.unit?.value ||
-      "Kg";
+      "";
     const priceStr =
       getFieldValue("invoice", "unit_price", row, docId) ||
       item.fields.unit_price?.value ||
@@ -266,10 +404,8 @@ export function PermitDraftPreview({
       "0";
 
     const mapping = mappings.find((m) => m.invoice_row === row);
-    const candidate = candidates.find((c) => c.invoice_row === row);
-    const matchedRow = mapping?.master_row ?? candidate?.master_row ?? idx + 4;
-    const matchedDesc =
-      candidate?.description ?? (mapping ? `CDC Line #${mapping.master_row}` : description);
+    const candidate = mapping && candidates.find((entry) => entry.invoice_document_id === docId && entry.invoice_row === row && entry.master_row === mapping.master_row);
+    const matchedRow = candidate?.serial ?? mapping?.master_row ?? "—";
 
     const qty = parseNumeric(qtyStr);
     const price = parseNumeric(priceStr);
@@ -277,7 +413,7 @@ export function PermitDraftPreview({
 
     return {
       cdc: matchedRow,
-      desc: (matchedDesc || description).toUpperCase(),
+      desc: description.toUpperCase(),
       qty,
       unit,
       price,
@@ -285,7 +421,7 @@ export function PermitDraftPreview({
     };
   });
 
-  const invoiceItems = extractedInvItems.length > 0 ? extractedInvItems : SAMPLE_INV_ITEMS;
+  const invoiceItems = extractedInvItems;
 
   // Items for Packing List
   const extractedPlItems = (packingExt?.items || []).map((item, idx) => {
@@ -298,22 +434,22 @@ export function PermitDraftPreview({
     const packages = parseNumeric(
       getFieldValue("packing_list", "packages", row, docId) ||
         item.fields.packages?.value ||
-        (idx + 1) * 20
+        0
     );
     const netWeight = parseNumeric(
       getFieldValue("packing_list", "net_weight", row, docId) ||
         item.fields.net_weight?.value ||
-        (idx + 1) * 240
+        0
     );
     const grossWeight = parseNumeric(
       getFieldValue("packing_list", "gross_weight", row, docId) ||
         item.fields.gross_weight?.value ||
-        (idx + 1) * 255
+        0
     );
     const unit =
       getFieldValue("packing_list", "unit", row, docId) ||
       item.fields.unit?.value ||
-      "Kg";
+      "";
     const qty = parseNumeric(
       getFieldValue("packing_list", "quantity", row, docId) ||
         item.fields.quantity?.value ||
@@ -331,16 +467,19 @@ export function PermitDraftPreview({
     };
   });
 
-  const packingItems = extractedPlItems.length > 0 ? extractedPlItems : SAMPLE_PL_ITEMS;
+  const packingItems = extractedPlItems;
 
   // Totals calculations
-  const totalInvQty = invoiceItems.reduce((acc, curr) => acc + curr.qty, 0);
-  const totalInvAmount = invoiceItems.reduce((acc, curr) => acc + curr.amount, 0);
+  const invHeader = (name: string) => getFieldValue("invoice", name, undefined, invoiceExt?.document_id);
+  const plHeader = (name: string) => getFieldValue("packing_list", name, undefined, packingExt?.document_id);
 
-  const totalPlPkgs = packingItems.reduce((acc, curr) => acc + curr.pkgs, 0);
+  const totalInvQty = invoiceItems.reduce((acc, curr) => acc + curr.qty, 0);
+  const totalInvAmount = parseNumeric(invHeader("amount")) || invoiceItems.reduce((acc, curr) => acc + curr.amount, 0);
+
+  const totalPlPkgs = parseNumeric(plHeader("packages")) || packingItems.reduce((acc, curr) => acc + curr.pkgs, 0);
   const totalPlQty = packingItems.reduce((acc, curr) => acc + curr.qty, 0);
-  const totalPlNw = packingItems.reduce((acc, curr) => acc + curr.nw, 0);
-  const totalPlGw = packingItems.reduce((acc, curr) => acc + curr.gw, 0);
+  const totalPlNw = parseNumeric(plHeader("net_weight")) || packingItems.reduce((acc, curr) => acc + curr.nw, 0);
+  const totalPlGw = parseNumeric(plHeader("gross_weight")) || packingItems.reduce((acc, curr) => acc + curr.gw, 0);
 
   // Template fill rows to match authentic fixed document height (14 table rows)
   const requiredSlots = 14;
@@ -355,143 +494,231 @@ export function PermitDraftPreview({
 
   const isApproved = state === "approved";
 
-  return (
+  // Calculate search matches and notify parent
+  useEffect(() => {
+    if (!onMatchCountChange) return;
+    if (!searchQuery || !searchQuery.trim()) {
+      onMatchCountChange(0);
+      return;
+    }
+    const q = searchQuery.trim().toLowerCase();
+    let count = 0;
+    const checkText = (text: unknown) => {
+      if (text == null) return;
+      const str = String(text).toLowerCase();
+      let pos = str.indexOf(q);
+      while (pos !== -1) {
+        count++;
+        pos = str.indexOf(q, pos + q.length);
+      }
+    };
+
+    checkText(supplier);
+    checkText(supplierAddress);
+    checkText(consignee);
+    checkText(consigneeAddressRaw);
+    checkText(invoiceNo);
+    checkText(invoiceDate);
+    checkText(vessel);
+    checkText(route);
+    checkText(originCountry);
+    checkText(vatNo);
+    checkText(blNo);
+
+    if (sheetTab === "inv") {
+      invoiceItems.forEach((i) => {
+        checkText(i.cdc);
+        checkText(i.desc);
+        checkText(i.qty);
+        checkText(i.unit);
+        checkText(i.price);
+        checkText(i.amount);
+      });
+      checkText(totalInvQty);
+      checkText(totalInvAmount);
+    } else {
+      packingItems.forEach((i) => {
+        checkText(i.pkgs);
+        checkText(i.desc);
+        checkText(i.qty);
+        checkText(i.unit);
+        checkText(i.nw);
+        checkText(i.gw);
+      });
+      checkText(totalPlPkgs);
+      checkText(totalPlQty);
+      checkText(totalPlNw);
+      checkText(totalPlGw);
+    }
+
+    onMatchCountChange(count);
+  }, [
+    searchQuery,
+    sheetTab,
+    supplier,
+    supplierAddress,
+    consignee,
+    consigneeAddressRaw,
+    invoiceNo,
+    invoiceDate,
+    vessel,
+    route,
+    originCountry,
+    vatNo,
+    blNo,
+    invoiceItems,
+    packingItems,
+    totalInvQty,
+    totalInvAmount,
+    totalPlPkgs,
+    totalPlQty,
+    totalPlNw,
+    totalPlGw,
+    onMatchCountChange,
+  ]);
+
+  // Scroll to first match if search query is entered
+  useEffect(() => {
+    if (searchQuery && searchQuery.trim()) {
+      const timer = setTimeout(() => {
+        const mark = viewport.current?.querySelector("mark");
+        if (mark) {
+          mark.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [searchQuery]);
+
+  const preview = (
     <div
       className={`flex flex-col rounded-lg border border-border/80 bg-muted/40 shadow-xs overflow-hidden transition-all ${
         isExpanded
-          ? "fixed inset-0 z-50 rounded-none border-none bg-background/95 backdrop-blur-md"
-          : "h-[calc(100vh-140px)] min-h-[640px]"
+          ? "fixed inset-0 z-[100] rounded-none border-none bg-background shadow-none"
+          : embedded ? "h-full min-h-0 rounded-none border-0 shadow-none" : "h-[calc(100vh-140px)] min-h-[640px]"
       }`}
     >
-      {/* Top Controls Toolbar */}
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b bg-background px-3 py-2 shrink-0 z-10">
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Sheet Switcher */}
-          <div className="flex items-center rounded-control border bg-muted/50 p-0.5 text-xs font-semibold">
-            <button
-              type="button"
-              onClick={() => setSheetTab("inv")}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-xs transition-all cursor-pointer ${
-                sheetTab === "inv"
-                  ? "bg-primary text-primary-foreground shadow-xs font-bold"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <FileSpreadsheet className="size-3.5" />
-              <span>INV (Invoice)</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setSheetTab("pl")}
-              className={`flex items-center gap-1.5 px-3 py-1 rounded-xs transition-all cursor-pointer ${
-                sheetTab === "pl"
-                  ? "bg-primary text-primary-foreground shadow-xs font-bold"
-                  : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <FileSpreadsheet className="size-3.5" />
-              <span>PL (Packing List)</span>
-            </button>
+      <header className="z-20 shrink-0 border-b border-slate-200/80 bg-white/95 backdrop-blur-md dark:border-slate-800 dark:bg-slate-900/95">
+        <div className="flex items-center justify-between gap-2 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <FileText className="size-4 shrink-0 text-red-500" />
+            <span className="truncate text-xs font-semibold">{sheetTab === "inv" ? "Invoice" : "Packing List"} · {invoiceNo}</span>
+            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">PDF</span>
+            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">{isApproved ? "Approved" : "Draft"}</span>
           </div>
-
-          {/* Template Selector Dropdown */}
-          <div className="flex items-center gap-1.5 border-l pl-2 text-xs">
-            <span className="text-[11px] font-medium text-muted-foreground hidden sm:inline">
-              Template:
-            </span>
-            <select
-              value={template}
-              onChange={(e) => setTemplate(e.target.value as PermitTemplate)}
-              className="h-7 rounded-control border border-input bg-background px-2 text-xs font-medium text-foreground cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
-            >
-              <option value="cdc_classic">CDC Classic (12-RE2612048)</option>
-              <option value="freight_agency">Freight Agency (Global Wing Format)</option>
-              <option value="commercial_billing">Commercial Billing (Corporate Standard)</option>
-            </select>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button type="button" variant="outline" size="xs" onClick={() => window.print()} title="Print or export as PDF" aria-label="Print Preview" className="h-7 gap-1.5 text-xs"><Printer className="size-3.5" /><span className="hidden sm:inline">Print Preview</span></Button>
+            <Button type="button" variant="outline" size="icon-xs" onClick={() => setIsExpanded(!isExpanded)} title={isExpanded ? "Exit fullscreen" : "Fullscreen preview"} className="size-7">{isExpanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}</Button>
           </div>
-
-          {/* Clean Monochrome Status Pill */}
-          <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground border px-2 py-0.5 rounded-xs hidden lg:inline">
-            {isApproved ? "Approved Record" : "Draft Preview"}
-          </span>
-        </div>
-
-        {/* Toolbar Right Controls */}
-        <div className="flex items-center gap-1 sm:gap-1.5">
-          <div className="flex items-center rounded-control border bg-background px-1 py-0.5 text-xs">
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setZoom((z) => Math.max(0.6, z - 0.1))}
-              disabled={zoom <= 0.6}
-              title="Zoom out"
-            >
-              <ZoomOut className="size-3.5" />
-            </Button>
-            <span className="font-mono text-[11px] tabular-nums px-1.5 text-muted-foreground">
-              {Math.round(zoom * 100)}%
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setZoom((z) => Math.min(1.4, z + 0.1))}
-              disabled={zoom >= 1.4}
-              title="Zoom in"
-            >
-              <ZoomIn className="size-3.5" />
-            </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-xs"
-              onClick={() => setZoom(0.92)}
-              title="Reset zoom"
-              className="text-muted-foreground hover:text-foreground"
-            >
-              <RotateCcw className="size-3" />
-            </Button>
-          </div>
-
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => window.print()}
-            className="text-xs h-7 gap-1 px-2.5"
-            title="Print or export as PDF"
-          >
-            <Printer className="size-3.5" />
-            <span className="hidden sm:inline">Print Preview</span>
-          </Button>
-
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            onClick={() => setIsExpanded(!isExpanded)}
-            title={isExpanded ? "Exit fullscreen" : "Fullscreen preview"}
-            className="text-muted-foreground hover:text-foreground"
-          >
-            {isExpanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
-          </Button>
         </div>
       </header>
+      <DocumentCanvasSurface
+        viewportRef={viewport}
+        viewportLabel="Print preview canvas"
+        viewportClassName="p-3 pt-6 sm:p-4 sm:pt-6 md:p-6 md:pt-8 justify-center"
+        controls={
+          <>
+            {/* Hover-to-expand vertical card with rotated label "TEMPLATE" */}
+            <div
+              className="absolute left-0 top-4 z-30 flex items-stretch select-none print:hidden shadow-md h-[344px]"
+              onMouseEnter={() => setTemplateDrawerOpen(true)}
+              onMouseLeave={() => setTemplateDrawerOpen(false)}
+            >
+              {/* Body with 3 templates (on the left, docked to left-0) */}
+              <div
+                className={cn(
+                  "flex flex-col justify-between gap-1.5 border-y border-l-0 border-slate-300/90 bg-white/95 backdrop-blur-md transition-all duration-200 ease-out dark:border-slate-700 dark:bg-slate-900/95 overflow-hidden h-full",
+                  templateDrawerOpen
+                    ? "max-w-[200px] p-1.5 opacity-100 pointer-events-auto"
+                    : "max-w-0 p-0 border-y-0 opacity-0 pointer-events-none"
+                )}
+                role="radiogroup"
+                aria-label="Select permit template"
+              >
+                {templateOptions.map((tpl) => {
+                  const selected = template === tpl.id;
+                  return (
+                    <button
+                      key={tpl.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => setTemplate(tpl.id)}
+                      title={tpl.title}
+                      className={cn(
+                        "group/thumb relative flex flex-col items-center w-[70px] shrink-0 rounded-md border p-1 text-left transition-colors cursor-pointer overflow-hidden",
+                        selected
+                          ? "border-2 border-primary bg-primary/5 shadow-2xs opacity-100 dark:bg-primary/10"
+                          : "border-slate-200 bg-white opacity-80 hover:opacity-100 hover:border-slate-400 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+                      )}
+                    >
+                      <div className="w-full aspect-[3/4] overflow-hidden rounded-xs border border-slate-200/90 dark:border-slate-700/80 bg-white dark:bg-slate-950">
+                        {tpl.thumbnail}
+                      </div>
+                      {selected && (
+                        <span
+                          className="absolute right-1 top-1 z-10 flex size-3.5 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-xs"
+                          aria-hidden
+                        >
+                          <Check className="size-2.5" strokeWidth={3.5} />
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "mt-0.5 text-[8px] font-semibold leading-tight text-center w-full truncate",
+                          selected ? "text-primary font-bold" : "text-slate-600 dark:text-slate-400"
+                        )}
+                      >
+                        {tpl.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
 
-      {/* Artboard Scrolling Surface (Monochrome PDF Viewer) */}
-      <div className="flex-1 w-full overflow-auto bg-neutral-200/90 dark:bg-neutral-900/95 p-4 sm:p-8 flex justify-center items-start print:p-0 print:bg-white">
+              {/* TEMPLATE Handle Tab (same width & height collapsed/expanded, no dot no icon) */}
+              <button
+                type="button"
+                aria-expanded={templateDrawerOpen}
+                aria-label="Permit templates"
+                onClick={() => setTemplateDrawerOpen((prev) => !prev)}
+                className={cn(
+                  "flex flex-col items-center justify-center w-6 h-full border border-l-0 border-slate-300/90 bg-white/95 backdrop-blur-md transition-colors cursor-pointer dark:border-slate-700 dark:bg-slate-900/95 shrink-0 rounded-r-md select-none",
+                  templateDrawerOpen
+                    ? "border-l border-slate-200/90 bg-slate-50 dark:border-slate-800 dark:bg-slate-850"
+                    : "hover:bg-slate-50 dark:hover:bg-slate-800"
+                )}
+              >
+                <span className="[writing-mode:vertical-rl] rotate-180 text-[9.5px] font-bold uppercase text-slate-700 dark:text-slate-300 tracking-[1.55em] select-none py-1">
+                  TEMPLATE
+                </span>
+              </button>
+            </div>
+
+            <DocumentCanvasControls
+              zoom={zoom * 100}
+              expanded={isExpanded}
+              onExpand={() => setIsExpanded(!isExpanded)}
+              onZoomIn={() => setZoom((value) => Math.min(1.4, value + 0.1))}
+              onZoomOut={() => setZoom((value) => Math.max(0.2, value - 0.1))}
+              zoomInDisabled={zoom >= 1.4}
+              zoomOutDisabled={zoom <= 0.2}
+              onReset={() => setZoom(embedded ? fitZoom.current : 0.92)}
+            />
+          </>
+        }
+      >
         {/* Printable White Sheet Document */}
         <div
+          data-permit-print-sheet={sheetTab}
           style={{
-            transform: `scale(${zoom})`,
-            transformOrigin: "top center",
+            zoom,
             fontFamily:
               template === "cdc_classic"
                 ? '"Times New Roman", Times, serif'
                 : 'Arial, "Helvetica Neue", Helvetica, sans-serif',
           }}
-          className="w-[820px] shrink-0 min-h-[1140px] bg-white text-black shadow-2xl rounded-xs p-10 sm:p-12 transition-transform duration-150 print:transform-none print:shadow-none print:p-6"
+          className={cn(documentCanvasPaper, "mx-auto min-h-[1140px] w-[820px] shrink-0 p-10 text-black sm:p-12 print:[zoom:1] print:shadow-none print:p-6")}
         >
           {/* ============================================================== */}
           {/* TEMPLATE 1: CDC CLASSIC (Exact 12-RE2612048.xlsx Format)     */}
@@ -501,10 +728,10 @@ export function PermitDraftPreview({
               {/* Row 1-2: Supplier / Exporter Header */}
               <div className="text-center space-y-0.5 pb-2">
                 <h1 className="text-[18pt] font-bold tracking-wide uppercase leading-tight">
-                  {supplier}
+                  {hl(supplier)}
                 </h1>
                 <p className="text-[9pt] leading-tight text-neutral-800 max-w-[700px] mx-auto">
-                  {supplierAddress}
+                  {hl(supplierAddress)}
                 </p>
               </div>
 
@@ -525,31 +752,31 @@ export function PermitDraftPreview({
                   <div className="col-span-7 space-y-0.5">
                     <div className="flex">
                       <span className="w-36 shrink-0">No.:</span>
-                      <span className="font-medium">{invoiceNo}</span>
+                      <span className="font-medium">{hl(invoiceNo)}</span>
                     </div>
                     <div className="flex">
                       <span className="w-36 shrink-0">Shipping mode:</span>
-                      <span>{vessel}</span>
+                      <span>{hl(vessel)}</span>
                     </div>
                     <div className="flex">
                       <span className="w-36 shrink-0">From:</span>
-                      <span>{route}</span>
+                      <span>{hl(route)}</span>
                     </div>
                     <div className="flex">
                       <span className="w-36 shrink-0">Country of origin:</span>
-                      <span>{originCountry}</span>
+                      <span>{hl(originCountry)}</span>
                     </div>
                     <div className="flex pt-0.5">
                       <span className="w-36 shrink-0">Consignee:</span>
                       <div className="flex-1">
-                        <div className="font-bold">{consignee}</div>
+                        <div className="font-bold">{hl(consignee)}</div>
                         {consigneeAddressLines.map((line, idx) => (
                           <div key={idx} className="text-[10pt] leading-tight">
-                            {line}
+                            {hl(line)}
                           </div>
                         ))}
                         <div className="pt-0.5">SHIPPING PERSON:</div>
-                        <div>VAT No : {vatNo}</div>
+                        <div>VAT No : {hl(vatNo)}</div>
                       </div>
                     </div>
                   </div>
@@ -558,7 +785,7 @@ export function PermitDraftPreview({
                   <div className="col-span-5 pl-2">
                     <div className="flex justify-end gap-3 text-[11pt]">
                       <span>DATE:</span>
-                      <span className="font-normal">{invoiceDate}</span>
+                      <span className="font-normal">{hl(invoiceDate)}</span>
                     </div>
                   </div>
                 </div>
@@ -673,36 +900,36 @@ export function PermitDraftPreview({
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 text-center text-[12pt]"
                           >
-                            {item.cdc}
+                            {hl(item.cdc)}
                           </td>
                           <td
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 px-3 text-left text-[12pt]"
                           >
-                            {item.desc}
+                            {hl(item.desc)}
                           </td>
                           {/* Quantity value with NO vertical line before unit */}
                           <td
                             style={{ width: "13%" }}
                             className="py-1 pr-1.5 text-right text-[12pt] tabular-nums"
                           >
-                            {formatNumber(item.qty)}
+                            {hl(formatNumber(item.qty))}
                           </td>
                           {/* Unit cell with outer divider to price */}
                           <td
                             style={{ borderRight: "1px solid #000", width: "7.5%" }}
                             className="py-1 pl-1 text-left text-[12pt]"
                           >
-                            {item.unit}
+                            {hl(item.unit)}
                           </td>
                           <td
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 pr-2 text-right text-[12pt] tabular-nums"
                           >
-                            {formatNumber(item.price)}
+                            {hl(formatNumber(item.price))}
                           </td>
                           <td className="py-1 pr-2 text-right text-[12pt] tabular-nums">
-                            {formatNumber(item.amount)}
+                            {hl(formatNumber(item.amount))}
                           </td>
                         </tr>
                       ))}
@@ -735,12 +962,12 @@ export function PermitDraftPreview({
                           TOTAL:
                         </td>
                         <td className="py-1.5 pr-1.5 text-right text-[12pt] tabular-nums">
-                          {formatNumber(totalInvQty)}
+                          {hl(formatNumber(totalInvQty))}
                         </td>
                         <td style={{ borderRight: "1px solid #000" }} className="py-1.5"></td>
                         <td style={{ borderRight: "1px solid #000" }} className="py-1.5"></td>
                         <td className="py-1.5 pr-2 text-right text-[13pt] tabular-nums font-bold">
-                          {formatNumber(totalInvAmount)}
+                          {hl(formatNumber(totalInvAmount))}
                         </td>
                       </tr>
                     </tbody>
@@ -831,36 +1058,36 @@ export function PermitDraftPreview({
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 text-center text-[12pt] font-bold tabular-nums"
                           >
-                            {formatNumber(item.pkgs)}
+                            {hl(formatNumber(item.pkgs))}
                           </td>
                           <td
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 px-3 text-left text-[12pt]"
                           >
-                            {item.desc}
+                            {hl(item.desc)}
                           </td>
                           {/* Quantity value with NO line before unit */}
                           <td
                             style={{ width: "12%" }}
                             className="py-1 pr-1.5 text-right text-[12pt] tabular-nums"
                           >
-                            {formatNumber(item.qty)}
+                            {hl(formatNumber(item.qty))}
                           </td>
                           {/* Unit cell with outer divider to weight */}
                           <td
                             style={{ borderRight: "1px solid #000", width: "8%" }}
                             className="py-1 pl-1 text-left text-[12pt]"
                           >
-                            {item.unit}
+                            {hl(item.unit)}
                           </td>
                           <td
                             style={{ borderRight: "1px solid #000" }}
                             className="py-1 pr-2 text-right text-[12pt] tabular-nums"
                           >
-                            {formatNumber(item.nw)}
+                            {hl(formatNumber(item.nw))}
                           </td>
                           <td className="py-1 pr-2 text-right text-[12pt] tabular-nums">
-                            {formatNumber(item.gw)}
+                            {hl(formatNumber(item.gw))}
                           </td>
                         </tr>
                       ))}
@@ -889,7 +1116,7 @@ export function PermitDraftPreview({
                           style={{ borderRight: "1px solid #000" }}
                           className="py-1.5 text-center text-[12pt] font-bold tabular-nums"
                         >
-                          {formatNumber(totalPlPkgs)}
+                          {hl(formatNumber(totalPlPkgs))}
                         </td>
                         <td
                           style={{ borderRight: "1px solid #000" }}
@@ -898,17 +1125,17 @@ export function PermitDraftPreview({
                           TOTAL:
                         </td>
                         <td className="py-1.5 pr-1.5 text-right text-[12pt] tabular-nums">
-                          {formatNumber(totalPlQty)}
+                          {hl(formatNumber(totalPlQty))}
                         </td>
                         <td style={{ borderRight: "1px solid #000" }} className="py-1.5"></td>
                         <td
                           style={{ borderRight: "1px solid #000" }}
                           className="py-1.5 pr-2 text-right text-[12pt] tabular-nums font-bold"
                         >
-                          {formatNumber(totalPlNw)}
+                          {hl(formatNumber(totalPlNw))}
                         </td>
                         <td className="py-1.5 pr-2 text-right text-[12pt] tabular-nums font-bold">
-                          {formatNumber(totalPlGw)}
+                          {hl(formatNumber(totalPlGw))}
                         </td>
                       </tr>
                     </tbody>
@@ -1541,7 +1768,8 @@ export function PermitDraftPreview({
             </div>
           )}
         </div>
-      </div>
+      </DocumentCanvasSurface>
     </div>
   );
+  return isExpanded ? createPortal(preview, document.body) : preview;
 }

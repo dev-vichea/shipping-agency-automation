@@ -103,7 +103,7 @@ def get(client, access_token, path, *, params=None, max_bytes=2_000_000):
                 content.extend(chunk)
                 if len(content) > max_bytes:
                     raise GmailError("gmail_response_too_large")
-        return httpx.Response(200, content=content).json()
+        return httpx.Response(200, content=bytes(content)).json()
     except (httpx.HTTPError, ValueError) as exc:
         raise GmailError("gmail_unavailable") from exc
 

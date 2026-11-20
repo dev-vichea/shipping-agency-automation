@@ -35,6 +35,7 @@ export type Document = {
 };
 
 export type CaseDetail = CaseSummary & {
+  final_bl_confirmed_revision?: number | null;
   messages: {
     id: string;
     channel: string;
@@ -199,6 +200,13 @@ export type ReviewAnalysis = {
     description: string;
     score: number;
     evidence: Evidence;
+    serial?: string | null;
+    reasons?: string[];
+    checks?: Finding[];
+    unit?: string | null;
+    remaining_quantity?: string | null;
+    unit_price?: string | null;
+    currency?: string | null;
   }[];
   selected_master: MasterVersion | null;
   analyzed_master: MasterVersion | null;
@@ -280,8 +288,23 @@ export type ReviewCorrection = {
   issue_key?: string | null;
   alternative_index?: number | null;
   consignee_source?: ConsigneeSourceRef;
+  suggestion_source?: ReviewField | null;
+  finding_key?: string | null;
+  confirmed?: boolean;
 };
 export type ReviewField = Pick<ReviewCorrection, "document_id" | "role" | "row" | "name">;
+export type FindingDecision = {
+  key: string;
+  action: "approved" | "rejected" | "unresolved";
+  note: string;
+  source?: ReviewField | null;
+  master_row?: number | null;
+};
+export type FieldSuggestion = {
+  key: string;
+  target: ReviewField | null;
+  options: { source: ReviewField; field: ExtractedField }[];
+};
 export type ReviewIssueAction = {
   key: string;
   action: "confirm" | "accept_ai" | "cannot_verify";
@@ -331,9 +354,15 @@ export type StaffReview = {
   request_correction: string | null;
   findings: Finding[];
   candidates: ReviewAnalysis["candidates"];
+  finding_decisions?: FindingDecision[];
+  cdc_findings?: Finding[];
+  cdc_ready?: boolean;
+  cdc_blockers?: string[];
 };
 export type ReviewWorkflow = {
   review: StaffReview | null;
+  field_suggestions?: FieldSuggestion[];
+  finding_audit?: (FindingDecision & { id: string; actor_id: string; actor_email?: string; created_at: string; revision: number; stale: boolean })[];
   issues?: ReviewIssue[];
   consignee_options?: ConsigneeOption[];
   history?: (Pick<StaffReview, "id" | "actor_id" | "created_at" | "ready"> & { actor_email?: string | null })[];

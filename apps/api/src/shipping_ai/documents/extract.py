@@ -488,6 +488,80 @@ def numeric_cell(doc, sheet, number, cells, column, *, units=None, code=None):
     return field(str(amount), evidence, unit=units, currency=code)
 
 
+def parse_package_item_cell(
+    doc: UUID,
+    sheet: str,
+    number: int,
+    cells: list,
+    col: int | None,
+    desc_col: int | None,
+    *,
+    units: str | None = "PKG",
+):
+    if col is None:
+        return None
+    raw = clean(at(cells, col))
+
+    # 1. Single cell range: "1-417", "1~417", "1 to 417", "1至417", "CTN 1-417"
+    m = re.match(
+        r"^(?:(?:case|ctn|carton|pkg|box|no\.?)\s*)?(\d+)\s*(?:[-~～至到/]|to)\s*(\d+)",
+        raw,
+        re.I,
+    )
+    if m:
+        s, e = int(m.group(1)), int(m.group(2))
+        if e >= s:
+            return field(
+                str(Decimal(e - s + 1)),
+                cell_evidence(doc, sheet, number, col, cells[col]),
+                unit=units,
+            )
+
+    # 2. Multi-cell range between col and desc_col: e.g. ["1.0", "~", "417.0"]
+    limit = desc_col if desc_col is not None and desc_col > col else min(len(cells), col + 4)
+    span_nums = []
+    sep_evidence = []
+    has_sep = False
+    for c_idx in range(col, limit):
+        val = clean(at(cells, c_idx))
+        if not val:
+            continue
+        if val in ("~", "-", "to", "TO", "/", "～", "至", "到", "—", "--"):
+            has_sep = True
+            sep_evidence.append(cell_evidence(doc, sheet, number, c_idx, cells[c_idx]))
+            continue
+        d = decimal(val)
+        if d is not None and d.to_integral_value() == d and d > 0:
+            span_nums.append((int(d), c_idx, cells[c_idx]))
+
+    if len(span_nums) == 2 and (has_sep or limit - col >= 2) and span_nums[1][0] >= span_nums[0][0]:
+        start_val, c1, v1 = span_nums[0]
+        end_val, c2, v2 = span_nums[1]
+        ev1 = cell_evidence(doc, sheet, number, c1, v1)
+        ev2 = cell_evidence(doc, sheet, number, c2, v2)
+        count = end_val - start_val + 1
+        return field(
+            str(Decimal(count)),
+            ev1,
+            *sep_evidence,
+            ev2,
+            unit=units,
+        )
+
+    # 3. Single count with package suffix e.g. "417 CTNS", "417 PKG"
+    m_single = re.match(r"^(\d+(?:\.\d+)?)\s*(?:ctns?|cartons?|pkgs?|packages?|cases?|rolls?|boxes?|箱|件|包)?$", raw, re.I)
+    if m_single:
+        d = decimal(m_single.group(1))
+        if d is not None and d > 0:
+            return field(
+                str(d),
+                cell_evidence(doc, sheet, number, col, cells[col]),
+                unit=units,
+            )
+
+    return None
+
+
 def excel_items(doc, sheet, rows, parsed, columns, headers, end):
     parsed_rows = {item["row"]: item for item in parsed}
     if not columns:
@@ -533,7 +607,7 @@ def excel_items(doc, sheet, rows, parsed, columns, headers, end):
             continue
         seen_item = True
         values = {}
-        for key in ("description", "english_description", "hs_code", "unit"):
+        for key in ("description", "english_description", "hs_code", "item_code", "specification", "unit"):
             col = columns.get(key)
             if key == "english_description" and col is None and "quantity" in columns:
                 possible = columns["description"] + 1
@@ -578,7 +652,17 @@ def excel_items(doc, sheet, rows, parsed, columns, headers, end):
             else:
                 dimension = values["unit"].value if key == "unit_price" else None
             code = currency(heading) if key in {"unit_price", "amount"} else None
-            values[key] = numeric_cell(doc, sheet, number, cells, col, units=dimension, code=code)
+            if key == "packages" and col is not None:
+                pkg_item = parse_package_item_cell(
+                    doc, sheet, number, cells, col, columns.get("description"), units=dimension or "PKG"
+                )
+                values[key] = (
+                    pkg_item
+                    if pkg_item is not None
+                    else numeric_cell(doc, sheet, number, cells, col, units=dimension or "PKG", code=code)
+                )
+            else:
+                values[key] = numeric_cell(doc, sheet, number, cells, col, units=dimension, code=code)
             if values[key].value is not None and key in {"quantity", "unit_price"} and dimension:
                 values[key].evidence.extend(values["unit"].evidence)
         results.append(Item(row=number, fields=values))
@@ -620,14 +704,16 @@ def weight_unit(text: str) -> str | None:
 
 
 def package_unit(text):
+    if not text:
+        return "PKG"
     text = folded(text)
-    if re.search(r"(?<!\w)(?:cartons?|ctns?)(?!\w)", text):
+    if re.search(r"(?<!\w)(?:cartons?|ctns?|cases?|boxes?|箱号|箱號|箱数|箱數)(?!\w)", text):
         return "CTN"
     if re.search(r"(?<!\w)rolls?(?!\w)", text):
         return "ROLL"
-    if re.search(r"(?<!\w)(?:packages?|pkgs?)(?!\w)|件数|件數|包数|包數|កញ្ចប់", text):
+    if re.search(r"(?<!\w)(?:packages?|pkgs?)(?!\w)|件数|件數|包数|包數|包号|包號|កញ្ចប់", text):
         return "PKG"
-    return None
+    return "PKG"
 
 
 def declared_total(rows, items, columns=None):

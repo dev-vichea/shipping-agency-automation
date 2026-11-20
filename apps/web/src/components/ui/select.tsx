@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 
 const Select = Primitive.Root;
 const SelectValue = Primitive.Value;
+const SelectItemText = Primitive.ItemText;
 
 function SelectTrigger({ className, children, ...props }: ComponentProps<typeof Primitive.Trigger>) {
   return <Primitive.Trigger className={cn(
@@ -31,14 +32,19 @@ function SelectContent({ className, children, ...props }: ComponentProps<typeof 
   </Primitive.Portal>;
 }
 
-function SelectItem({ className, children, ...props }: ComponentProps<typeof Primitive.Item>) {
+function SelectItem({
+  className,
+  children,
+  hasCustomText = false,
+  ...props
+}: ComponentProps<typeof Primitive.Item> & { hasCustomText?: boolean }) {
   return <Primitive.Item className={cn(
     "relative flex min-h-8 cursor-pointer select-none items-center rounded-md py-1.5 pr-8 pl-2 outline-none data-highlighted:bg-accent data-disabled:opacity-50",
     className,
   )} {...props}>
-    <Primitive.ItemText>{children}</Primitive.ItemText>
+    {hasCustomText ? children : <Primitive.ItemText>{children}</Primitive.ItemText>}
     <Primitive.ItemIndicator className="absolute right-2 text-primary"><Check size={14} aria-hidden /></Primitive.ItemIndicator>
   </Primitive.Item>;
 }
 
-export { Select, SelectContent, SelectItem, SelectTrigger, SelectValue };
+export { Select, SelectContent, SelectItem, SelectItemText, SelectTrigger, SelectValue };

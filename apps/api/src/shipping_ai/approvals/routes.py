@@ -17,13 +17,15 @@ from shipping_ai.models import (
     ImportItem,
     ImportRecord,
     PermitDraft,
+    ReviewFindingDecision,
     ReviewSnapshot,
     StaffReview,
     User,
 )
 from shipping_ai.permits.drafts import PROFILE, prepare, render
 from shipping_ai.review.routes import get_case
-from shipping_ai.review.schemas import Extraction
+from shipping_ai.review.schemas import Extraction, Finding
+from shipping_ai.review.suggestions import alternatives
 from shipping_ai.review.values import usable
 
 from .consignee import consignee_options
@@ -112,10 +114,12 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
     saved = latest_review(db, case)
     issues = []
     consignees = []
+    suggestions = []
     if case.state in {"needs_review", "ready_for_approval", "approved", "awaiting_updated_document"}:
         snapshot, docs = analysis(db, case)
         issues = guided_queue(snapshot, docs, saved)
         consignees = consignee_options(docs)
+        suggestions = alternatives(docs, [Finding.model_validate(check) for check in snapshot.findings])
     approval = next(
         (
             event
@@ -143,6 +147,22 @@ def get_review(case_id: UUID, db: DB, _user: Staff):
         "review": review_view(saved),
         "issues": issues,
         "consignee_options": consignees,
+        "field_suggestions": suggestions,
+        "finding_audit": [
+            {
+                "id": entry.id, "actor_id": entry.actor_id, "actor_email": email, "created_at": entry.created_at,
+                "revision": revision, "stale": revision != case.analysis_revision,
+                **entry.payload,
+            }
+            for entry, revision, email in db.execute(
+                select(ReviewFindingDecision, ReviewSnapshot.revision, User.email)
+                .join(ReviewSnapshot, ReviewSnapshot.id == ReviewFindingDecision.snapshot_id)
+                .join(User, User.id == ReviewFindingDecision.actor_id)
+                .where(ReviewSnapshot.intake_case_id == case.id)
+                .order_by(ReviewFindingDecision.created_at.desc(), ReviewFindingDecision.id.desc())
+                .limit(200)
+            )
+        ],
         "history": [dict(row._mapping) for row in history],
         "processed": processed_view(processed_event(db, approval)),
         "decisions": [
@@ -244,6 +264,21 @@ def stage_review(db, case, request, user, *, approval_request=None):
         payload=payload,
     )
     db.add(staff_review)
+    db.flush()
+    before = {entry["key"]: entry for entry in previous.payload.get("finding_decisions", [])} if previous else {}
+    for entry in payload["finding_decisions"]:
+        if before.get(entry["key"]) != entry:
+            db.add(ReviewFindingDecision(
+                snapshot_id=snapshot.id, staff_review_id=staff_review.id, actor_id=user.id,
+                finding_key=entry["key"], decision=entry["action"], payload=entry,
+            ))
+    retained = {entry["key"] for entry in payload["finding_decisions"]}
+    for key in before.keys() - retained:
+        db.add(ReviewFindingDecision(
+            snapshot_id=snapshot.id, staff_review_id=staff_review.id, actor_id=user.id,
+            finding_key=key, decision="unresolved",
+            payload={"key": key, "action": "unresolved", "note": "Previous selection was removed in a staff review; revalidation required."},
+        ))
     action = "correction_requested" if request.request_correction else "review_saved"
     audit(db, case, user, action, "ready_for_approval" if ready else "needs_review")
     case.review_reason = "Reviewed values ready for approval." if ready else payload["blockers"][0]
@@ -361,7 +396,10 @@ def approve(case_id: UUID, request: Decision, db: DB, user: Staff):
     bills = [doc for doc in docs if doc.role in ("draft_bl", "final_bl")]
     bill = bills[0] if len(bills) == 1 else None
     master = db.get(CdcMasterVersion, UUID(payload["master_id"])) if payload["master_id"] else None
-    arguments, pending = prepare(invoice, packing, master, payload["mappings"])
+    if payload.get("cdc_ready", True):
+        arguments, pending = prepare(invoice, packing, master, payload["mappings"])
+    else:
+        arguments, pending = None, payload["cdc_blockers"][0]
 
     company = resolve_company(db, usable(invoice.fields["consignee"]), case)
     case.company_id = company.id

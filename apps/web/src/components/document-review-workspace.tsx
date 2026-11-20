@@ -2,13 +2,16 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus, FileSpreadsheet, FileText, Folder, ScanSearch, ShieldCheck, Sparkles } from "lucide-react";
+import { useRef, useState, useTransition, type ReactNode } from "react";
+import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus, FileText, ScanSearch, Search, Sparkles, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { AutoSuggestionReview } from "@/components/auto-suggestion-review";
 import { AssignCompanyForm } from "@/components/company-forms";
 import { RefreshButton } from "@/components/forms";
 import { DocumentCanvas, type DocumentSourceOption } from "@/components/document-canvas";
-import { PermitDraftPreview } from "@/components/permit-draft-preview";
+import { VerificationWorkspace } from "@/components/verification-workspace";
 import { ConnectorLine } from "@/components/connector-line";
+import { ResizableSplit } from "@/components/resizable-split";
 import { IntakeStudioPanel, intakeStatus, type InspectedField } from "@/components/intake-studio-panel";
 import { ReviewAuditControls, ReviewCdcMappings, reviewDraft, reviewKey, type ReviewDraft } from "@/components/staff-review";
 import type { FieldChoice, FieldEdit, FieldEditor } from "@/components/evidence-field-card";
@@ -22,7 +25,7 @@ import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/compone
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "@/lib/toast";
 import { write } from "@/lib/client-api";
-import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewCorrection, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
+import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -55,330 +58,6 @@ function matchesRole(docRole: string, targetRole: string): boolean {
 
 const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
 
-function ReviewTreeItem({
-  item,
-  options,
-  selected,
-  onSave,
-  autoSave,
-  busy,
-  defaultUnit,
-}: {
-  item: { id: string; name: string; row: number | null; label: string; issues: ReviewIssue[] };
-  options: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[];
-  selected?: { value: string; choice?: FieldChoice; unit?: string | null; currency?: string | null };
-  onSave: (val: string, choice?: FieldChoice, unit?: string | null, currency?: string | null) => Promise<void>;
-  autoSave: boolean;
-  busy: boolean;
-  defaultUnit?: string;
-}) {
-  const isDimensioned =
-    ["gross_weight", "net_weight", "measurement", "packages", "quantity", "amount", "unit_price"].includes(item.name) ||
-    options.some((o) => !!o.unit || !!o.currency);
-
-  const fallbackUnit =
-    defaultUnit ||
-    (["gross_weight", "net_weight"].includes(item.name)
-      ? "KG"
-      : item.name === "measurement"
-      ? "CBM"
-      : item.name === "packages"
-      ? "PKG"
-      : ["amount", "unit_price"].includes(item.name)
-      ? "USD"
-      : options.find((o) => o.unit)?.unit ?? options.find((o) => o.currency)?.currency ?? "");
-
-  const initialOpt = options[0];
-  const initialVal = selected?.value ?? initialOpt?.value ?? "";
-  const initialUnit = selected?.unit ?? initialOpt?.unit ?? fallbackUnit;
-
-  const [amount, setAmount] = useState(initialVal);
-  const [unit, setUnit] = useState(initialUnit);
-  const [chosenChoice, setChosenChoice] = useState<FieldChoice | undefined>(selected?.choice ?? initialOpt?.choice);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const blurTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const dirty = amount.trim() !== initialVal.trim() || (isDimensioned && unit.trim() !== initialUnit.trim());
-
-  useEffect(() => {
-    if (!autoSave || !dirty || !amount.trim() || busy) return;
-
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-    saveTimeoutRef.current = setTimeout(async () => {
-      setSaveStatus("saving");
-      try {
-        const effectiveUnit = isDimensioned ? unit.trim() || fallbackUnit : null;
-        await onSave(amount.trim(), chosenChoice, effectiveUnit);
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      } catch {
-        setSaveStatus("idle");
-      }
-    }, 600);
-
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [amount, unit, autoSave, dirty, busy, isDimensioned, fallbackUnit, chosenChoice, onSave]);
-
-  useEffect(() => {
-    return () => {
-      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-    };
-  }, []);
-
-  const handleSelectOption = (opt: typeof options[0]) => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
-    setAmount(opt.value);
-    const newUnit = opt.unit || fallbackUnit;
-    if (isDimensioned) setUnit(newUnit);
-    setChosenChoice(opt.choice);
-    setIsDropdownOpen(false);
-
-    if (autoSave) {
-      setSaveStatus("saving");
-      void onSave(opt.value, opt.choice, isDimensioned ? newUnit : null).then(() => {
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      });
-    }
-  };
-
-  const handleManualConfirm = async () => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    setSaveStatus("saving");
-    try {
-      const effectiveUnit = isDimensioned ? unit.trim() || fallbackUnit : null;
-      await onSave(amount.trim(), chosenChoice, effectiveUnit);
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
-    } catch {
-      setSaveStatus("idle");
-    }
-  };
-
-  const query = amount.trim().toLowerCase();
-  const filteredOptions = options.filter((opt) => {
-    if (!query) return true;
-    return (
-      opt.value.toLowerCase().includes(query) ||
-      (opt.unit && opt.unit.toLowerCase().includes(query)) ||
-      opt.label.toLowerCase().includes(query)
-    );
-  });
-
-  return (
-    <div
-      key={item.id}
-      className={cn(
-        "grid grid-cols-[130px_1fr_auto] sm:grid-cols-[160px_1fr_auto] items-center gap-3 py-1.5 text-xs relative",
-        isDropdownOpen ? "z-30" : "z-10"
-      )}
-    >
-      {/* Leaf icon + Clean label */}
-      <div className="flex items-center gap-1.5 min-w-0">
-        <FileText size={13} className="text-amber-600/70 shrink-0" />
-        <span className="text-xs font-medium text-foreground truncate block" title={item.label}>
-          {item.label}
-        </span>
-      </div>
-
-      {/* Edit input: Value + Unit (separate fields if dimensioned) */}
-      <div className="min-w-0 flex items-center gap-2">
-        {isDimensioned ? (
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {/* Value input with focus/search suggestions dropdown */}
-            <div className="relative flex-1 min-w-0">
-              <input
-                type="text"
-                value={amount}
-                onChange={(e) => {
-                  setAmount(e.target.value);
-                  setChosenChoice(undefined);
-                  setIsDropdownOpen(true);
-                }}
-                onFocus={() => setIsDropdownOpen(true)}
-                onBlur={() => {
-                  blurTimeoutRef.current = setTimeout(() => setIsDropdownOpen(false), 200);
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Escape") setIsDropdownOpen(false);
-                }}
-                disabled={busy}
-                className="h-8 w-full rounded-md border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
-                placeholder={item.name.toLowerCase().includes("weight") ? "1000" : "0"}
-              />
-
-              {/* Suggestions Dropdown on Focus / Search */}
-              {isDropdownOpen && options.length > 0 && (
-                <div
-                  className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[280px] overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-foreground shadow-2xl ring-1 ring-black/10 animate-in fade-in-0 zoom-in-95 duration-100"
-                  onMouseDown={(e) => e.preventDefault()}
-                >
-                  <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                    Suggestions ({filteredOptions.length})
-                  </div>
-                  {filteredOptions.length > 0 ? (
-                    filteredOptions.map((opt, i) => {
-                      const isCurrent =
-                        opt.choice && chosenChoice
-                          ? opt.choice.id === chosenChoice.id
-                          : opt.value.trim() === amount.trim() &&
-                            (opt.unit ? opt.unit.trim() === unit.trim() : true);
-                      return (
-                        <button
-                          key={`${opt.value}-${i}`}
-                          type="button"
-                          onClick={() => handleSelectOption(opt)}
-                          className="flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
-                        >
-                          <div className="flex w-full items-center justify-between gap-2">
-                            <span className="font-mono text-xs font-medium truncate">
-                              {opt.value}
-                              {opt.unit && (
-                                <span className="ml-1 text-[11px] font-semibold uppercase text-muted-foreground">
-                                  {opt.unit}
-                                </span>
-                              )}
-                            </span>
-                            {isCurrent && <Check size={14} className="text-primary shrink-0" />}
-                          </div>
-                          <span className="text-[10px] text-muted-foreground truncate w-full">
-                            {opt.label}
-                          </span>
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                      No matching suggestions
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* Dedicated Unit input */}
-            <div className="relative w-18 shrink-0">
-              <input
-                type="text"
-                value={unit}
-                onChange={(e) => {
-                  setUnit(e.target.value);
-                  setChosenChoice(undefined);
-                }}
-                disabled={busy}
-                maxLength={8}
-                placeholder={fallbackUnit || "KG"}
-                className="h-8 w-full rounded-md border border-border/70 bg-transparent px-1.5 py-0 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
-                title="Unit of measure (e.g. KG, CBM, PKG, USD)"
-              />
-            </div>
-          </div>
-        ) : (
-          <div className="relative flex-1 min-w-0">
-            <input
-              type="text"
-              value={amount}
-              onChange={(e) => {
-                setAmount(e.target.value);
-                setChosenChoice(undefined);
-                setIsDropdownOpen(true);
-              }}
-              onFocus={() => setIsDropdownOpen(true)}
-              onBlur={() => {
-                blurTimeoutRef.current = setTimeout(() => setIsDropdownOpen(false), 200);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") setIsDropdownOpen(false);
-              }}
-              disabled={busy}
-              className="h-8 w-full rounded-md border border-border/70 bg-transparent px-2.5 py-0 text-xs font-mono text-foreground outline-none focus-visible:border-primary focus-visible:ring-1 focus-visible:ring-primary shadow-2xs transition-colors placeholder:text-muted-foreground/50"
-              placeholder={`Enter ${item.label.toLowerCase()}…`}
-            />
-
-            {/* Suggestions Dropdown on Focus / Search */}
-            {isDropdownOpen && options.length > 0 && (
-              <div
-                className="absolute left-0 top-full z-50 mt-1 max-h-52 w-full min-w-[280px] overflow-y-auto rounded-lg border border-border bg-card p-1.5 text-foreground shadow-2xl ring-1 ring-black/10 animate-in fade-in-0 zoom-in-95 duration-100"
-                onMouseDown={(e) => e.preventDefault()}
-              >
-                <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                  Suggestions ({filteredOptions.length})
-                </div>
-                {filteredOptions.length > 0 ? (
-                  filteredOptions.map((opt, i) => {
-                    const isCurrent =
-                      opt.choice && chosenChoice
-                        ? opt.choice.id === chosenChoice.id
-                        : opt.value.trim() === amount.trim();
-                    return (
-                      <button
-                        key={`${opt.value}-${i}`}
-                        type="button"
-                        onClick={() => handleSelectOption(opt)}
-                        className="flex w-full flex-col items-start rounded-md px-2.5 py-1.5 text-left text-xs text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
-                      >
-                        <div className="flex w-full items-center justify-between gap-2">
-                          <span className="font-mono text-xs font-medium truncate">
-                            {opt.value}
-                          </span>
-                          {isCurrent && <Check size={14} className="text-primary shrink-0" />}
-                        </div>
-                        <span className="text-[10px] text-muted-foreground truncate w-full">
-                          {opt.label}
-                        </span>
-                      </button>
-                    );
-                  })
-                ) : (
-                  <div className="px-2 py-2 text-center text-xs text-muted-foreground">
-                    No matching suggestions
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Action: Hide when autoSave is ON; show simple check border icon button with tinted circle hover when autoSave is OFF */}
-      <div className="shrink-0 flex items-center gap-2 min-w-8 justify-end">
-        {saveStatus === "saving" && (
-          <span className="text-[10px] text-muted-foreground animate-pulse font-mono">
-            Saving…
-          </span>
-        )}
-        {autoSave && saveStatus === "saved" && (
-          <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
-            <Check size={12} />
-          </span>
-        )}
-        {!autoSave && (
-          <button
-            type="button"
-            disabled={busy || !amount.trim()}
-            onClick={handleManualConfirm}
-            title="Confirm value"
-            aria-label="Confirm value"
-            className={cn(
-              "size-7 rounded-full border flex items-center justify-center transition-all duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500 disabled:opacity-40 disabled:pointer-events-none",
-              saveStatus === "saved"
-                ? "border-emerald-500 bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-                : "border-border/80 bg-transparent text-muted-foreground hover:border-emerald-500 hover:bg-emerald-500/15 hover:text-emerald-600 dark:hover:bg-emerald-500/20"
-            )}
-          >
-            <Check size={14} className="stroke-[2.2]" />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
 const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
 export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
@@ -395,17 +74,8 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const [auditView, setAuditView] = useState<typeof auditViews[number]>("All");
   const [auditOpen, setAuditOpen] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
-  const [dialogAutoSave, setDialogAutoSave] = useState(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("harborway-dialog-autosave");
-      return stored !== "false";
-    }
-    return true;
-  });
   const [cdcAutoRuleEnabled, setCdcAutoRuleEnabled] = useState(true);
-  const [selectedValues, setSelectedValues] = useState<
-    Record<string, { value: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }>
-  >({});
+  const [docSearchQuery, setDocSearchQuery] = useState("");
   const router = useRouter();
   const [saving, setSaving] = useState(false);
   const [refreshing, startRefresh] = useTransition();
@@ -592,7 +262,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const issueCount = saved?.open_issues ? Object.keys(saved.open_issues).length : tally.MISMATCH + tally.WARNING + tally.NEEDS_REVIEW;
   const auditCounts = { All: analysis.findings.length, Blockers: tally.MISMATCH, Warnings: tally.WARNING + tally.NEEDS_REVIEW, Passed: tally.PASS };
   const stale = analysis.analysis_revision !== null && analysis.analysis_revision !== analysis.revision;
-  const editable = !stale && analysis.state === "available" && ["needs_review", "ready_for_approval"].includes(item.state);
+  const editable = !stale && analysis.state === "available" && ["needs_review", "ready_for_approval", "awaiting_updated_document"].includes(item.state);
   const knownIssueKeys = saved?.reviewed_issue_keys && new Set(saved.reviewed_issue_keys);
   const pendingIssues = stale ? [] : (workflow.issues ?? []).map((issue, index) => ({ issue, index })).filter(({ issue }) =>
     !saved?.open_issues || issue.key in saved.open_issues || (knownIssueKeys && !knownIssueKeys.has(issue.key)));
@@ -603,9 +273,10 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const previousIssue = pendingIssues.findLast(({ index }) => index < issueAnchor)?.issue;
   const nextIssue = pendingIssues.find(({ index }) => index > issueAnchor)?.issue;
   const candidates = Array.from(new Map(
-    [...(saved?.candidates ?? []), ...(analysis.analyzed_master ? analysis.candidates : [])]
+    [...(saved?.candidates ?? []), ...(analysis.candidates ?? [])]
       .map((entry) => [`${entry.invoice_document_id}:${entry.invoice_row}:${entry.master_row}`, entry]),
   ).values());
+
   const metadata = consignmentFields.flatMap((key) => {
     for (const role of ["final_bl", "draft_bl", "invoice", "packing_list"] as const) {
       const docs = analysis.extractions.filter((doc) => doc.role === role);
@@ -805,623 +476,10 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return review;
   }
 
-  function getDetectedOptions(
-    name: string,
-    row: number | null,
-    issue?: ReviewIssue
-  ): { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] {
-    const rawOptions: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] = [];
-
-    const add = (
-      val: string | null | undefined,
-      lbl: string,
-      choice?: FieldChoice,
-      unit?: string | null,
-      currency?: string | null
-    ) => {
-      if (!val) return;
-      const trimmed = val.trim();
-      if (!trimmed) return;
-
-      let effectiveUnit = unit ?? choice?.unit ?? null;
-      let effectiveVal = trimmed;
-      if (!effectiveUnit) {
-        const m = trimmed.match(/^([\d.,]+)\s+([A-Za-z/]+)$/);
-        if (m) {
-          effectiveVal = m[1];
-          effectiveUnit = m[2];
-        }
-      }
-
-      const effectiveCurrency = currency ?? choice?.currency ?? null;
-
-      if (!rawOptions.some((o) => o.value === effectiveVal && (o.unit ?? "") === (effectiveUnit ?? ""))) {
-        rawOptions.push({
-          value: effectiveVal,
-          label: lbl,
-          choice,
-          unit: effectiveUnit,
-          currency: effectiveCurrency,
-        });
-      }
-    };
-
-    if (name === "consignee" && workflow.consignee_options?.length) {
-      const partyRoles: Record<string, string> = { draft_bl: "B/L", invoice: "Invoice", packing_list: "Packing list" };
-      for (const opt of workflow.consignee_options) {
-        const roles = [...new Set(opt.sources.map((s) => partyRoles[s.ref.role] || s.ref.role))].join(" / ");
-        add(opt.value, roles);
-      }
-    }
-
-    if (issue?.target) {
-      const ed = editorFor(issue.target, true);
-      if (ed?.choices) {
-        for (const c of ed.choices) {
-          add(c.value, c.label, c, c.unit, c.currency);
-        }
-      }
-    }
-
-    for (const doc of analysis.extractions) {
-      const roleLabel = doc.role === "draft_bl" ? "B/L" : doc.role === "invoice" ? "Invoice" : doc.role === "packing_list" ? "Packing list" : "Document";
-
-      if (row === null || row === 0) {
-        const fld = doc.fields[name];
-        if (fld?.value) {
-          add(fld.value, roleLabel, undefined, fld.unit, fld.currency);
-        }
-        if (fld?.alternatives) {
-          for (const alt of fld.alternatives) {
-            if (alt.value) add(alt.value, `${roleLabel} (Alt)`, undefined, alt.unit, alt.currency);
-          }
-        }
-      }
-
-      for (const itm of doc.items ?? []) {
-        if (row === null || itm.row === row) {
-          const itmFld = itm.fields[name];
-          if (itmFld?.value) {
-            add(itmFld.value, `${roleLabel}${row ? ` (Row ${itm.row})` : ""}`, undefined, itmFld.unit, itmFld.currency);
-          }
-
-          if (name === "description" || name === "english_description") {
-            const desc = itm.fields["description"];
-            if (desc?.value) add(desc.value, `${roleLabel}${row ? ` (Row ${itm.row})` : ""}`);
-            if (desc?.english?.value) add(desc.english.value, "AI Translation");
-          }
-        }
-      }
-
-      if (row !== null && name === "packages") {
-        const headerFld = doc.fields["packages"];
-        if (headerFld?.value) {
-          add(headerFld.value, `${roleLabel} (Shipment Total)`, undefined, headerFld.unit, headerFld.currency);
-        }
-      }
-    }
-
-    if (issue?.suggestion?.value) {
-      add(issue.suggestion.value, "AI Suggestion");
-    }
-    if (issue?.comparison) {
-      if (issue.comparison[0]) add(issue.comparison[0], "B/L");
-      if (issue.comparison[1]) add(issue.comparison[1], "Invoice / Packing list");
-    }
-    if (issue) {
-      const finding = analysis.findings.find((f) => f.key === issue.key);
-      if (finding?.left) {
-        const leftDoc = finding.group === "transport" ? "B/L" : finding.group === "invoice_packing" ? "Invoice" : "Source 1";
-        add(finding.left, leftDoc);
-      }
-      if (finding?.right) {
-        const rightDoc = finding.group === "transport" ? "Invoice / Packing list" : finding.group === "invoice_packing" ? "Packing list" : "Source 2";
-        add(finding.right, rightDoc);
-      }
-    }
-
-    if (issue?.value) {
-      add(issue.value, "Detected in source");
-    }
-
-    if (name === "currency_uniformity" || name === "currency") {
-      const currencies = new Set<string>();
-      for (const doc of analysis.extractions) {
-        for (const fld of Object.values(doc.fields)) {
-          if (fld?.currency) currencies.add(fld.currency);
-        }
-        for (const itm of doc.items ?? []) {
-          for (const fld of Object.values(itm.fields)) {
-            if (fld?.currency) currencies.add(fld.currency);
-          }
-        }
-      }
-      if (currencies.size > 0) {
-        add(Array.from(currencies).join(", "), "Detected Currency");
-      }
-    }
-
-    if (name === "version" || name.startsWith("cdc")) {
-      for (const ver of versions ?? []) {
-        const title = `${ver.approval_ref || ver.original_filename} (${ver.year || "Master List"})`;
-        add(title, "Registered Master List");
-      }
-    }
-
-    const deduplicated: { value: string; label: string; choice?: FieldChoice; unit?: string | null; currency?: string | null }[] = [];
-    const byValue = new Map<string, { value: string; labels: string[]; choice?: FieldChoice; unit?: string | null; currency?: string | null }>();
-
-    for (const opt of rawOptions) {
-      const mapKey = `${opt.value}:${opt.unit ?? ""}`;
-      const existing = byValue.get(mapKey);
-      if (existing) {
-        if (!existing.labels.includes(opt.label)) {
-          existing.labels.push(opt.label);
-        }
-        if (!existing.choice && opt.choice) {
-          existing.choice = opt.choice;
-        }
-      } else {
-        byValue.set(mapKey, { value: opt.value, labels: [opt.label], choice: opt.choice, unit: opt.unit, currency: opt.currency });
-      }
-    }
-
-    for (const entry of byValue.values()) {
-      deduplicated.push({
-        value: entry.value,
-        label: entry.labels.join(" / "),
-        choice: entry.choice,
-        unit: entry.unit,
-        currency: entry.currency,
-      });
-    }
-
-    return deduplicated;
-  }
-
-  async function handleConfirmGroup(
-    group: { id: string; name: string; row: number | null; issues: ReviewIssue[] },
-    chosenValue?: string,
-    chosenChoice?: FieldChoice,
-    chosenUnit?: string | null,
-    chosenCurrency?: string | null
-  ) {
-    const baseDraft = reviewDraft(saved);
-    const nextDraft: ReviewDraft = {
-      ...baseDraft,
-      issue_actions: [...baseDraft.issue_actions],
-      resolutions: [...baseDraft.resolutions],
-      corrections: [...baseDraft.corrections],
-    };
-
-    for (const issue of group.issues) {
-      if (issue.target && chosenValue !== undefined) {
-        const target = issue.target;
-        const doc = analysis.extractions.find((entry) => entry.document_id === target.document_id && entry.role === target.role);
-        const values = target.row ? doc?.items.find((entry) => entry.row === target.row)?.fields : doc?.fields;
-        const source = values?.[target.name];
-
-        nextDraft.corrections = nextDraft.corrections.filter(
-          (c) => !(c.document_id === target.document_id && c.role === target.role && c.row === target.row && c.name === target.name)
-        );
-
-        if (chosenChoice?.issueKey) {
-          nextDraft.issue_actions = nextDraft.issue_actions.filter((a) => a.key !== chosenChoice.issueKey);
-          nextDraft.issue_actions.push({ key: chosenChoice.issueKey, action: "accept_ai" });
-        } else {
-          nextDraft.corrections.push({
-            ...target,
-            value: chosenValue,
-            unit: chosenUnit !== undefined ? chosenUnit : (chosenChoice?.unit ?? source?.unit ?? null),
-            currency: chosenCurrency !== undefined ? chosenCurrency : (chosenChoice?.currency ?? source?.currency ?? null),
-            note: chosenChoice?.consigneeSource ? "Selected a printed consignee from this shipment." :
-              chosenChoice?.alternativeIndex !== undefined ? "Selected a value from the original document evidence." :
-              source && chosenValue === source.value ? "Confirmed against original document evidence." : "Confirmed in review dialog.",
-            alternative_index: chosenChoice?.alternativeIndex,
-            consignee_source: chosenChoice?.consigneeSource,
-          });
-        }
-      }
-
-      const actionType = issue.can_confirm ? "confirm" : issue.suggestion ? "accept_ai" : undefined;
-      if (actionType) {
-        nextDraft.issue_actions = nextDraft.issue_actions.filter((a) => a.key !== issue.key);
-        nextDraft.issue_actions.push({ key: issue.key, action: actionType });
-      }
-
-      const isResolvable = issue.can_resolve ||
-        issue.key.startsWith("transport.") ||
-        issue.key.startsWith("invoice_packing.") ||
-        analysis.findings.some((f) => f.key === issue.key && (f.group === "transport" || f.group === "invoice_packing" || f.field === "description"));
-
-      if (isResolvable) {
-        nextDraft.resolutions = nextDraft.resolutions.filter((r) => r.key !== issue.key);
-        nextDraft.resolutions.push({ key: issue.key, note: "Confirmed against document evidence." });
-      }
-    }
-
-    return await saveReview(nextDraft);
-  }
-
-  function cleanFieldLabel(name: string): string {
-    if (name === "unit") return "Unit of Measure";
-    if (name === "packages") return "Total Packages";
-    if (name === "description") return "Goods Description";
-    if (name === "english_description") return "English Description";
-    if (name === "currency_uniformity") return "Currency Uniformity";
-    if (name === "version" || name.startsWith("cdc")) return "CDC Master List";
-    return documentFieldLabel(name);
-  }
-
-  const { treeBranches, groupedIssues } = (() => {
-    const map = new Map<string, { id: string; name: string; row: number | null; label: string; issues: ReviewIssue[] }>();
-
-    for (const { issue } of pendingIssues) {
-      const targetName = issue.target?.name ?? issue.name;
-      const targetRow = issue.target?.row ?? (issue.key.match(/\.(\d+)\.?/) ? parseInt(RegExp.$1, 10) : null);
-      const groupId = targetRow ? `${targetName}:${targetRow}` : targetName;
-
-      const existing = map.get(groupId);
-      if (existing) {
-        existing.issues.push(issue);
-      } else {
-        const cleanLabel = cleanFieldLabel(targetName);
-        map.set(groupId, {
-          id: groupId,
-          name: targetName,
-          row: targetRow,
-          label: cleanLabel,
-          issues: [issue],
-        });
-      }
-    }
-
-    const allItems = Array.from(map.values());
-
-    const shipmentItems: typeof allItems = [];
-    const lineItemMap = new Map<number, typeof allItems>();
-    const complianceItems: typeof allItems = [];
-
-    for (const item of allItems) {
-      if (item.row !== null) {
-        const list = lineItemMap.get(item.row) ?? [];
-        list.push(item);
-        lineItemMap.set(item.row, list);
-      } else if (
-        ["currency_uniformity", "currency", "version"].includes(item.name) ||
-        item.name.startsWith("cdc")
-      ) {
-        complianceItems.push(item);
-      } else {
-        shipmentItems.push(item);
-      }
-    }
-
-    const branches: {
-      id: string;
-      title: string;
-      items?: typeof allItems;
-      rowGroups?: { row: number; description: string; items: typeof allItems }[];
-      count: number;
-    }[] = [];
-
-    if (shipmentItems.length > 0) {
-      branches.push({
-        id: "shipment",
-        title: "Shipment & Consignment",
-        items: shipmentItems,
-        count: shipmentItems.length,
-      });
-    }
-
-    if (lineItemMap.size > 0) {
-      const rowGroups: { row: number; description: string; items: typeof allItems }[] = [];
-      let lineCount = 0;
-      const sortedRows = Array.from(lineItemMap.keys()).sort((a, b) => a - b);
-      for (const row of sortedRows) {
-        const items = lineItemMap.get(row)!;
-        lineCount += items.length;
-        let desc = "";
-        for (const doc of analysis.extractions) {
-          const matchedItem = doc.items?.find((i) => i.row === row);
-          if (matchedItem) {
-            desc = matchedItem.fields["description"]?.value || matchedItem.fields["english_description"]?.value || "";
-            if (desc) break;
-          }
-        }
-        rowGroups.push({
-          row,
-          description: desc,
-          items,
-        });
-      }
-
-      branches.push({
-        id: "line_items",
-        title: "Line Items",
-        rowGroups,
-        count: lineCount,
-      });
-    }
-
-    if (complianceItems.length > 0) {
-      branches.push({
-        id: "compliance",
-        title: "Compliance & Master List",
-        items: complianceItems,
-        count: complianceItems.length,
-      });
-    }
-
-    return { treeBranches: branches, groupedIssues: allItems };
-  })();
+  const groupedIssues = pendingIssues;
 
   async function handleVerifyAll(): Promise<StaffReview> {
-    const actionsToTake: { key: string; action: "confirm" | "accept_ai" }[] = [];
-    const pendingResolutions: { key: string; note: string }[] = [];
-
-    for (const { issue } of pendingIssues) {
-      if (issue.can_confirm) {
-        actionsToTake.push({ key: issue.key, action: "confirm" });
-      } else if (issue.suggestion) {
-        actionsToTake.push({ key: issue.key, action: "accept_ai" });
-      }
-
-      if (
-        issue.can_resolve ||
-        issue.key.startsWith("transport.") ||
-        issue.key.startsWith("invoice_packing.description.")
-      ) {
-        pendingResolutions.push({
-          key: issue.key,
-          note: "Confirmed against document evidence.",
-        });
-      }
-    }
-
-    for (const finding of analysis.findings) {
-      if (
-        finding.outcome === "NEEDS_REVIEW" &&
-        (finding.group === "transport" ||
-          (finding.group === "invoice_packing" &&
-            finding.field === "description" &&
-            !finding.key.includes(".unpaired.")))
-      ) {
-        pendingResolutions.push({
-          key: finding.key,
-          note: "Verified against document evidence.",
-        });
-      }
-    }
-
-    const currentMappings = saved?.mappings ?? [];
-    let nextMappings = currentMappings;
-    if (currentMappings.length === 0 && candidates.length > 0) {
-      const topByRow = new Map<number, typeof candidates[0]>();
-      for (const cand of candidates) {
-        if (cand.score >= 60) {
-          const prev = topByRow.get(cand.invoice_row);
-          if (!prev || cand.score > prev.score) {
-            topByRow.set(cand.invoice_row, cand);
-          }
-        }
-      }
-      nextMappings = Array.from(topByRow.values()).map((c) => ({
-        invoice_row: c.invoice_row,
-        master_row: c.master_row,
-      }));
-    }
-
-    const baseDraft = reviewDraft(saved);
-    const existingActionKeys = new Set(baseDraft.issue_actions.map((a) => a.key));
-    const newActions = actionsToTake.filter((a) => !existingActionKeys.has(a.key));
-
-    const existingResKeys = new Set(baseDraft.resolutions.map((r) => r.key));
-    const newResolutions = pendingResolutions.filter((r) => !existingResKeys.has(r.key));
-
-    const nextDraft: ReviewDraft = {
-      ...baseDraft,
-      issue_actions: [...baseDraft.issue_actions, ...newActions],
-      resolutions: [...baseDraft.resolutions, ...newResolutions],
-      mappings: nextMappings,
-      verify_cdc_mappings: nextMappings.length > 0,
-      corrections: [...baseDraft.corrections],
-    };
-
-    for (const [key, selection] of Object.entries(selectedValues)) {
-      const match = pendingIssues.find((p) => p.issue.key === key)?.issue ??
-        groupedIssues.find((g) => g.id === key)?.issues.find((i) => i.target);
-      if (match?.target) {
-        const target = match.target;
-        const doc = analysis.extractions.find((entry) => entry.document_id === target.document_id && entry.role === target.role);
-        const values = target.row ? doc?.items.find((entry) => entry.row === target.row)?.fields : doc?.fields;
-        const source = values?.[target.name];
-
-        nextDraft.corrections = nextDraft.corrections.filter(
-          (c) => !(c.document_id === target.document_id && c.role === target.role && c.row === target.row && c.name === target.name)
-        );
-
-        if (selection.choice?.issueKey) {
-          nextDraft.issue_actions = nextDraft.issue_actions.filter((a) => a.key !== selection.choice?.issueKey);
-          nextDraft.issue_actions.push({ key: selection.choice.issueKey, action: "accept_ai" });
-        } else {
-          nextDraft.corrections.push({
-            ...target,
-            value: selection.value,
-            unit: selection.unit !== undefined ? selection.unit : (selection.choice?.unit ?? source?.unit ?? null),
-            currency: selection.currency !== undefined ? selection.currency : (selection.choice?.currency ?? source?.currency ?? null),
-            note: "Confirmed in review dialog.",
-            alternative_index: selection.choice?.alternativeIndex,
-            consignee_source: selection.choice?.consigneeSource,
-          });
-        }
-      }
-    }
-
-    return await saveReview(nextDraft);
-  }
-
-  async function handleApplyCdcRules(): Promise<void> {
-    if (busy) return;
-    setActionError("");
-
-    const invDoc = analysis.extractions.find((d) => d.role === "invoice");
-    const plDoc = analysis.extractions.find((d) => d.role === "packing_list");
-    const blDoc = analysis.extractions.find((d) => d.role === "draft_bl" || d.role === "final_bl");
-
-    const newSelectedValues = { ...selectedValues };
-    const correctionsToAdd: ReviewCorrection[] = [];
-
-    // 1. Build CDC candidates mapping map
-    const topCandidatesByRow = new Map<number, (typeof analysis.candidates)[0]>();
-    for (const cand of analysis.candidates || []) {
-      const prev = topCandidatesByRow.get(cand.invoice_row);
-      if (!prev || cand.score > prev.score) {
-        topCandidatesByRow.set(cand.invoice_row, cand);
-      }
-    }
-
-    const nextMappings = Array.from(topCandidatesByRow.values()).map((c) => ({
-      invoice_row: c.invoice_row,
-      master_row: c.master_row,
-    }));
-
-    // 2. Iterate over invoice line items and reconcile with PL & CDC
-    if (invDoc && invDoc.items) {
-      for (const invItem of invDoc.items) {
-        const row = invItem.row;
-        const plItem = plDoc?.items?.find((p) => p.row === row);
-        const topCand = topCandidatesByRow.get(row);
-
-        // A. Description: Use matched CDC Master List description, or AI English translation
-        const cdcDesc =
-          topCand?.description ||
-          invItem.fields.description?.english?.value ||
-          invItem.fields.description?.value;
-
-        if (cdcDesc) {
-          const descId = `description:${row}`;
-          newSelectedValues[descId] = { value: cdcDesc };
-          correctionsToAdd.push({
-            document_id: invDoc.document_id,
-            role: "invoice",
-            row,
-            name: "description",
-            value: cdcDesc,
-            unit: null,
-            currency: null,
-            note: "Auto-corrected based on CDC Master List description.",
-          });
-        }
-
-        // B. Unit: standard CDC unit (KG for fabrics, YDS/GROSS/PCS)
-        const rawUnit = invItem.fields.quantity?.unit || plItem?.fields.quantity?.unit || "KG";
-        const stdUnit = rawUnit.toUpperCase().trim();
-        const unitId = `unit:${row}`;
-        newSelectedValues[unitId] = { value: stdUnit };
-
-        // C. Unit Price: USD price from invoice
-        const priceVal = invItem.fields.unit_price?.value;
-        if (priceVal) {
-          const priceId = `unit_price:${row}`;
-          newSelectedValues[priceId] = { value: String(priceVal), currency: "USD" };
-          correctionsToAdd.push({
-            document_id: invDoc.document_id,
-            role: "invoice",
-            row,
-            name: "unit_price",
-            value: String(priceVal),
-            unit: null,
-            currency: "USD",
-            note: "Confirmed unit price in USD.",
-          });
-        }
-
-        // D. Net Weight: from Packing List
-        if (plItem?.fields.net_weight?.value) {
-          const nwVal = String(plItem.fields.net_weight.value);
-          const nwUnit = plItem.fields.net_weight.unit || "KG";
-          const nwId = `net_weight:${row}`;
-          newSelectedValues[nwId] = { value: nwVal, unit: nwUnit };
-          if (plDoc) {
-            correctionsToAdd.push({
-              document_id: plDoc.document_id,
-              role: "packing_list",
-              row,
-              name: "net_weight",
-              value: nwVal,
-              unit: nwUnit,
-              currency: null,
-              note: "Reconciled net weight from Packing List.",
-            });
-          }
-        }
-
-        // E. Gross Weight: from Packing List
-        if (plItem?.fields.gross_weight?.value) {
-          const gwVal = String(plItem.fields.gross_weight.value);
-          const gwUnit = plItem.fields.gross_weight.unit || "KG";
-          const gwId = `gross_weight:${row}`;
-          newSelectedValues[gwId] = { value: gwVal, unit: gwUnit };
-          if (plDoc) {
-            correctionsToAdd.push({
-              document_id: plDoc.document_id,
-              role: "packing_list",
-              row,
-              name: "gross_weight",
-              value: gwVal,
-              unit: gwUnit,
-              currency: null,
-              note: "Reconciled gross weight from Packing List.",
-            });
-          }
-        }
-
-        // F. CDC Item No / Serial
-        if (topCand) {
-          const serialVal = String(topCand.master_row).padStart(2, "0");
-          newSelectedValues[`cdc_no:${row}`] = { value: serialVal };
-        }
-      }
-    }
-
-    // 3. Reconcile header fields (Packages, Gross Weight)
-    const totalGw = plDoc?.fields.gross_weight?.value || blDoc?.fields.gross_weight?.value;
-    if (totalGw) {
-      newSelectedValues["gross_weight"] = { value: String(totalGw), unit: "KG" };
-    }
-    const totalPkg = plDoc?.fields.packages?.value || blDoc?.fields.packages?.value;
-    if (totalPkg) {
-      newSelectedValues["packages"] = { value: String(totalPkg), unit: "PKG" };
-    }
-
-    setSelectedValues(newSelectedValues);
-
-    // 4. Save review draft immediately
-    const baseDraft = reviewDraft(saved);
-    const existingCorrections = baseDraft.corrections.filter(
-      (c) => !correctionsToAdd.some((n) => n.document_id === c.document_id && n.role === c.role && n.row === c.row && n.name === c.name)
-    );
-
-    const newActions = pendingIssues.map(({ issue }) => ({
-      key: issue.key,
-      action: (issue.can_confirm ? "confirm" : "accept_ai") as "confirm" | "accept_ai",
-    }));
-
-    const nextDraft: ReviewDraft = {
-      ...baseDraft,
-      issue_actions: [...baseDraft.issue_actions, ...newActions],
-      mappings: nextMappings.length > 0 ? nextMappings : baseDraft.mappings,
-      verify_cdc_mappings: true,
-      corrections: [...existingCorrections, ...correctionsToAdd],
-    };
-
-    try {
-      await saveReview(nextDraft);
-      toast.saved(`AI Auto-Prepared: Draft reconciled with CDC rules (${invDoc?.items?.length || 0} items)`);
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : "Failed to auto-prepare CDC draft.");
-    }
+    return saveReview(reviewDraft(saved));
   }
 
   function clearField(review: ReviewDraft, refs: ReviewField[]) {
@@ -1502,6 +560,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         });
       }
       await saveReview(next);
+      toast.saved("Saved!");
     }
 
     return {
@@ -1515,6 +574,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       },
       onUndo: async () => {
         await saveReview(clearField(reviewDraft(saved), englishItem ? [target, englishRef] : [target]));
+        toast.updated("Field reset");
       },
     };
   }
@@ -1523,6 +583,13 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     await updateReview(() => write(`${path}/${kind}`, kind === "processed"
       ? { expected_revision: analysis.revision, approval_id: approval?.id }
       : { expected_revision: analysis.revision, review_id: reviewId !== undefined ? reviewId : (saved?.id ?? null), notes }));
+    if (kind === "approve") {
+      toast.saved("Shipment approved!");
+    } else if (kind === "reject") {
+      toast.updated("Shipment rejected");
+    } else {
+      toast.saved("Marked as processed");
+    }
   }
 
   async function handleApprove() {
@@ -1551,8 +618,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     item.documents.some((d) => d.classification === "final_bl")
   );
   const requiresFinalConfirmation = Boolean(
-    analysis.version_diff?.requires_final_confirmation ||
-    (hasFinalBL && item.state !== "approved")
+    hasFinalBL && item.final_bl_confirmed_revision !== analysis.revision
   );
 
   async function handleConfirmFinalBL() {
@@ -1562,11 +628,13 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       const res = await fetch(`/api/v1/intakes/${item.id}/confirm-final-bl`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: analysis.revision }),
       });
       if (!res.ok) {
         const data = (await res.json().catch(() => ({}))) as { detail?: string };
         throw new Error(data.detail || "Failed to confirm Final B/L");
       }
+      toast.saved("Final B/L confirmed!");
       startRefresh(() => router.refresh());
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to confirm Final B/L");
@@ -1577,7 +645,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
   async function handleCreateDraft() {
     setActionError("");
-    setSaving(true);
     try {
       await handleVerifyAll();
       toast.saved("Draft created! Review CDC verification and preview.");
@@ -1599,26 +666,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   }
 
   const editor = editorFor(activeFieldInfo?.target, activeFieldInfo?.uncertain);
-
-  function renderTreeItem(item: { id: string; name: string; row: number | null; label: string; issues: ReviewIssue[] }) {
-    const options = getDetectedOptions(item.name, item.row, item.issues[0]);
-    const selected = selectedValues[item.id];
-
-    return (
-      <ReviewTreeItem
-        key={item.id}
-        item={item}
-        options={options}
-        selected={selected}
-        autoSave={dialogAutoSave}
-        busy={busy}
-        onSave={async (val, choice, unit, currency) => {
-          setSelectedValues((prev) => ({ ...prev, [item.id]: { value: val, choice, unit, currency } }));
-          await handleConfirmGroup(item, val, choice, unit, currency);
-        }}
-      />
-    );
-  }
 
   const canvasOptions: DocumentSourceOption[] = options.map((opt) => {
     const optFile = sources.find((s) => s.id === opt.id);
@@ -1665,13 +712,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           {share}
           {editable && (
             <>
-              {groupedIssues.length > 0 && (
+              {(groupedIssues.length > 0 || analysis.extractions.some((doc) => doc.items.length > 0)) && (
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
                   disabled={busy}
-                  onClick={() => setReviewDialogOpen(true)}
+                  onClick={() => {
+                    setReviewDialogOpen(true);
+                  }}
                   className="border-amber-600/30 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-400 dark:hover:bg-amber-950/40 text-xs font-medium"
                   title="Review warnings and suggestions"
                 >
@@ -1744,6 +793,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       <nav className="flex border-b bg-background gap-1" aria-label="Case workspace tabs">
         <button
           type="button"
+          disabled={busy}
           onClick={() => setWorkspaceTab("documents")}
           aria-pressed={workspaceTab === "documents"}
           className={cn(
@@ -1758,6 +808,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         </button>
         <button
           type="button"
+          disabled={busy}
           onClick={() => setWorkspaceTab("verification")}
           aria-pressed={workspaceTab === "verification"}
           className={cn(
@@ -1844,166 +895,74 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       </header>
 
       {workspaceTab === "verification" ? (
-        <div
-          className="relative grid min-w-0 items-start gap-gutter lg:gap-gutter-desktop xl:grid-cols-12"
-          role="region"
-          aria-label="CDC Verification and Draft Preview"
-        >
-          {/* Left Column: Verification Controls */}
-          <div className="min-w-0 space-y-3 xl:col-span-5">
-            {/* 1. CDC Master List Selector */}
-            <div className="flex flex-wrap items-center justify-between gap-3 p-4 rounded-lg border bg-card">
-              <div className="flex items-center gap-3">
-                <div className="grid size-9 place-items-center rounded-md bg-primary/10 text-primary">
-                  <FileSpreadsheet className="size-5" />
-                </div>
-                <div>
-                  <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">CDC Master List</div>
-                  <div className="text-sm font-semibold">
-                    {analysis.selected_master?.approval_ref
-                      ? `Master List ${analysis.selected_master.approval_ref} (${analysis.selected_master.year})`
-                      : analysis.analyzed_master?.approval_ref
-                      ? `Master List ${analysis.analyzed_master.approval_ref} (${analysis.analyzed_master.year})`
-                      : "No Master List Selected"}
-                  </div>
-                </div>
-              </div>
-              <ReviewActions
-                caseId={item.id}
-                revision={analysis.revision}
-                selected={analysis.selected_master ?? master ?? undefined}
-                versions={versions}
-                companyId={item.company_id ?? undefined}
-                canRegister={admin}
-                pending={processing}
-                showReprocess={false}
-              />
-            </div>
-
-            {/* 2. CDC Item Matching */}
-            <div className="rounded-lg border bg-card overflow-hidden">
-              <div className="border-b px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <ShieldCheck className="size-4 text-primary" />
-                  <h2 className="text-sm font-semibold">CDC Item Matching</h2>
-                </div>
-                <div className="flex items-center gap-2">
-                  {analysis.outcome && <Status value={analysis.outcome} />}
-                </div>
-              </div>
-              <div className="p-4">
-                {candidates.length > 0 ? (
-                  <ReviewCdcMappings
-                    key={saved?.id ?? "none"}
-                    candidates={candidates}
-                    saved={saved}
-                    busy={busy}
-                    openInitially
-                    onSave={async (mappings) => {
-                      await saveReview({ ...reviewDraft(saved), mappings, verify_cdc_mappings: mappings.length > 0 });
-                      toast.updated("CDC mappings updated!");
-                    }}
-                  />
-                ) : (
-                  <p className="text-xs text-muted-foreground">
-                    No CDC candidates available. Select a CDC Master List above to run matching.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* 3. Audit Checks & Findings */}
-            <div className="rounded-lg border bg-card overflow-hidden">
-              <div className="border-b px-4 py-3 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="size-4 text-primary" />
-                  <h2 className="text-sm font-semibold">Audit Checks &amp; Findings</h2>
-                </div>
-                <span className="text-xs font-mono text-muted-foreground">
-                  {analysis.findings?.length ?? 0} checks
-                </span>
-              </div>
-              <div className="divide-y text-xs">
-                {analysis.findings && analysis.findings.length > 0 ? (
-                  analysis.findings.map((f, idx) => (
-                    <div key={idx} className="flex items-start justify-between gap-3 p-3">
-                      <div className="space-y-0.5 min-w-0">
-                        <div className="font-semibold text-foreground">
-                          {f.field ? documentFieldLabel(f.field) : f.group ? label(f.group) : `Check #${idx + 1}`}
-                        </div>
-                        {f.explanation && <div className="text-muted-foreground">{f.explanation}</div>}
-                      </div>
-                      <Status value={f.outcome} />
-                    </div>
-                  ))
-                ) : (
-                  <div className="p-4 text-xs text-muted-foreground">
-                    No findings recorded for this analysis revision.
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: PDF / Draft Print Preview Artboard */}
-          <div
-            tabIndex={-1}
-            role="region"
-            aria-label="Permit draft print preview"
-            className="min-w-0 scroll-mt-20 xl:col-span-7 xl:sticky xl:top-4 outline-none"
-          >
-            <PermitDraftPreview
-              invoiceExt={invoiceExt}
-              packingExt={packingExt}
-              blExt={analysis.extractions.find((e) => e.role === "final_bl") ?? analysis.extractions.find((e) => e.role === "draft_bl")}
-              selectedMaster={analysis.selected_master ?? analysis.analyzed_master ?? master ?? undefined}
-              mappings={saved?.mappings ?? []}
-              candidates={candidates}
-              reviewedFields={reviewedFields}
-              companyName={item.company}
-              reference={reference}
-              state={item.state}
-            />
-          </div>
-        </div>
+        <VerificationWorkspace key={`${item.id}:${analysis.revision}`} item={item} analysis={analysis} workflow={workflow} saved={saved} versions={versions} admin={admin}
+          onSaved={(review) => setRecent({ revision: analysis.revision, base: remoteId, review })} onPending={setSaving} />
       ) : (
         /* Main Review Workspace Layout */
-        <div
+        <ResizableSplit
           ref={workspaceGridRef}
-          className="relative grid min-w-0 items-start gap-gutter lg:gap-gutter-desktop xl:grid-cols-12"
           role="region"
           aria-label="Document evidence and comparisons"
-        >
-        <ConnectorLine containerRef={workspaceGridRef} active={!!selectedEvidence} />
-
-        {/* Left Column: Review & Extractions Panel */}
-        <div className="min-w-0 space-y-2 xl:col-span-5">
-          {item.state === "awaiting_updated_document" && (
-            <div className="rounded-md border border-amber-500/30 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-500/20 dark:bg-amber-950/30 dark:text-amber-200">
-              <div className="flex items-center gap-2 font-semibold">
-                <AlertCircle className="size-4 text-amber-600 shrink-0" />
-                <span>Awaiting Updated Document</span>
+          ariaLabel="Resize editor and preview"
+          defaultWidth={42}
+          minWidth={28}
+          maxWidth={75}
+          storageKey="harborway:intake:doc-split"
+          dividerHeightClassName="lg:h-[min(82vh,880px)]"
+          overlay={<ConnectorLine containerRef={workspaceGridRef} active={!!selectedEvidence} />}
+          left={
+            <div className="min-w-0 flex flex-col">
+              {/* Clean toolbar above left card - search field */}
+              <div className="flex items-center justify-between gap-2 h-9 px-1 mb-2">
+                <div className="relative w-full max-w-xs">
+                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 size-3.5 text-muted-foreground pointer-events-none" />
+                  <Input
+                    type="text"
+                    placeholder="Search intake fields & items..."
+                    value={docSearchQuery}
+                    onChange={(e) => setDocSearchQuery(e.target.value)}
+                    className="h-8 pl-8 pr-7 text-xs bg-white dark:bg-slate-900 border-border/80 rounded-md focus-visible:ring-1 focus-visible:ring-primary shadow-2xs"
+                  />
+                  {docSearchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setDocSearchQuery("")}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground p-0.5"
+                      aria-label="Clear search"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </div>
               </div>
-              <p className="mt-1 text-amber-800 dark:text-amber-300">
-                This shipment is missing required transport or consignment documentation. When an updated version arrives, it will be automatically reprocessed and reconciled.
-              </p>
-            </div>
-          )}
 
-          {item.state === "manual_matching" && (
-            <div className="rounded-md border border-rose-500/30 bg-rose-50/70 p-3 text-xs text-rose-900 dark:border-rose-500/20 dark:bg-rose-950/30 dark:text-rose-200">
-              <div className="flex items-center gap-2 font-semibold">
-                <AlertCircle className="size-4 text-rose-600 shrink-0" />
-                <span>Manual Matching Required</span>
-              </div>
-              <p className="mt-1 text-rose-800 dark:text-rose-300">
-                Matching identifiers between this intake and active shipments were conflicting or uncertain. No records were modified automatically.
-              </p>
-            </div>
-          )}
+              <div className="space-y-2">
+                {item.state === "awaiting_updated_document" && (
+                  <div className="rounded-md border border-amber-500/30 bg-amber-50/70 p-3 text-xs text-amber-900 dark:border-amber-500/20 dark:bg-amber-950/30 dark:text-amber-200">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertCircle className="size-4 text-amber-600 shrink-0" />
+                      <span>Awaiting Updated Document</span>
+                    </div>
+                    <p className="mt-1 text-amber-800 dark:text-amber-300">
+                      This shipment is missing required transport or consignment documentation. When an updated version arrives, it will be automatically reprocessed and reconciled.
+                    </p>
+                  </div>
+                )}
 
-          <div className="panel overflow-hidden">
-            {/* Main Document Intake Tabs */}
+                {item.state === "manual_matching" && (
+                  <div className="rounded-md border border-rose-500/30 bg-rose-50/70 p-3 text-xs text-rose-900 dark:border-rose-500/20 dark:bg-rose-950/30 dark:text-rose-200">
+                    <div className="flex items-center gap-2 font-semibold">
+                      <AlertCircle className="size-4 text-rose-600 shrink-0" />
+                      <span>Manual Matching Required</span>
+                    </div>
+                    <p className="mt-1 text-rose-800 dark:text-rose-300">
+                      Matching identifiers between this intake and active shipments were conflicting or uncertain. No records were modified automatically.
+                    </p>
+                  </div>
+                )}
+
+                <div className="panel overflow-hidden">
+                {/* Main Document Intake Tabs */}
             <nav className="flex border-b bg-background px-2" aria-label="Document intake tabs">
               {mainTabItems.map((tab) => {
                 const active = activeMainTab === tab.key;
@@ -2119,6 +1078,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                 <ReviewCdcMappings key={saved?.id ?? "none"} candidates={candidates} saved={saved} busy={busy}
                   onSave={async (mappings) => {
                     await saveReview({ ...reviewDraft(saved), mappings, verify_cdc_mappings: mappings.length > 0 });
+                    toast.updated("CDC mappings updated!");
                   }} />
                 </>}
               document={activeDocument}
@@ -2133,6 +1093,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                 setSelection(undefined);
                 setActiveFieldInfo(undefined);
               }}
+              searchQuery={docSearchQuery}
             />
           </div>
           <nav aria-label="Review issues" className="grid grid-cols-[1fr_auto_1fr] items-center px-1">
@@ -2149,9 +1110,15 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               onClick={() => { if (nextIssue) showIssue(nextIssue); }}><ChevronRight aria-hidden /></Button>
           </nav>
         </div>
-
-        {/* Right Column: Document Canvas Artboard */}
-        <div ref={source} tabIndex={-1} role="region" aria-label="Source viewer" className="min-w-0 scroll-mt-20 xl:col-span-7 xl:sticky xl:top-4 outline-none">
+        </div>
+      }
+      right={
+        <div ref={source} tabIndex={-1} role="region" aria-label="Source viewer" className="min-w-0 flex flex-col scroll-mt-20 lg:sticky lg:top-4 outline-none">
+          <div className="flex items-center justify-between h-9 px-1 mb-2">
+            <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              Original Document Viewer
+            </span>
+          </div>
           <DocumentCanvas
             key={activeFieldInfo?.target?.name === "consignee" ? reviewKey(activeFieldInfo.target) : current?.key}
             file={file ? { id: file.id, name: file.name, fileType: file.fileType as "PDF" | "Excel" | "CDC", url: file.url, version_number: file.version_number, classification: file.classification } : undefined}
@@ -2163,180 +1130,25 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             editor={editor}
           />
         </div>
-      </div>
-      )}
+      }
+    />
+    )}
 
       <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
-        <DialogContent className="max-w-3xl p-0 overflow-hidden sm:max-w-3xl">
-          <div className="flex items-center justify-between border-b px-5 py-3.5 bg-card">
-            <div>
-              <DialogTitle className="text-sm font-semibold text-foreground">
-                Review Warnings ({groupedIssues.length})
-              </DialogTitle>
-              <p className="text-[11px] text-muted-foreground mt-0.5">
-                All detected values across shipment documents organized by hierarchy. Select or confirm values to proceed.
-              </p>
-            </div>
-
-            {/* Close icon top right */}
+        <DialogContent className="max-w-3xl sm:max-w-3xl" aria-describedby={undefined}>
+          <div className="flex items-center justify-between gap-3 border-b p-4">
+            <DialogTitle className="text-sm font-semibold">Review Warnings</DialogTitle>
             <DialogCloseButton label="Close review dialog" />
           </div>
-
-          {/* AI Auto-Suggestion & CDC Rules Assistant Banner */}
-          <div className="border-b bg-sky-500/5 px-5 py-2.5 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <Sparkles className="size-4 text-sky-600 dark:text-sky-400 shrink-0" />
-              <div>
-                <div className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                  <span>AI Auto-Suggestion</span>
-                  <span className="rounded-md bg-sky-100 text-sky-800 dark:bg-sky-950 dark:text-sky-300 px-1.5 py-0.2 text-[10px] font-medium border border-sky-200 dark:border-sky-800">
-                    CDC Rule Engine
-                  </span>
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  Collect original docs &amp; auto-prepare description, unit, unit price, CDC no, NW &amp; GW.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <label className="flex items-center gap-1.5 text-xs font-medium cursor-pointer select-none text-foreground">
-                <input
-                  type="checkbox"
-                  checked={cdcAutoRuleEnabled}
-                  onChange={(e) => setCdcAutoRuleEnabled(e.target.checked)}
-                  className="rounded border-border text-primary focus:ring-primary size-3.5"
-                />
-                <span>CDC Rule Checkbox</span>
-              </label>
-
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={busy}
-                onClick={handleApplyCdcRules}
-                className="text-xs font-semibold h-7 gap-1 border-sky-300 bg-sky-50/80 text-sky-900 hover:bg-sky-100 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200 cursor-pointer shadow-2xs"
-              >
-                <Sparkles size={12} className="text-sky-600" /> Auto-prepare Draft
-              </Button>
-            </div>
-          </div>
-
-          <div className="max-h-[65vh] overflow-y-auto px-5 py-3 space-y-4">
-            {groupedIssues.length === 0 ? (
-              <div className="py-8 text-center text-xs text-muted-foreground">
-                <Check size={20} className="mx-auto mb-2 text-emerald-600" />
-                All warnings have been reviewed and confirmed.
-              </div>
-            ) : (
-              treeBranches.map((branch) => (
-                <div key={branch.id} className="space-y-1">
-                  {/* Category Folder Header */}
-                  <div className="flex items-center gap-2 py-1 text-xs font-semibold text-foreground">
-                    <Folder size={15} className="text-amber-500 fill-amber-500/20 shrink-0" />
-                    <span>{branch.title}</span>
-                    <span className="rounded-full bg-muted/80 px-1.5 py-0.2 text-[10px] font-mono text-muted-foreground">
-                      {branch.count}
-                    </span>
-                  </div>
-
-                  {/* Direct Branch Leaf Items */}
-                  {branch.items && branch.items.length > 0 && (
-                    <div className="space-y-1 py-0.5 pl-2">
-                      {branch.items.map((item) => renderTreeItem(item))}
-                    </div>
-                  )}
-
-                  {/* Row Groups (Line Items) */}
-                  {branch.rowGroups && branch.rowGroups.length > 0 && (
-                    <div className="space-y-2.5 py-1 pl-2">
-                      {branch.rowGroups.map((rg) => (
-                        <div key={rg.row} className="space-y-1">
-                          {/* Row Folder Header */}
-                          <div className="flex items-center gap-2 py-0.5 text-xs font-medium text-foreground">
-                            <Folder size={14} className="text-amber-600/70 fill-amber-600/10 shrink-0" />
-                            <span className="font-semibold">Row {rg.row}</span>
-                            {rg.description && (
-                              <span className="text-muted-foreground font-normal truncate max-w-[280px]" title={rg.description}>
-                                · {rg.description}
-                              </span>
-                            )}
-                            <span className="rounded-full bg-muted/60 px-1.5 py-0.2 text-[9px] font-mono text-muted-foreground">
-                              {rg.items.length}
-                            </span>
-                          </div>
-
-                          {/* Row Leaf Items */}
-                          <div className="space-y-1 py-0.5 pl-3">
-                            {rg.items.map((item) => renderTreeItem(item))}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))
-            )}
-          </div>
-
-          <div className="flex items-center justify-between border-t px-5 py-2.5 bg-muted/20">
-            {/* Auto-save Switcher in bottom left */}
-            <div className="flex items-center gap-2 select-none" title="Toggle automatic saving on edits">
-              <span className="text-xs font-medium text-muted-foreground">Auto save</span>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={dialogAutoSave}
-                aria-label="Toggle auto save"
-                onClick={() => {
-                  setDialogAutoSave((prev) => {
-                    const next = !prev;
-                    try {
-                      localStorage.setItem("harborway-dialog-autosave", String(next));
-                    } catch {}
-                    return next;
-                  });
-                }}
-                className={cn(
-                  "relative inline-flex h-4.5 w-8 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
-                  dialogAutoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
-                )}
-              >
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "pointer-events-none inline-block size-3.5 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
-                    dialogAutoSave ? "translate-x-4" : "translate-x-0.5"
-                  )}
-                />
-              </button>
-            </div>
-
-            {groupedIssues.length > 0 ? (
-              <Button
-                type="button"
-                size="sm"
-                disabled={busy}
-                onClick={async () => {
-                  await handleVerifyAll();
-                  setReviewDialogOpen(false);
-                }}
-                className="text-xs font-semibold shadow-xs h-8 cursor-pointer"
-              >
-                <Check size={13} className="mr-1" /> Confirm all ({groupedIssues.length})
-              </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => setReviewDialogOpen(false)}
-                className="text-xs h-8 cursor-pointer"
-              >
-                Done
-              </Button>
-            )}
+          <div className="space-y-4 p-4">
+            <label className="flex gap-2 text-xs font-medium">
+              <input type="checkbox" checked={cdcAutoRuleEnabled} onChange={(event) => setCdcAutoRuleEnabled(event.target.checked)} />
+              AI Auto-Suggestion with CDC Rules
+            </label>
+            <p className="text-xs text-muted-foreground">Compare cited document values and CDC candidates. Each approval requires your review and reason.</p>
+            <AutoSuggestionReview analysis={analysis} workflow={workflow} saved={saved} busy={busy}
+              enabled={cdcAutoRuleEnabled} onSave={saveReview}
+              onInspect={(cite) => { setReviewDialogOpen(false); inspect(cite); }} />
           </div>
         </DialogContent>
       </Dialog>
@@ -2404,8 +1216,10 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
                 issue_actions: reviewDraft(saved).issue_actions.filter((action) => action.key !== key),
                 resolutions: [...(saved?.resolutions ?? []).filter((entry) => entry.key !== key), { key, note }],
               });
+              toast.updated("Issue resolved");
             }} onRequestCorrection={async (note) => {
               await saveReview({ ...reviewDraft(saved), request_correction: note });
+              toast.updated("Correction requested");
             }}
             onReject={(note) => decide("reject", note)} />
         </div>

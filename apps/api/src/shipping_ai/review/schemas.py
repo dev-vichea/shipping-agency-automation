@@ -104,6 +104,9 @@ class LineComparison(BaseModel):
 class MasterItem(BaseModel):
     row: int
     serial: str | None = None
+    item_code: ExtractedField = Field(default_factory=ExtractedField)
+    hs_code: ExtractedField = Field(default_factory=ExtractedField)
+    specification: ExtractedField = Field(default_factory=ExtractedField)
     category: str | None = None
     description: ExtractedField
     unit: ExtractedField
@@ -134,6 +137,7 @@ class MasterView(BaseModel):
     balance_as_of: date | None
     verified_by: UUID
     created_at: datetime
+    import_config: dict | None = None
 
 
 class Candidate(BaseModel):
@@ -143,6 +147,13 @@ class Candidate(BaseModel):
     description: str
     score: float
     evidence: Evidence
+    serial: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+    checks: list[Finding] = Field(default_factory=list)
+    unit: str | None = None
+    remaining_quantity: str | None = None
+    unit_price: str | None = None
+    currency: str | None = None
 
 
 class ReviewView(BaseModel):

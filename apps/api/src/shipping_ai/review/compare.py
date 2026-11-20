@@ -81,8 +81,8 @@ def compare(group, name, left, right, *, required=False, suffix=""):
         if a is None or b is None:
             return result("NEEDS_REVIEW", "A source number could not be validated.")
         if name in {"unit_price", "amount"}:
-            curr_left = left.currency or ("USD" if group == "cdc" else None)
-            curr_right = right.currency or ("USD" if group == "cdc" else None)
+            curr_left = left.currency
+            curr_right = right.currency
             if not curr_left or not curr_right:
                 return result(
                     "NEEDS_REVIEW", "Currency is missing; the amounts cannot be compared."

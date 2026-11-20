@@ -8,7 +8,7 @@ import type { ReviewAnalysis, ReviewField, ReviewWorkflow, StaffReview } from "@
 import { documentFieldLabel, timestamp } from "@/lib/format";
 
 export type ReviewDraft = Pick<StaffReview, "corrections" | "resolutions" | "mappings" | "verify_cdc_mappings" | "request_correction">
-  & { issue_actions: NonNullable<StaffReview["issue_actions"]> };
+  & { issue_actions: NonNullable<StaffReview["issue_actions"]>; finding_decisions?: StaffReview["finding_decisions"] };
 
 export function reviewKey({ document_id, role, row, name }: ReviewField) {
   return `field:${document_id}:${role}:${row ?? 0}:${name}`;
@@ -22,6 +22,7 @@ export function reviewDraft(saved: StaffReview | null): ReviewDraft {
     verify_cdc_mappings: saved?.verify_cdc_mappings ?? false,
     issue_actions: saved?.issue_actions ?? [],
     request_correction: saved?.request_correction ?? null,
+    finding_decisions: saved?.finding_decisions ?? [],
   };
 }
 

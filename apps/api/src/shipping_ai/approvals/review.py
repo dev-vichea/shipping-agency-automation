@@ -10,13 +10,20 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 from sqlalchemy import select
 
 from shipping_ai.ai.translation import overlay
-from shipping_ai.cdc.master import check_cdc
+from shipping_ai.cdc.master import check_cdc, matches_master_company
+from shipping_ai.core.access import master_access
 from shipping_ai.documents.languages import languages, token_signature
 from shipping_ai.intakes.schemas import SafeText
 from shipping_ai.models import CdcMasterVersion, DocumentExtraction, ReviewSnapshot, StaffReview
 from shipping_ai.permits.drafts import prepare
 from shipping_ai.review.compare import AMOUNT_TOLERANCE, review_documents
 from shipping_ai.review.schemas import EnglishText, Extraction, Finding, MasterItem
+from shipping_ai.review.suggestions import (
+    FindingDecision,
+    SourceRef,
+    decision_corrections,
+    source_field,
+)
 from shipping_ai.review.values import clean, currency, decimal, field, unit, usable
 
 from .consignee import ConsigneeRef, consignee_options
@@ -68,6 +75,9 @@ class Correction(BaseModel):
     issue_key: IssueKey | None = None
     alternative_index: int | None = Field(default=None, ge=0)
     consignee_source: ConsigneeRef | None = None
+    suggestion_source: SourceRef | None = None
+    finding_key: str | None = None
+    confirmed: bool = True
 
 
 class Resolution(BaseModel):
@@ -90,6 +100,7 @@ class SaveReview(Revision):
     verify_cdc_mappings: bool = False
     request_correction: Note | None = None
     issue_actions: list[IssueAction] = Field(default_factory=list, max_length=300)
+    finding_decisions: list[FindingDecision] = Field(default_factory=list, max_length=300)
 
 
 def digest(payload: dict) -> str:
@@ -164,6 +175,7 @@ def apply_corrections(docs, corrections):
     index = {(doc.document_id, doc.role): doc for doc in docs}
     seen = set()
     changes = []
+    printed_sources = [doc.model_copy(deep=True) for doc in docs]
     # Snapshot the printed names before applying edits to a related document in this review.
     printed_consignees = (
         consignee_options(docs) if any(edit.consignee_source for edit in corrections) else []
@@ -180,7 +192,18 @@ def apply_corrections(docs, corrections):
         original = values[edit.name]
         citations = original.evidence
         dimension, code = original.unit, original.currency
-        if edit.consignee_source is not None:
+        if edit.suggestion_source is not None:
+            selected = source_field(printed_sources, edit.suggestion_source)
+            if (
+                selected is None or not selected.evidence
+                or edit.suggestion_source.name not in {edit.name, "supplier" if edit.name == "shipper" else edit.name}
+                or (edit.value, edit.unit, edit.currency) != (selected.value, selected.unit, selected.currency)
+                or edit.alternative_index is not None or edit.consignee_source is not None
+            ):
+                raise HTTPException(422, "Choose an unchanged cited source from the current analysis")
+            citations = selected.evidence
+            dimension, code = selected.unit, selected.currency
+        elif edit.consignee_source is not None:
             source = next(
                 (
                     candidate
@@ -439,6 +462,18 @@ def apply_guided_actions(issues, docs, request):
 
 
 def review_payload(db, snapshot, docs, request, previous=None):
+    original_findings = [Finding.model_validate(check) for check in snapshot.findings]
+    request.corrections = [entry for entry in request.corrections if entry.finding_key is None]
+    suggested_edits = decision_corrections(docs, original_findings, request.finding_decisions)
+    # Replay explicit decisions when later fields are saved. Conflicting edits must be reviewed.
+    for edit in suggested_edits:
+        correction = Correction.model_validate(edit)
+        ref = (correction.document_id, correction.role, correction.row, correction.name)
+        existing = next((entry for entry in request.corrections if (entry.document_id, entry.role, entry.row, entry.name) == ref), None)
+        if existing and (existing.value, existing.unit, existing.currency) != (correction.value, correction.unit, correction.currency):
+            raise HTTPException(422, "Remove the old finding decision before changing its selected value")
+        if not existing:
+            request.corrections.append(correction)
     initial_issues = guided_queue(snapshot, docs, previous)
     initial_keys = {issue.key for issue in initial_issues}
     linked_issues = {edit.issue_key for edit in request.corrections if edit.issue_key}
@@ -449,6 +484,10 @@ def review_payload(db, snapshot, docs, request, previous=None):
     if len(resolutions) != len(request.resolutions):
         raise HTTPException(422, "Each finding can be resolved once")
     blockers, roles, findings = blockers_for(docs, resolutions)
+    blockers.extend(
+        f"Confirm the saved {edit.name.replace('_', ' ')} edit before approval."
+        for edit in request.corrections if not edit.confirmed
+    )
     incomplete = [
         Finding.model_validate(check)
         for check in snapshot.findings
@@ -473,25 +512,55 @@ def review_payload(db, snapshot, docs, request, previous=None):
         )
     invoice = roles.get("invoice")
     master = (
-        db.get(CdcMasterVersion, snapshot.cdc_master_version_id)
+        db.scalar(select(CdcMasterVersion).where(CdcMasterVersion.id == snapshot.cdc_master_version_id, master_access(db)))
         if snapshot.cdc_master_version_id
         else None
     )
-    cdc_findings, candidates = check_cdc(invoice, master)
+    # Identity decisions and compliance checks remain separate. Selecting an alternative
+    # must check that alternative, rather than the highest ranked text suggestion.
     master_rows = {item["row"] for item in master.items} if master else set()
-    options = {(c.invoice_document_id, c.invoice_row, c.master_row) for c in candidates} | (
+    options = (
         {(invoice.document_id, item.row, m_row) for item in invoice.items for m_row in master_rows}
         if invoice and master
         else set()
     )
     selected = {(m.invoice_row, m.master_row) for m in request.mappings}
+    if len({entry.invoice_row for entry in request.mappings}) != len(request.mappings):
+        raise HTTPException(422, "Choose one CDC item per invoice row")
+    for decision in request.finding_decisions:
+        if not (decision.key.startswith("cdc.row.") and decision.key.endswith(".mapping")):
+            continue
+        try:
+            invoice_row = int(decision.key.split(".")[2])
+        except ValueError:
+            raise HTTPException(422, "Invalid invoice row") from None
+        if not invoice or invoice_row not in {item.row for item in invoice.items}:
+            raise HTTPException(422, "Choose a row from the current invoice")
+        selected = {(row, target) for row, target in selected if row != invoice_row}
+        if decision.action == "approved":
+            if decision.master_row not in master_rows:
+                raise HTTPException(422, "Choose an item in the analyzed CDC version")
+            selected.add((invoice_row, decision.master_row))
+        elif decision.master_row is not None:
+            raise HTTPException(422, "Only an approved mapping may select a CDC row")
+    request.mappings = [Mapping(invoice_row=row, master_row=target) for row, target in sorted(selected)]
+    if any(decision.action == "approved" and decision.master_row for decision in request.finding_decisions):
+        request.verify_cdc_mappings = True
     if selected and not request.verify_cdc_mappings:
         raise HTTPException(422, "Confirm the selected CDC rows were checked against the source.")
+    if selected and not matches_master_company(invoice, master):
+        raise HTTPException(422, "The CDC version does not belong to the invoice company")
     if len({m.invoice_row for m in request.mappings}) != len(request.mappings) or any(
         invoice is None or (invoice.document_id, row, master_row) not in options
         for row, master_row in selected
     ):
         raise HTTPException(422, "Choose one current CDC candidate per invoice row")
+    cdc_findings, candidates = check_cdc(
+        invoice, master, selections={row: target for row, target in selected}
+    )
+    cdc_blockers = [check.explanation for check in cdc_findings if check.outcome in {"MISMATCH", "NEEDS_REVIEW"}]
+    if invoice and len(selected) != len(invoice.items):
+        cdc_blockers.append("Each invoice item needs an individually verified CDC mapping.")
     if request.request_correction:
         blockers.insert(
             0, "A staff correction was requested. Save a new review after resolving it."
@@ -545,7 +614,7 @@ def review_payload(db, snapshot, docs, request, previous=None):
     }
 
     permit_pending, cdc_names = None, []
-    if not blockers:
+    if not blockers and not cdc_blockers:
         packing = roles["packing_list"]
         arguments, permit_pending = prepare(
             invoice, packing, master, request.model_dump()["mappings"]
@@ -570,6 +639,8 @@ def review_payload(db, snapshot, docs, request, previous=None):
                     invoice.items, arguments[2], arguments[4], strict=True
                 )
             ]
+    elif cdc_blockers:
+        permit_pending = cdc_blockers[0]
     payload = {
         **request.model_dump(mode="json", exclude={"expected_review_id"}),
         "analysis_id": str(snapshot.id),
@@ -584,6 +655,8 @@ def review_payload(db, snapshot, docs, request, previous=None):
         "reviewed_issue_keys": sorted(initial_keys | extra.keys()),
         "additional_issues": [issue.model_dump(mode="json") for issue in extra.values()],
         "cdc_findings": [check.model_dump(mode="json") for check in cdc_findings],
+        "cdc_ready": not cdc_blockers,
+        "cdc_blockers": cdc_blockers,
         "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
         "blockers": blockers,
         "permit_pending": permit_pending,

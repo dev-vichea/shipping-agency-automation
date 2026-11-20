@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import column, func, or_, select, true
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from starlette.concurrency import run_in_threadpool
@@ -286,6 +286,7 @@ def case_detail(case_id: UUID, db: DB, _user: Staff):
         "messages": messages,
         "documents": documents,
         "import_id": import_id,
+        "final_bl_confirmed_revision": case.final_bl_confirmed_revision,
     }
 
 
@@ -717,23 +718,29 @@ def match_shipment_endpoint(case_id: UUID, request: MatchShipment, db: DB, user:
         return {"status": "confirmed_new", "case_id": case.id}
 
 
+class ConfirmFinalBl(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
 @router.post("/{case_id}/confirm-final-bl", dependencies=mutation)
-def confirm_final_bl(case_id: UUID, db: DB, user: Staff):
+def confirm_final_bl(case_id: UUID, payload: ConfirmFinalBl, db: DB, user: Staff):
     case = visible_case(db, case_id, lock=True)
+    snapshot = db.scalar(select(ReviewSnapshot.id).where(ReviewSnapshot.intake_case_id == case.id, ReviewSnapshot.revision == case.analysis_revision))
+    if payload.expected_revision != case.analysis_revision or snapshot is None:
+        raise HTTPException(409, "Refresh and review the current document revision before confirming the Final B/L")
     all_docs = db.scalars(select(Document).where(Document.intake_case_id == case.id)).all()
     superseded = {d.parent_version_id for d in all_docs if d.parent_version_id}
     active_docs = [d for d in all_docs if d.id not in superseded]
 
-    final_bl_doc = next((d for d in active_docs if d.classification == "final_bl"), None)
-    if not final_bl_doc:
-        raise HTTPException(422, "No active Final B/L document found for confirmation.")
-
-    record = db.scalar(select(ImportRecord).where(ImportRecord.intake_case_id == case.id))
-    if record:
-        record.etd_status = "confirmed" if record.etd else "pending"
-        record.eta_status = "confirmed" if record.eta else "pending"
-    case.state = "approved" if record else "ready_for_approval"
-    case.review_reason = "Final B/L confirmed by staff."
+    final_bl_docs = [d for d in active_docs if d.classification == "final_bl"]
+    if len(final_bl_docs) != 1:
+        raise HTTPException(422, "Choose one unambiguous active Final B/L document for confirmation.")
+    if case.final_bl_confirmed_revision == case.analysis_revision:
+        return {"status": "confirmed", "case_id": case.id}
+    case.final_bl_confirmed_revision = case.analysis_revision
+    # Final-document receipt is a separate scope from document/CDC review and intake approval.
+    # Preserve open findings and approved business dates until their own reviewed approval.
 
     db.add(
         ActivityEvent(
@@ -741,7 +748,7 @@ def confirm_final_bl(case_id: UUID, db: DB, user: Staff):
             actor_id=user.id,
             intake_case_id=case.id,
             event_type="final_bl_confirmed",
-            before_state="needs_review",
+            before_state=case.state,
             after_state=case.state,
         )
     )

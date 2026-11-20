@@ -1,5 +1,7 @@
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from hashlib import sha256
+from json import dumps
 from pathlib import PurePath
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -22,6 +24,7 @@ from shipping_ai.intakes.schemas import Key, Label
 from shipping_ai.models import CdcMasterVersion, Company
 from shipping_ai.review.schemas import MasterItem, MasterView
 
+from .importer import WorkbookSelection, parse_selection, workbook_catalog
 from .master import (
     approval_key,
     classify_item_description,
@@ -43,6 +46,18 @@ class RegisterMaster(BaseModel):
     approval_ref: Key
     balance_as_of: date | None = None
     verified: bool
+    selection: WorkbookSelection | None = None
+
+
+@router.post("/worksheets", dependencies=[Depends(browser_origin)])
+async def inspect_worksheets(request: Request, db: DB, _user: Staff):
+    require_workspace(db, admin=True)
+    async with request.form(max_files=1, max_fields=0) as form:
+        data, name = read_preview_file(form.get("file"), {".xls", ".xlsx"}, "Upload an XLS or XLSX workbook")
+        try:
+            return await run_in_threadpool(workbook_catalog, data, name)
+        except Exception:
+            raise HTTPException(422, "The workbook is unreadable or exceeds the worksheet limits") from None
 
 
 def view(master: CdcMasterVersion | None) -> MasterView | None:
@@ -81,8 +96,8 @@ async def inspect_workbook(request: Request, db: DB, _user: Staff):
         != "multipart/form-data"
     ):
         raise HTTPException(415, "Use multipart/form-data")
-    async with request.form(max_files=2, max_fields=0) as form:
-        if set(form) - {"file", "approval_pdf"} or len(form.multi_items()) != len(form):
+    async with request.form(max_files=2, max_fields=1) as form:
+        if set(form) - {"file", "approval_pdf", "selection"} or len(form.multi_items()) != len(form):
             raise HTTPException(422, "Upload one workbook and at most one approval PDF")
         return await run_in_threadpool(
             inspect_files,
@@ -90,10 +105,11 @@ async def inspect_workbook(request: Request, db: DB, _user: Staff):
             workspace,
             form.get("file"),
             form.get("approval_pdf"),
+            form.get("selection"),
         )
 
 
-def inspect_files(db, workspace, workbook, approval_pdf):
+def inspect_files(db, workspace, workbook, approval_pdf, selection_json=None):
     data, name = read_preview_file(
         workbook, {".xls", ".xlsx"}, "Upload one XLS or XLSX Master List"
     )
@@ -103,7 +119,8 @@ def inspect_files(db, workspace, workbook, approval_pdf):
         else None
     )
     try:
-        result = preview(data, name, approval)
+        selection = WorkbookSelection.model_validate_json(selection_json) if selection_json else None
+        result = preview(data, name, approval, selection=selection)
     except Exception:
         raise HTTPException(
             422, "The workbook is unreadable or does not use a supported CDC layout"
@@ -153,7 +170,7 @@ async def register(request: Request, response: Response, db: DB, user: Staff):
         != "multipart/form-data"
     ):
         raise HTTPException(415, "Use multipart/form-data")
-    async with request.form(max_files=1, max_fields=6, max_part_size=2048) as form:
+    async with request.form(max_files=1, max_fields=7, max_part_size=4096) as form:
         upload = form.get("file")
         parts = [(key, val) for key, val in form.multi_items() if key != "file"]
         if not isinstance(upload, UploadFile) or not (upload.filename or "").lower().endswith(
@@ -163,7 +180,10 @@ async def register(request: Request, response: Response, db: DB, user: Staff):
         if len(dict(parts)) != len(parts):
             raise HTTPException(422, "Repeated master list metadata")
         try:
-            metadata = RegisterMaster.model_validate(dict(parts))
+            values = dict(parts)
+            if values.get("selection"):
+                values["selection"] = WorkbookSelection.model_validate_json(values["selection"])
+            metadata = RegisterMaster.model_validate(values)
         except ValidationError:
             raise HTTPException(422, "Invalid master list metadata") from None
         if not metadata.verified:
@@ -183,7 +203,10 @@ def save_master(db, user_id, upload, metadata, response):
         raise HTTPException(exc.status, str(exc)) from None
     source_id = uuid4()
     try:
-        parsed = parse_master(store.path(saved.sha256).read_bytes(), saved.name, source_id)
+        data = store.path(saved.sha256).read_bytes()
+        parsed = parse_selection(data, saved.name, source_id, metadata.selection) if metadata.selection else parse_master(data, saved.name, source_id)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     except Exception:
         raise HTTPException(
             422, "The workbook is unreadable or does not use a supported CDC layout"
@@ -224,6 +247,8 @@ def save_master(db, user_id, upload, metadata, response):
         balance_as_of=metadata.balance_as_of,
         verified_by=user_id,
         items=[item.model_dump(mode="json") for item in parsed.items],
+        import_config=metadata.selection.model_dump(mode="json") if metadata.selection else None,
+        import_key=sha256(dumps(metadata.selection.model_dump(mode="json"), sort_keys=True).encode()).hexdigest() if metadata.selection else "auto",
     )
     master_id = db.scalar(
         insert(CdcMasterVersion)
@@ -239,6 +264,7 @@ def save_master(db, user_id, upload, metadata, response):
                 year=metadata.year,
                 approval_ref=ref,
                 sha256=saved.sha256,
+                import_key=values["import_key"],
             )
         )
         if company and master.company_id not in (None, company.id):

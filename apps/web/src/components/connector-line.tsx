@@ -112,7 +112,7 @@ export function ConnectorLine({
     <svg
       aria-hidden="true"
       data-evidence-connector
-      className="pointer-events-none absolute inset-0 z-30 hidden h-full w-full overflow-visible xl:block"
+      className="pointer-events-none absolute inset-0 z-30 hidden h-full w-full overflow-visible lg:block"
     >
       <defs>
         <linearGradient id="connector-gradient" x1="0%" y1="0%" x2="100%" y2="0%">

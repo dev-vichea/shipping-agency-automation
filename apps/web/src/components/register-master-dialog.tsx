@@ -14,6 +14,7 @@ import { write } from "@/lib/client-api";
 import type { Company, MasterVersion } from "@/lib/contracts";
 import { label } from "@/lib/format";
 import { scopedPath } from "@/lib/scope";
+import { CdcWorkbookMapping, type WorkbookSelection } from "@/components/cdc-workbook-mapping";
 
 const fields = [
   { key: "company", name: "Company on approval", type: "text", maxLength: 254 },
@@ -37,6 +38,7 @@ type Preview = {
   layout: string;
   warnings: string[];
   ai_state: "disabled" | "not_needed" | "reviewed" | "unavailable";
+  items?: { row: number; description: { value: string | null }; unit: { value: string | null }; approved_quantity: { value: string | null } }[];
 };
 type Inspection = {
   workbook: File;
@@ -97,6 +99,8 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
   const [values, setValues] = useState(emptyValues);
   const [company, setCompany] = useState("");
   const [verified, setVerified] = useState(false);
+  const [selection, setSelection] = useState<WorkbookSelection>();
+  const [mappingInvalid, setMappingInvalid] = useState(false);
   const { busy, error, submit } = useWrite();
   const current = inspection?.workbook === workbook && inspection?.approval === approval && inspection?.revision === revision ? inspection : undefined;
   const pending = !!workbook && !current;
@@ -110,6 +114,7 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
     const controller = new AbortController();
     const data = new FormData();
     data.set("file", workbook);
+    if (selection) data.set("selection", JSON.stringify(selection));
     if (approval) data.set("approval_pdf", approval);
     void write<Preview>("/cdc/versions/preview", data, controller.signal)
       .then((result) => {
@@ -120,7 +125,7 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
         setInspection({ workbook, approval, revision, error: cause instanceof Error ? cause.message : "Could not inspect this workbook." });
       });
     return () => controller.abort();
-  }, [workbook, approval, revision]);
+  }, [workbook, approval, revision, selection]);
 
   function applySuggestions() {
     if (!result) return;
@@ -139,6 +144,7 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     form.delete("approval_pdf");
+    if (selection) form.set("selection", JSON.stringify(selection));
     if (!form.get("balance_as_of")) form.delete("balance_as_of");
     void submit(async () => {
       const version = await write<MasterVersion>("/cdc/versions", form);
@@ -153,6 +159,8 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
           <Label htmlFor={`${prefix}-workbook`}>Master List workbook</Label>
           <Input id={`${prefix}-workbook`} name="file" type="file" accept=".xls,.xlsx" required onChange={(event) => {
             setWorkbook(event.target.files?.[0]);
+            setSelection(undefined);
+            setMappingInvalid(false);
             setValues(emptyValues);
             setCompany("");
             setVerified(false);
@@ -171,6 +179,10 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
         </div>
       </div>
 
+      {workbook && <CdcWorkbookMapping key={`${workbook.name}:${workbook.size}:${workbook.lastModified}`} workbook={workbook} onChange={(next, invalid) => {
+        setSelection(next); setMappingInvalid(invalid); setVerified(false); setRevision((previous) => previous + 1);
+      }} />}
+
       {pending && <div role="status" className="flex items-center gap-2 rounded-lg border bg-accent px-3 py-2 text-sm text-primary">
         <ScanSearch size={16} aria-hidden className="motion-safe:animate-pulse" /> Reading the workbook and looking for approval details…
       </div>}
@@ -185,6 +197,7 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
         </div>
         {result.ai_state === "unavailable" && <p className="text-xs text-muted-foreground">AI suggestions are temporarily unavailable. Workbook and OCR findings are shown below.</p>}
         {result.warnings.map((warning) => <p key={warning} className="text-xs text-warning">{warning}</p>)}
+        {!!result.items?.length && <details className="text-xs"><summary>Preview imported items</summary><ul className="space-y-1 pt-2">{result.items.map((item) => <li key={item.row}>Row {item.row} · {item.description.value} · {item.approved_quantity.value ?? "Unknown quantity"} {item.unit.value}</li>)}</ul></details>}
       </section>}
 
       {companyId && <input type="hidden" name="company_id" value={companyId} />}
@@ -226,7 +239,7 @@ function RegisterMasterForm({ companyId, companies, onRegistered }: {
     </div>
     <div className="sticky bottom-0 flex flex-wrap justify-end gap-2 border-t bg-card px-5 py-3">
       <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-      <Button type="submit" disabled={busy || pending || !workbook || !verified}>{busy ? "Registering…" : "Register workbook"}</Button>
+      <Button type="submit" disabled={busy || pending || mappingInvalid || !!current?.error || !workbook || !verified}>{busy ? "Registering…" : "Register workbook"}</Button>
     </div>
   </form>;
 }

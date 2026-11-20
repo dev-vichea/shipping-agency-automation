@@ -11,6 +11,8 @@ import type { CaseDetail, CdcItemName, Evidence, ExtractedField, Extraction, Rev
 import { documentFieldLabel, intakeField, invoiceReference, location } from "@/lib/format";
 import { lastPageOffset, pageSize } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
+import { toast } from "@/components/ui/toast";
+import { highlightMatch } from "@/components/permit-draft-preview";
 
 export type InspectedField = {
   name: string;
@@ -57,10 +59,10 @@ export function intakeStatus(field?: ExtractedField, needsReview = false) {
   return field?.value ? "present" : "missing";
 }
 
-function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string) {
-  if (!field?.value) return fallbackValue;
+function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string, searchQuery?: string) {
+  if (!field?.value) return highlightMatch(fallbackValue, searchQuery);
   const unitOrCurrency = field.unit || field.currency;
-  if (!unitOrCurrency) return fallbackValue;
+  if (!unitOrCurrency) return highlightMatch(fallbackValue, searchQuery);
 
   const displayVal = field.english?.value && ["source", "staff_verified", "verified_company_alias", "proposed"].includes(field.english.status)
     ? field.english.value
@@ -68,9 +70,9 @@ function renderFieldValue(field: ExtractedField | undefined, fallbackValue: stri
 
   return (
     <span className="inline-flex items-center justify-end gap-1.5 font-mono">
-      <span>{displayVal}</span>
+      <span>{highlightMatch(displayVal, searchQuery)}</span>
       <span className="text-muted-foreground/40 font-normal select-none" aria-hidden="true">|</span>
-      <span className="text-muted-foreground font-semibold uppercase">{unitOrCurrency}</span>
+      <span className="text-muted-foreground font-semibold uppercase">{highlightMatch(unitOrCurrency, searchQuery)}</span>
     </span>
   );
 }
@@ -115,7 +117,23 @@ function InlineReviewDrawer({
       try {
         localStorage.setItem("harborway-autosave", String(next));
       } catch {}
+      toast.info(next ? "Auto-save enabled" : "Auto-save disabled");
       return next;
+    });
+  };
+
+  const handleBlur = () => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    if (!dirty || !text.trim() || editor.busy) return;
+    const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
+    const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
+    setSaveStatus("saving");
+    void editor.onSave({ value: text.trim(), unit, currency }).then(() => {
+      setSaveStatus("saved");
+      setTimeout(() => setSaveStatus("idle"), 2000);
+    }).catch((err) => {
+      setSaveStatus("idle");
+      setError(err instanceof Error ? err.message : "Failed to save field");
     });
   };
 
@@ -301,6 +319,7 @@ function InlineReviewDrawer({
                 type="text"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
+                onBlur={handleBlur}
                 disabled={editor.busy}
                 className="flex-1 min-w-0 bg-transparent px-2.5 py-1 text-xs font-mono text-foreground outline-none border-none placeholder:text-muted-foreground/50"
                 placeholder={name.toLowerCase().includes("weight") ? "1000" : `Enter ${name.toLowerCase()}…`}
@@ -312,6 +331,7 @@ function InlineReviewDrawer({
                 type="text"
                 value={dimension}
                 onChange={(e) => setDimension(e.target.value)}
+                onBlur={handleBlur}
                 disabled={editor.busy}
                 maxLength={editor.dimension === "unit" ? 24 : 5}
                 placeholder={editor.dimension === "unit" ? "KG" : "USD"}
@@ -323,6 +343,7 @@ function InlineReviewDrawer({
             <ValueInput
               value={text}
               onChange={(e) => setText(e.target.value)}
+              onBlur={handleBlur}
               disabled={editor.busy}
               rows={editor.multiline ? 1 : undefined}
               className="flex-1 min-w-0 resize-none rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
@@ -359,7 +380,7 @@ function InlineReviewDrawer({
   );
 }
 
-function GoodsItems({ document, active, inspect, names, candidates, editable, viewedField, isReviewed, editor, activeField, onDismissField }: {
+function GoodsItems({ document, active, inspect, names, candidates, editable, viewedField, isReviewed, editor, activeField, onDismissField, searchQuery }: {
   names: CdcItemName[];
   candidates: ReviewAnalysis["candidates"];
   document: Extraction;
@@ -371,6 +392,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
   editor?: FieldEditor;
   activeField?: InspectedField;
   onDismissField?: () => void;
+  searchQuery?: string;
 }) {
   const [requestedOffset, setOffset] = useState(0);
   const descriptionId = useId();
@@ -402,7 +424,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
       : text.label ?? documentFieldLabel(key);
     const detail = `${label} · ${reviewed ? "Reviewed" : statuses[status].label}`;
     const isItemEditorOpen = selected && editor && activeField?.target?.name === key && activeField?.target?.row === row;
-    const formattedContent = key === "description" ? value : renderFieldValue(visibleField, value);
+    const formattedContent = key === "description" ? highlightMatch(value, searchQuery) : renderFieldValue(visibleField, value, searchQuery);
     const content = <>
       {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
       <span>{formattedContent}</span>
@@ -458,7 +480,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
 export function IntakeStudioPanel({
   item, analysis, document, activeEvidence, activeField, activeRole, onInspect,
   cdcNames, cdcControls, intakeReference, editable, hasConsigneeOptions, viewedField, isReviewed,
-  editor, onDismissField,
+  editor, onDismissField, searchQuery,
 }: {
   item: CaseDetail;
   intakeReference: string | null;
@@ -476,6 +498,7 @@ export function IntakeStudioPanel({
   isReviewed: (target: ReviewField) => boolean;
   editor?: FieldEditor;
   onDismissField?: () => void;
+  searchQuery?: string;
 }) {
   const descriptionId = useId();
   const candidates = analysis.candidates.filter((candidate) => candidate.invoice_document_id === document?.document_id);
@@ -582,10 +605,10 @@ export function IntakeStudioPanel({
                   >
                     <span className="flex items-center gap-2 font-medium">
                       <IntakeStatusDot status={status} />
-                      <span>{name}</span>
+                      <span>{highlightMatch(name, searchQuery)}</span>
                     </span>
                     <span className={cn("min-w-0 break-words whitespace-normal text-right font-mono text-[11px]", selected && "font-bold text-primary")}>
-                      {renderFieldValue(visibleField, value)}
+                      {renderFieldValue(visibleField, value, searchQuery)}
                     </span>
                     <span hidden id={`${descriptionId}-${id}`}>{reason}</span>
                   </div>
@@ -609,7 +632,7 @@ export function IntakeStudioPanel({
         {document && document.items.length > 0 && <GoodsItems key={`${document.document_id}:${document.role}:${document.sheet}`}
           document={document} active={active} inspect={onInspect} names={cdcNames} candidates={candidates}
           editable={editable} viewedField={viewedField} isReviewed={isReviewed}
-          editor={editor} activeField={activeField} onDismissField={onDismissField} />}
+          editor={editor} activeField={activeField} onDismissField={onDismissField} searchQuery={searchQuery} />}
 
         {/* CDC Quota Summary Section (on Invoice tab) */}
         {activeRole === "invoice" && (

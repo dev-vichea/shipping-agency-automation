@@ -10,13 +10,12 @@ import {
   FileText,
   Maximize2,
   Minimize2,
-  RotateCw,
   Sparkles,
   X,
-  ZoomIn,
-  ZoomOut,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/components/document-canvas-surface";
 import type { FieldEditor } from "@/components/evidence-field-card";
 import { sourceKey } from "@/components/review-evidence";
 import { Button } from "@/components/ui/button";
@@ -91,6 +90,7 @@ export function DocumentCanvas({
   activeFieldInfo,
   editor,
   className,
+  lockedSheet = false,
 }: {
   file?: {
     id: string;
@@ -109,6 +109,7 @@ export function DocumentCanvas({
   activeFieldInfo?: { name: string; value: string; uncertain?: boolean };
   onDismissField?: () => void;
   className?: string;
+  lockedSheet?: boolean;
 }) {
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
@@ -243,12 +244,27 @@ export function DocumentCanvas({
     if (viewport && target) revealCitation(target, viewport);
   }, [evidence, box, pdfInfo, worksheet, showExcerpt, zoom, isExpanded, hasPdfError]);
 
-  return (
+  useEffect(() => {
+    if (!isExpanded) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setIsExpanded(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isExpanded]);
+
+  const canvas = (
     <div
       className={cn(
         "relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-950",
-        "[background-image:radial-gradient(#cbd5e1_1.25px,transparent_1.25px)] dark:[background-image:radial-gradient(#334155_1.25px,transparent_1.25px)] [background-size:24px_24px]",
-        isExpanded ? "fixed inset-3 z-50 h-[calc(100vh-24px)] rounded-lg shadow-2xl" : "h-[min(82vh,880px)] w-full",
+        isExpanded
+          ? "fixed inset-0 z-[100] h-screen w-screen rounded-none border-none bg-background shadow-none"
+          : "h-[min(82vh,880px)] w-full",
         className
       )}
     >
@@ -327,59 +343,11 @@ export function DocumentCanvas({
         PDF highlight unavailable for this field. Its source text is in Raw Excerpt.
       </p>}
 
-      {/* THE CANVAS VIEWPORT CONTAINER */}
-      <div className="relative flex-1 w-full h-full min-h-0 overflow-hidden">
-        {/* Floating Vertical Canvas Controls (Right Side, matching IDP studio) */}
-        <div className="absolute right-3.5 top-1/2 -translate-y-1/2 z-20 flex flex-col items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 p-1 shadow-lg backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
-            onClick={() => setIsExpanded(!isExpanded)}
-            title={isExpanded ? "Collapse canvas" : "Expand canvas"}
-          >
-            {isExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
-          </Button>
-          <span className="h-px w-5 bg-slate-200 dark:bg-slate-700" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
-            disabled={zoom >= 220}
-            onClick={() => handleZoom(zoom + 15)}
-            title="Zoom In"
-          >
-            <ZoomIn size={14} />
-          </Button>
-          <span className="font-mono text-[10px] font-bold text-slate-700 dark:text-slate-300 select-none tabular-nums">
-            {zoom}%
-          </span>
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
-            disabled={zoom <= 40}
-            onClick={() => handleZoom(zoom - 15)}
-            title="Zoom Out"
-          >
-            <ZoomOut size={14} />
-          </Button>
-          <span className="h-px w-5 bg-slate-200 dark:bg-slate-700" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-xs"
-            className="size-7 rounded-control text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 cursor-pointer"
-            onClick={() => setRotation((r) => (r + 90) % 360)}
-            title="Rotate Page"
-          >
-            <RotateCw size={13} />
-          </Button>
-        </div>
-
+      <DocumentCanvasSurface viewportRef={canvasRef} connectorViewport controls={
+        <DocumentCanvasControls zoom={zoom} expanded={isExpanded} onExpand={() => setIsExpanded(!isExpanded)}
+          onZoomIn={() => handleZoom(zoom + 15)} onZoomOut={() => handleZoom(zoom - 15)}
+          zoomInDisabled={zoom >= 220} zoomOutDisabled={zoom <= 40} onRotate={() => setRotation((value) => (value + 90) % 360)} />
+      } overlay={<>
         {/* Floating Top Page Indicator & Navigation (PDF) */}
         {isPdf && totalPages > 1 && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-2.5 py-1 shadow-md backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">
@@ -421,14 +389,7 @@ export function DocumentCanvas({
           </button>
         )}
 
-        {/* Scrolling Canvas Surface */}
-        <div
-          ref={canvasRef}
-          tabIndex={0}
-          aria-label="Document canvas viewport"
-          data-connector-viewport
-          className="w-full h-full overflow-auto flex items-start p-6 md:p-12 pt-16 focus-visible:outline-hidden"
-        >
+      </>}>
         {showExcerpt ? (
           /* Text Excerpt fallback */
           <div
@@ -470,7 +431,7 @@ export function DocumentCanvas({
         ) : isPdf ? (
           /* PDF CANVAS SHEET */
           <div
-            className="relative mx-auto rounded-xs border border-slate-200/90 bg-white shadow-[0_4px_24px_-4px_rgba(0,0,0,0.14),0_2px_8px_-2px_rgba(0,0,0,0.06)] ring-1 ring-slate-900/5 dark:border-slate-800 dark:bg-card dark:ring-white/5"
+            className={cn(documentCanvasPaper, "relative mx-auto dark:bg-card")}
             style={{
               width: pdfInfo ? `${(pdfInfo.width * zoom) / 100}px` : "680px",
               minHeight: pdfInfo ? `${(pdfInfo.height * zoom) / 100}px` : "900px",
@@ -539,6 +500,7 @@ export function DocumentCanvas({
                   <span className="text-xs font-semibold uppercase text-muted-foreground">Worksheet:</span>
                   <NativeSelect
                     aria-label="Worksheet" className="h-7 text-xs font-medium"
+                    disabled={lockedSheet}
                     value={sheet || worksheet.sheet}
                     onChange={(e) => {
                       setSheet(e.target.value);
@@ -696,8 +658,9 @@ export function DocumentCanvas({
             No preview available for this document format.
           </div>
         )}
-      </div>
+      </DocumentCanvasSurface>
     </div>
-  </div>
-);
+  );
+
+  return isExpanded && typeof document !== "undefined" ? createPortal(canvas, document.body) : canvas;
 }

@@ -155,9 +155,21 @@ def parse_rows(layout, doc, rows, start):
             code, units = None, None
             if key in NUMERIC:
                 number = decimal(value)
+                if key == "packages" and number is None and value:
+                    m = re.match(
+                        r"^(?:(?:case|ctn|carton|pkg|box|no\.?)\s*)?(\d+)\s*(?:[-~～至到/]|to)\s*(\d+)",
+                        value.strip(),
+                        re.I,
+                    )
+                    if m:
+                        s, e = int(m.group(1)), int(m.group(2))
+                        if e >= s:
+                            number = Decimal(e - s + 1)
                 if number is None or number < 0:
                     continue
                 value = format(number, "f")
+                if key == "packages":
+                    units = "PKG"
                 if key in {"unit_price", "amount"}:
                     code = currency(raw(header))
                     if code:

@@ -202,3 +202,32 @@ def test_workbook_retains_separate_panels_and_distinct_secondary_sheet():
     assert invoice.error == "multiple_workbook_sections"
     _, active = review_documents([invoice, packing])
     assert "invoice" not in active
+
+
+def test_packing_list_case_no_range_package_detection():
+    book = Workbook()
+    ws = book.active
+    ws.title = "packing"
+    ws.append(["WEALDONE LIMITED"])
+    ws.append(["PACKING LIST"])
+    ws.append(["Invoice Number", "RE2612049", None, "Date of Invoice", "2026-11-19"])
+    ws.append(["箱号", None, None, "货品名称", None, "数量", None, "重量(Weight)", None, None, None, "体积"])
+    ws.append(["Case No.", None, None, "Descriptions", None, "Quantity (PCS)", None, "G.W.(kgs)", "N.W.(kgs)", None, None, "Measurement(M3)"])
+    ws.append([1, "~", 417, "KNITTED FABRIC", None, 9453, "kg", 9870, 9453, None, None, 62.6])
+    ws.append([1, "~", 13, "DRAWSTRING", None, 327, "kg", 340, 327, None, None, 1.6])
+    ws.append([1, "~", 2, "MAIN LABEL", None, 3535, "Doz", 46, 43, None, None, 0.2])
+    ws.append(["TTL:", None, 432, "TOTAL:", None, None, None, 10256, 9823, None, None, 64.4])
+    ws.append([None, None, "PACKAGES", None, None, None, None, "KGS", "KGS", None, None, "CBM"])
+    output = BytesIO()
+    book.save(output)
+
+    [packing] = extract(output.getvalue(), "RE2612049-SHIPPING.xlsx", uuid4(), "packing_list")
+    assert len(packing.items) == 3
+    assert packing.items[0].fields["packages"].value == "417"
+    assert packing.items[0].fields["packages"].unit in {"PKG", "CTN"}
+    assert packing.items[1].fields["packages"].value == "13"
+    assert packing.items[2].fields["packages"].value == "2"
+    assert packing.fields["packages"].value == "432"
+    assert packing.fields["gross_weight"].value == "10256"
+    assert packing.fields["net_weight"].value == "9823"
+    assert packing.fields["measurement"].value == "64.4"

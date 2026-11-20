@@ -93,6 +93,7 @@ class IntakeCase(Identified, Created, Base):
     )
     company_id: Mapped[UUID | None] = mapped_column(ForeignKey("companies.id"), index=True)
     analysis_revision: Mapped[int] = mapped_column(Integer, server_default="0")
+    final_bl_confirmed_revision: Mapped[int | None] = mapped_column(Integer)
     cdc_master_version_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("cdc_master_versions.id"), index=True
     )
@@ -316,7 +317,7 @@ class CdcMasterVersion(Identified, Created, Base):
     __tablename__ = "cdc_master_versions"
     __table_args__ = (
         UniqueConstraint(
-            "workspace_id", "company_key", "year", "approval_ref", "sha256", name="uq_cdc_version"
+            "workspace_id", "company_key", "year", "approval_ref", "sha256", "import_key", name="uq_cdc_version"
         ),
         CheckConstraint("year BETWEEN 2000 AND 2100", name="year"),
     )
@@ -337,6 +338,8 @@ class CdcMasterVersion(Identified, Created, Base):
     balance_as_of: Mapped[date | None] = mapped_column(Date)
     verified_by: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     items: Mapped[list] = mapped_column(JSONB)
+    import_key: Mapped[str] = mapped_column(String(64), server_default="auto")
+    import_config: Mapped[dict | None] = mapped_column(JSONB)
 
 
 class ReviewSnapshot(Identified, Created, Base):
@@ -397,6 +400,21 @@ class StaffReview(Identified, Created, Base):
     actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     ready: Mapped[bool] = mapped_column(Boolean)
     snapshot_hash: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSONB)
+
+
+class ReviewFindingDecision(Identified, Created, Base):
+    __tablename__ = "review_finding_decisions"
+    __table_args__ = (
+        UniqueConstraint("staff_review_id", "finding_key", name="uq_review_finding_decision"),
+        CheckConstraint("decision IN ('approved','rejected','unresolved')", name="decision"),
+    )
+
+    snapshot_id: Mapped[UUID] = mapped_column(ForeignKey("review_snapshots.id"), index=True)
+    staff_review_id: Mapped[UUID] = mapped_column(ForeignKey("staff_reviews.id"), index=True)
+    actor_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    finding_key: Mapped[str] = mapped_column(String(160))
+    decision: Mapped[str] = mapped_column(String(16))
     payload: Mapped[dict] = mapped_column(JSONB)
 
 

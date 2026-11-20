@@ -178,6 +178,9 @@ def parse_master_with_headers(data: bytes, name: str, source: UUID):
     value_col = col(r"total\s*(?:price|value|amount)|approved\s*value|តម្លៃសរុប")
     remaining_col = col(r"\bending\b") if is_english else 16
     remaining_value_col = col(r"balance\s*(?:amount|value)|remaining\s*value")
+    code_col = col(r"(?:material|item|product)\s*(?:code|no|number)|物料编码")
+    hs_col = col(r"h\.?s\.?[ -]*code|税号")
+    spec_col = col(r"specification|规格")
     if unit_col is None or qty_col is None:
         raise ValueError("CDC unit and approved quantity columns are required")
 
@@ -201,10 +204,17 @@ def parse_master_with_headers(data: bytes, name: str, source: UUID):
             code = currency(headers.get(column, "")) if money else None
             return numeric_cell(source, sheet, number, cells, column, units=units, code=code)
 
+        def text_at(column):
+            raw = clean(at(cells, column)) if column is not None else None
+            return field(raw or None, *([cell_evidence(source, sheet, number, column, raw)] if raw else []))
+
         items.append(
             MasterItem(
                 row=number,
                 serial=clean(item.get("serial"))[:80] or None,
+                item_code=text_at(code_col),
+                hs_code=text_at(hs_col),
+                specification=text_at(spec_col),
                 category=item_cat,
                 description=field(
                     name_value[:350], cell_evidence(source, sheet, number, desc_col, name_value)
@@ -262,9 +272,19 @@ def ranked_descriptions(item, rows, *, proposed=False):
     translation = field.english if field else None
     if proposed and translation and translation.status == "proposed" and translation.value:
         labels.add(translation.value)
+    def score(row):
+        similarity = max((candidate_score(label, row.description.value) for label in labels), default=0)
+        code = usable(item.fields.get("item_code"))
+        if code and source_identity(code) == source_identity(usable(row.item_code)):
+            return 100
+        hs = usable(item.fields.get("hs_code"))
+        if hs and usable(row.hs_code):
+            similarity = min(99, similarity + 5) if hs == row.hs_code.value else max(0, similarity - 25)
+        return similarity
+
     return sorted(
         (
-            (max((candidate_score(label, row.description.value) for label in labels), default=0), row)
+            (score(row), row)
             for row in rows
         ),
         key=lambda pair: (-pair[0], pair[1].row),
@@ -272,6 +292,15 @@ def ranked_descriptions(item, rows, *, proposed=False):
 
 
 def candidates_for(invoice, item, ranked):
+    def checks(row):
+        result = []
+        for name, value in (("unit", row.unit), ("unit_price", row.unit_price), ("hs_code", row.hs_code), ("specification", row.specification)):
+            if usable(value):
+                check = compare("cdc", name, item.fields.get(name), value, required=True, suffix=f".{item.row}.{row.row}")
+                if check:
+                    result.append(check)
+        return result
+
     return [
         Candidate(
             invoice_document_id=invoice.document_id,
@@ -280,6 +309,15 @@ def candidates_for(invoice, item, ranked):
             description=row.description.value,
             score=score,
             evidence=row.description.evidence[0],
+            serial=row.serial,
+            reasons=[
+                "Exact material code" if usable(item.fields.get("item_code")) and source_identity(usable(item.fields.get("item_code"))) == source_identity(usable(row.item_code)) else "Description similarity; verify material specifications",
+            ],
+            checks=checks(row),
+            unit=usable(row.unit),
+            remaining_quantity=usable(row.remaining_quantity),
+            unit_price=usable(row.unit_price),
+            currency=row.unit_price.currency,
         )
         for score, row in ranked[:3]
         if score >= 40 and usable(row.description) and row.description.evidence
@@ -297,15 +335,19 @@ def description_suggestions(invoice, master):
 
 
 def matches_master_company(invoice, master):
-    consignee = usable(invoice.fields.get("consignee")) if invoice else None
+    printed = invoice.fields.get("consignee") if invoice else None
+    consignee = usable(printed)
+    alias = printed.english if printed else None
+    if master and consignee and alias and alias.status == "verified_company_alias" and alias.company_id and alias.company_id == getattr(master, "company_id", None):
+        return True
     return bool(
-        consignee
+        master and consignee
         and company_key(consignee) == master.company_key
         and source_identity(consignee) == source_identity(master.company)
     )
 
 
-def check_cdc(invoice: Extraction | None, master, today: date | None = None):
+def check_cdc(invoice: Extraction | None, master, today: date | None = None, *, selections=None):
     group = "cdc"
     if master is None:
         return [
@@ -328,6 +370,10 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
                 field(master.company),
             )
         ], []
+
+    printed_date = usable(invoice.fields.get("invoice_date"))
+    if printed_date and printed_date[:4] != str(master.year):
+        return [finding(group, "year", "MISMATCH", "The invoice year differs from the selected CDC approval year.", invoice.fields.get("invoice_date"))], []
 
     rows = [MasterItem.model_validate(item) for item in master.items]
     result = [
@@ -357,7 +403,8 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
 
         a = item.fields
         prefix = f"cdc.row.{item.row}"
-        if not ranked or ranked[0][0] < 60:
+        chosen = next((row for row in rows if selections and selections.get(item.row) == row.row), None)
+        if chosen is None and (not ranked or ranked[0][0] < 60):
             result.append(
                 finding(
                     group,
@@ -369,8 +416,8 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
                 )
             )
             continue
-        score, row = ranked[0]
-        if len(ranked) > 1 and score - ranked[1][0] < 8:
+        score, row = (100, chosen) if chosen else ranked[0]
+        if chosen is None and len(ranked) > 1 and score - ranked[1][0] < 8:
             result.append(
                 finding(
                     group,
@@ -388,13 +435,17 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
             finding(
                 group,
                 "description",
-                "NEEDS_REVIEW",
-                "A candidate is available. Staff must confirm the item, specifications and eligibility.",
+                "PASS" if chosen else "NEEDS_REVIEW",
+                "Staff selected this material identity. Quantity, unit and price checks remain separate."
+                if chosen else "A candidate is available. Staff must confirm the item, specifications and eligibility.",
                 a.get("description"),
                 row.description,
                 key=f"{prefix}.candidate",
             )
         )
+        for name, value in (("hs_code", row.hs_code), ("specification", row.specification)):
+            if usable(value):
+                result.append(compare(group, name, a.get(name), value, required=True, suffix=f".{item.row}"))
         units = compare(
             group, "unit", a.get("unit"), row.unit, required=True, suffix=f".{item.row}"
         )
@@ -424,7 +475,7 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
                         group,
                         "balance_unknown",
                         "NEEDS_REVIEW",
-                        "Remaining quantity is absent, uncertain or not dated within 30 days.",
+                        "Remaining quantity is unknown: absent, uncertain or not dated within 30 days.",
                         qty,
                         row.remaining_quantity,
                         key=f"{prefix}.balance_unknown",
@@ -477,12 +528,15 @@ def check_cdc(invoice: Extraction | None, master, today: date | None = None):
                         group,
                         "balance_unknown",
                         "NEEDS_REVIEW",
-                        "Remaining quantity is absent, uncertain or not dated within 30 days.",
+                        "Remaining quantity is unknown: absent, uncertain or not dated within 30 days.",
                         qty,
                         limit,
                         key=f"{prefix}.balance_unknown",
                     )
                 )
+                continue
+            if ceiling is None:
+                result.append(finding(group, name, "NEEDS_REVIEW", "The approved quantity is missing or uncertain.", qty, limit, key=f"{prefix}.{name}"))
                 continue
             if ceiling is not None:
                 result.append(

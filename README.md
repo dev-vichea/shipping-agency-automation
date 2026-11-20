@@ -5,6 +5,8 @@ original CDC matcher. Start with the [development guide](docs/development.md)
 for setup, manual and Gmail intake, company access, Telegram, and verification. See the [architecture decisions](docs/architecture-decisions.md)
 for Phase 0 audit results and Phase 1 boundaries.
 
+See [document suggestions and CDC review](docs/auto-suggestions.md) for the combined Review Warnings workflow, worksheet imports, decision audit and migration 0012.
+
 ## Legacy shipping workspace + CDC Excel matcher
 
 A standalone **Python + Streamlit** prototype for import/export shipment tracking, CDC item matching, and monthly cut-stock in-place updates. The shipping workspace records companies, shipment details, document attachments, and dated events in local SQLite. The CDC matcher reads a supplier's Chinese `.xls`/`.xlsx` invoice and packing list, suggests CDC Master List matches, updates monthly cut-stock columns while preserving 100% of the original Excel layout and formulas, and exports independent draft Excel reports. Source workbooks are **never overwritten**.

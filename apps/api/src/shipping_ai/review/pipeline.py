@@ -38,7 +38,7 @@ from .compare import finding, overall, review_documents
 from .schemas import Candidate, Extraction, Finding
 from .values import source_identity, usable
 
-RULES_VERSION = "2.8"
+RULES_VERSION = "2.9"
 MAX_ACTIVE_DOCUMENTS = 12
 ANALYSIS_BUDGET_SECONDS = 180
 
@@ -80,11 +80,12 @@ def registered_master(db, case, invoice: Extraction | None, *, company_id=None):
         return None, "The invoice date is missing or uncertain. Choose the applicable CDC version."
     query = select(CdcMasterVersion.id).where(
         CdcMasterVersion.workspace_id == case.workspace_id,
-        CdcMasterVersion.company_key == company,
         CdcMasterVersion.year == year,
     )
     if assigned := company_id or case.company_id:
         query = query.where(CdcMasterVersion.company_id == assigned)
+    else:
+        query = query.where(CdcMasterVersion.company_key == company)
     matches = db.scalars(query.limit(2)).all()
     if len(matches) == 1:
         return db.get(CdcMasterVersion, matches[0]), None

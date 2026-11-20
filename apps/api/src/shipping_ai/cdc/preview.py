@@ -67,6 +67,7 @@ class MasterPreview(BaseModel):
     company_id: UUID | None = None
     ai_state: Literal["disabled", "not_needed", "reviewed", "unavailable"] = "not_needed"
     warnings: list[str] = Field(default_factory=list)
+    items: list[dict] = Field(default_factory=list)
 
 
 class ModelChoice(BaseModel):
@@ -301,8 +302,16 @@ def suggest_with_model(lines, missing):
     return {key: value for key, value in suggestions.items() if key not in ambiguous}, "reviewed"
 
 
-def preview(workbook, name, approval_pdf=None):
-    master, rows = parse_master_with_headers(workbook, name, uuid4())
+def preview(workbook, name, approval_pdf=None, *, selection=None):
+    if selection:
+        from services.extraction import rows_from_workbook
+
+        from .importer import parse_selection
+
+        master = parse_selection(workbook, name, uuid4(), selection)
+        rows = {title: entries[:selection.header_row] if title == selection.sheet else entries[:12] for title, entries in rows_from_workbook(workbook, name)}
+    else:
+        master, rows = parse_master_with_headers(workbook, name, uuid4())
     lines = list(workbook_lines(rows))
     warnings = []
     if approval_pdf:
@@ -326,5 +335,6 @@ def preview(workbook, name, approval_pdf=None):
         item_count=len(master.items),
         fields={**fields, **suggestions},
         warnings=warnings,
+        items=[item.model_dump(mode="json") for item in master.items[:10]],
         ai_state=ai_state,
     )

@@ -27,11 +27,13 @@ LABELS = {
     "description": ("品名描述", "品名", "货物描述", "貨物描述", "ការពិពណ៌នាទំនិញ", "ឈ្មោះទំនិញ"),
     "english_description": ("英文品名", "英文描述", "ការពិពណ៌នាជាភាសាអង់គ្លេស"),
     "hs_code": ("税号", "稅號", "海关编码", "海關編碼", "លេខកូដទំនិញ"),
+    "item_code": ("物料编码", "材料编号", "料号", "លេខកូដសម្ភារៈ"),
+    "specification": ("规格", "型號", "型号", "លក្ខណៈបច្ចេកទេស"),
     "quantity": ("数量", "數量", "បរិមាណ"),
     "unit": ("单位", "單位", "ឯកតា"),
     "unit_price": ("单价", "單價", "单位价格", "單位價格", "តម្លៃឯកតា"),
     "amount": ("金额", "金額", "总价", "總價", "ចំនួនទឹកប្រាក់"),
-    "packages": ("件数", "件數", "箱数", "箱數", "ចំនួនកញ្ចប់"),
+    "packages": ("件数", "件數", "箱数", "箱數", "箱号", "箱號", "包号", "包號", "ចំនួនកញ្ចប់"),
     "gross_weight": ("毛重", "ទម្ងន់សរុប"),
     "net_weight": ("净重", "淨重", "ទម្ងន់សុទ្ធ"),
     "measurement": ("体积", "體積", "មាឌ"),
@@ -116,6 +118,8 @@ def column_map(headers: list[str], *, ocr=False) -> dict[str, int]:
         ),
         "english_description": lambda h: bool(re.search(r"english|英文", h)),
         "hs_code": lambda h: bool(re.search(r"h\.?s\.?[ -]*code|税号", h)),
+        "item_code": lambda h: bool(re.search(r"(?:item|material|product)\s*(?:code|no\.?|number)|物料编码|材料编号", h)),
+        "specification": lambda h: bool(re.search(r"specification|^spec\b|规格|型號|型号", h)),
         "quantity": lambda h: bool(re.search(r"quantity|^qty\b|数量", h)),
         "unit": lambda h: (
             bool(re.search(r"^unit(?:\b|$)|单位|^uom\b", h))
@@ -126,7 +130,14 @@ def column_map(headers: list[str], *, ocr=False) -> dict[str, int]:
             bool(re.search(r"subtotal|amount|total\s*(?:price|value)|总价|总值|金额", h))
             and not re.search(r"unit\s*price|balance", h)
         ),
-        "packages": lambda h: bool(re.search(r"^packages?\b|^cartons?\b|包数|件数", h)),
+        "packages": lambda h: bool(
+            re.search(
+                r"(?:(?:total\s+|no\.?\s*(?:and kind\s*)?of\s+)?(?:packages?|cartons?|pkgs?|ctns?|cases?|boxes?)|case\s*no\.?|ctn\s*no\.?|pkg\s*no\.?|box\s*no\.?|包数|件数|箱数|箱号|箱號|包号|包號)\b",
+                h,
+                re.I,
+            )
+            and not re.search(r"price|rate|marks?|唛头", h, re.I)
+        ),
         "gross_weight": lambda h: bool(re.search(r"gross\s*weight|\bg\.?w\b|毛重", h)),
         "net_weight": lambda h: bool(re.search(r"net\s*weight|\bn\.?w\b|净重", h)),
         "measurement": lambda h: bool(re.search(r"measurement|volume|means\s*m3|体积", h)),
@@ -168,6 +179,8 @@ ROW_FIELDS = (
     "description",
     "english_description",
     "hs_code",
+    "item_code",
+    "specification",
     "quantity",
     "unit",
     "unit_price",

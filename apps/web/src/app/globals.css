@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@media (min-width: 1024px) {
+  .resizable-split,
+  .verification-split {
+    position: relative;
+    grid-template-columns: minmax(0, var(--left-width, var(--editor-width, 1fr))) 10px minmax(0, var(--right-width, var(--preview-width, 1fr)));
+  }
+}
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {

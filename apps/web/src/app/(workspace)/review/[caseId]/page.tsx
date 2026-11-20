@@ -46,6 +46,7 @@ export default async function ReviewDetail({
       companies={companies} activity={activity} admin={admin}
       share={telegram && (
         <RecordDialog
+          key="telegram-share"
           title="Telegram draft notification"
           trigger={<Send aria-hidden className="size-4" />}
           outline

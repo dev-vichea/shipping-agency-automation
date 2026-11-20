@@ -21,6 +21,8 @@ __pycache__/
 *.xls
 *.xlsx
 !apps/api/tests/fixtures/cdc-approval.xlsx
+!apps/api/tests/fixtures/verification-invoice.pdf
+!apps/api/tests/fixtures/verification-packing.pdf
 !apps/api/tests/fixtures/multilingual/*.xls
 *.xlsm
 *.xlsb
