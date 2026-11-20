@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FleetDriversView } from "@/components/fleet-drivers-view";
+import { FleetDriversView } from "@/features/fleet/fleet-drivers-view";
 
 export const metadata: Metadata = {
   title: "Drivers Directory · Fleet",

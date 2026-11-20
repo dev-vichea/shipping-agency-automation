@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { notFound, redirect } from "next/navigation";
-import { OpenInWorkspace } from "@/components/workspace-forms";
-import { Brand } from "@/components/workspace";
+import { OpenInWorkspace } from "@/features/workspace/workspace-forms";
+import { Brand } from "@/features/workspace/brand";
 import { companyParam } from "@/lib/scope";
 import { workspaceList } from "@/lib/server-api";
 

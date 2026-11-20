@@ -3,12 +3,12 @@ import Link from "next/link";
 import { ArrowRight, Building2, CheckCheck, ClipboardCheck, Inbox, LoaderCircle, Plus, Upload, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, Section, Status } from "@/components/workspace";
+import { Empty, Section, Status } from "@/components/ui/page-layout";
 import type { CaseSummary, Company, Overview, Run } from "@/lib/contracts";
 import { label, timestamp } from "@/lib/format";
 import { companyParam, scopedPath } from "@/lib/scope";
 import { api, workspaceList } from "@/lib/server-api";
-import { LiveRefresh } from "@/components/live-refresh";
+import { LiveRefresh } from "@/lib/live-refresh";
 
 export const metadata: Metadata = { title: "Home" };
 

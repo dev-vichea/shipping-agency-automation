@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Script from "next/script";
 import { Geist, JetBrains_Mono } from "next/font/google";
-import { TelegramWebAppInitializer } from "@/components/telegram-web-app";
+import { TelegramWebAppInitializer } from "@/features/integrations/telegram-web-app-initializer";
 import { Toaster } from "@/components/ui/toaster";
 import "./globals.css";
 

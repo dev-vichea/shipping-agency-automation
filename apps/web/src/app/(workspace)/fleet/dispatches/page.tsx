@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FleetDispatchesView } from "@/components/fleet-dispatches-view";
+import { FleetDispatchesView } from "@/features/fleet/fleet-dispatches-view";
 
 export const metadata: Metadata = {
   title: "Active Trips · Fleet",

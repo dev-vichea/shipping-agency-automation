@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { IntakeQueue, type QueueParams } from "@/components/intake-queue";
+import { IntakeQueue, type QueueParams } from "@/features/intakes/intake-queue";
 
 export const metadata: Metadata = { title: "AI Review Center" };
 

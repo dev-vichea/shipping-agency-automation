@@ -2,10 +2,10 @@ import type { Metadata } from "next";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { Send } from "lucide-react";
-import { TelegramLinkForm, UnlinkTelegram } from "@/components/integration-forms";
-import { IntakeSources } from "@/components/intake-sources";
+import { TelegramLinkForm, UnlinkTelegram } from "@/features/integrations/connector-forms";
+import { IntakeSources } from "@/features/integrations/intake-sources";
 import { Badge } from "@/components/ui/badge";
-import { Empty, PageHeading, Section } from "@/components/workspace";
+import { Empty, PageHeading, Section } from "@/components/ui/page-layout";
 import type { Company, FolderSource, Integrations, StaffMember } from "@/lib/contracts";
 import { api, workspaceList } from "@/lib/server-api";
 

@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { QuickDecisionForm } from "@/components/integration-forms";
+import { QuickDecisionForm } from "@/features/approvals/quick-decision-form";
 import { Button } from "@/components/ui/button";
-import { PageHeading, Section } from "@/components/workspace";
+import { PageHeading, Section } from "@/components/ui/page-layout";
 import type { QuickApproval } from "@/lib/contracts";
 import { api } from "@/lib/server-api";
 

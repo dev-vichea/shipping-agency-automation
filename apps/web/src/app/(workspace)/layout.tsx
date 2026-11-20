@@ -1,9 +1,9 @@
 import type { ReactNode } from "react";
 import { cookies } from "next/headers";
-import { WorkspaceShell } from "@/components/workspace-shell";
+import { WorkspaceShell } from "@/features/workspace/workspace-shell";
 import type { Company, Overview } from "@/lib/contracts";
 import { api, staffProfile, workspaceList } from "@/lib/server-api";
-import { SIDEBAR_COOKIE } from "@/lib/workspace-navigation";
+import { SIDEBAR_COOKIE } from "@/features/workspace/workspace-navigation";
 
 export default async function WorkspaceLayout({ children }: { children: ReactNode }) {
   const [staff, workspace, companies, counts, jar] = await Promise.all([

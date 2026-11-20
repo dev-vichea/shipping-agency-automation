@@ -1,4 +1,4 @@
-import { VerificationWorkspaceSkeleton } from "@/components/verification-skeleton";
+import { VerificationWorkspaceSkeleton } from "@/features/review/verification/verification-skeleton";
 
 export default function ReviewLoading() {
   return <VerificationWorkspaceSkeleton />;

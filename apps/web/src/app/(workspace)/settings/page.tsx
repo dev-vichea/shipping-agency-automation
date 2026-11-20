@@ -1,9 +1,9 @@
 import type { Metadata } from "next";
-import { AlertPreferences, ChangePasswordForm, MemberForm, RemoveMember, WorkspaceForm } from "@/components/workspace-forms";
-import { RecordDialog } from "@/components/record-dialog";
+import { AlertPreferences, ChangePasswordForm, MemberForm, RemoveMember, WorkspaceForm } from "@/features/workspace/workspace-forms";
+import { FormSheet } from "@/components/ui/form-sheet";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { PageHeading, Section, Status } from "@/components/workspace";
+import { PageHeading, Section, Status } from "@/components/ui/page-layout";
 import type { Provider, StaffMember } from "@/lib/contracts";
 import { api, staffProfile, workspaceList } from "@/lib/server-api";
 
@@ -14,13 +14,13 @@ export default async function SettingsPage() {
   const active = workspace.workspaces.find((entry) => entry.id === workspace.active_id);
   const members = active?.role === "admin" ? await api<StaffMember[]>("/workspace/members") : [];
   return <div className="space-y-gutter">
-    <PageHeading title="Settings" action={<RecordDialog title="New workspace" trigger="New workspace" outline><WorkspaceForm /></RecordDialog>} />
+    <PageHeading title="Settings" action={<FormSheet title="New workspace" trigger="New workspace" outline><WorkspaceForm /></FormSheet>} />
     <div className="grid items-start gap-gutter xl:grid-cols-2">
-      <Section title="Staff account" action={<RecordDialog title="Change password" trigger="Change password" outline><ChangePasswordForm /></RecordDialog>}>
+      <Section title="Staff account" action={<FormSheet title="Change password" trigger="Change password" outline><ChangePasswordForm /></FormSheet>}>
         <dl className="p-3"><dt className="panel-label">Email</dt><dd className="mt-1 break-all font-mono text-code-tabular">{staff.email}</dd></dl>
       </Section>
       {active && <Section title="Workspace"><div className="p-4">{active.role === "admin" ? <WorkspaceForm existing={active.name} /> : active.name}</div></Section>}
-      {active?.role === "admin" && <Section title="Staff members" action={<RecordDialog title="Manage membership" trigger="Manage membership" outline><MemberForm /></RecordDialog>}>
+      {active?.role === "admin" && <Section title="Staff members" action={<FormSheet title="Manage membership" trigger="Manage membership" outline><MemberForm /></FormSheet>}>
         <ul className="divide-y">{members.map((member) => <li key={member.id} className="flex items-center justify-between gap-3 px-4 py-3">
           <span className="break-all">{member.email}</span><div className="flex flex-wrap items-center gap-2">
             <span className="text-xs text-muted-foreground">{member.role === "admin" ? "Administrator" : "Operator"}</span>

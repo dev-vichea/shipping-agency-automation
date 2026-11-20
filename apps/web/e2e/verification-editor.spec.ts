@@ -189,3 +189,49 @@ test("verification restores all three printable templates and synchronizes both 
   expect(workflow.review).toBeNull();
   await page.screenshot({ path: test.info().outputPath("verification-editor-pdf.png"), fullPage: true });
 });
+
+test("the verification route persists a reviewed value for the source intake", async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 });
+  await login(page);
+  const workspace = await page.request.post("/api/v1/workspaces", {
+    data: { name: `Verification route ${randomUUID().slice(0, 8)}` },
+  });
+  expect(workspace.ok()).toBe(true);
+
+  const files = new FormData();
+  files.set("provider_message_id", randomUUID());
+  for (const name of ["supplier-review.xlsx", "draft-bl-review.pdf"]) {
+    const file = await readFile(resolve("../api/tests/fixtures", name));
+    files.append("files", new File([new Uint8Array(file)], name));
+  }
+  const receipt = await page.request.post("/api/v1/intakes/simulate", { multipart: files });
+  expect(receipt.ok()).toBe(true);
+  const id = (await receipt.json()).case_id;
+  const path = `/api/v1/intakes/${id}`;
+  await expect.poll(async () => {
+    const result: ReviewAnalysis = await (await page.request.get(`${path}/analysis`)).json();
+    return result.state;
+  }, { timeout: 30_000 }).toBe("available");
+
+  await page.goto(`/review/${id}`);
+  await expect(page.getByRole("region", { name: "Source viewer" })).toBeVisible();
+  await page.goto(`/review/${id}/verification`);
+  await expect(page.getByRole("button", { name: /^Verification/ })).toHaveAttribute("aria-pressed", "true");
+  const editor = page.getByRole("region", { name: "Verification document editor" });
+  const quantity = editor.getByLabel("Invoice row 10 Quantity", { exact: true });
+  await expect(editor.locator('[data-permit-print-sheet="inv"]')).toContainText("INV-FIXTURE-101");
+  await quantity.fill("13");
+  const saved = page.waitForResponse((response) =>
+    new URL(response.url()).pathname === `${path}/review` && response.request().method() === "POST",
+  );
+  await quantity.press("Enter");
+  expect((await saved).ok()).toBe(true);
+
+  const workflow: ReviewWorkflow = await (await page.request.get(`${path}/review`)).json();
+  expect(workflow.review?.corrections).toEqual(expect.arrayContaining([
+    expect.objectContaining({ role: "invoice", row: 10, name: "quantity", value: "13", confirmed: true }),
+  ]));
+  await page.reload();
+  await expect(page).toHaveURL(new RegExp(`/review/${id}/verification$`));
+  await expect(quantity).toHaveValue("13");
+});

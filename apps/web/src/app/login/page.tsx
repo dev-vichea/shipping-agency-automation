@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
-import { Brand } from "@/components/workspace";
+import { Brand } from "@/features/workspace/brand";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { LoginForm } from "@/components/forms";
+import { LoginForm } from "@/features/auth/login-form";
 
 export const metadata: Metadata = { title: "Staff sign in" };
 

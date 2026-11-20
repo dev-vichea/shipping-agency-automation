@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { FleetVehiclesView } from "@/components/fleet-vehicles-view";
+import { FleetVehiclesView } from "@/features/fleet/fleet-vehicles-view";
 
 export const metadata: Metadata = {
   title: "Vehicles & Equipment · Fleet",

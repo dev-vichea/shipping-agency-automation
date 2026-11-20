@@ -157,7 +157,7 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
     useEffect(() => {
       if (multiline && inputRef.current) {
         inputRef.current.style.height = "auto";
-        inputRef.current.style.height = `${Math.max(compact ? 28 : 38, inputRef.current.scrollHeight)}px`;
+        inputRef.current.style.height = `${Math.max(compact ? 28 : 30, inputRef.current.scrollHeight)}px`;
       }
     }, [value, multiline, compact]);
 
@@ -310,7 +310,7 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
                 className={cn(
                   compact
                     ? "min-h-[28px] flex-1 min-w-0 resize-none overflow-hidden rounded border border-transparent bg-transparent hover:border-border/60 hover:bg-background/40 hover:shadow-2xs focus:border-primary focus:bg-background focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-1.5 py-1 text-xs text-foreground outline-none transition-all duration-150 cursor-text leading-snug whitespace-pre-wrap break-words"
-                    : "w-full min-h-[38px] resize-none overflow-hidden rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-sm hover:border-primary/50 hover:shadow focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-sm px-3 py-2 text-xs text-foreground outline-none transition-all duration-150 cursor-text leading-relaxed whitespace-pre-wrap break-words",
+                    : "w-full min-h-[30px] resize-none overflow-hidden rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-2xs hover:border-primary/50 hover:shadow-xs focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-2.5 py-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text leading-snug whitespace-pre-wrap break-words",
                   error && "border-destructive bg-destructive/5",
                   inputClassName
                 )}
@@ -344,7 +344,7 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
                 className={cn(
                   compact
                     ? "h-7 flex-1 min-w-0 rounded border border-transparent bg-transparent hover:border-border/60 hover:bg-background/40 hover:shadow-2xs focus:border-primary focus:bg-background focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text"
-                    : "h-9 w-full rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-sm hover:border-primary/50 hover:shadow focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-sm px-3 text-xs text-foreground outline-none transition-all duration-150 cursor-text",
+                    : "h-8 w-full rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-2xs hover:border-primary/50 hover:shadow-xs focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-2.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text",
                   numeric ? "font-mono tabular-nums text-right" : "text-left",
                   error && "border-destructive bg-destructive/5",
                   inputClassName

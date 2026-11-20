@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { ArrowRight, Building2, Files, PackageCheck, Pencil, Scale, Workflow } from "lucide-react";
-import { CompanyForm, CompanyStaffForm } from "@/components/company-forms";
-import { RecordDialog } from "@/components/record-dialog";
-import { Empty, PageHeading, Section, Status } from "@/components/workspace";
+import { CompanyForm, CompanyStaffForm } from "@/features/companies/company-forms";
+import { FormSheet } from "@/components/ui/form-sheet";
+import { Empty, PageHeading, Section, Status } from "@/components/ui/page-layout";
 import type { CaseSummary, CompanyDetail, StaffMember } from "@/lib/contracts";
 import { scopedPath } from "@/lib/scope";
 import { api, workspaceList } from "@/lib/server-api";
@@ -24,7 +24,7 @@ export default async function CompanyPage({ params }: { params: Promise<{ id: st
   ];
   return <div className="space-y-4">
     <Link href="/companies" className="data-link text-xs">All companies</Link>
-    <PageHeading title={company.name} action={admin && <RecordDialog title="Edit company" trigger={<><Pencil aria-hidden /> Edit company</>} outline><CompanyForm company={company} /></RecordDialog>} />
+    <PageHeading title={company.name} action={admin && <FormSheet title="Edit company" trigger={<><Pencil aria-hidden /> Edit company</>} outline><CompanyForm company={company} /></FormSheet>} />
     <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
       {links.map(({ href, title, icon: Icon }) => <Link key={href} href={scopedPath(href, id)} className="panel flex min-h-16 items-center gap-2 px-3 py-2 font-medium hover:border-focus">
         <Icon size={16} aria-hidden className="shrink-0 text-primary" />{title}<ArrowRight size={14} aria-hidden className="ml-auto shrink-0 text-muted-foreground" />

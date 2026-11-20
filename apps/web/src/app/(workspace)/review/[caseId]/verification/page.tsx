@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import ReviewDetail from "../page";
+import { ReviewCase } from "@/features/review/review-case";
 
 export async function generateMetadata({
   params,
@@ -10,16 +10,7 @@ export async function generateMetadata({
   return { title: `Review ${caseId.slice(0, 8)} · Verification` };
 }
 
-export default async function VerificationRoute({
-  params,
-  searchParams,
-}: {
-  params: Promise<{ caseId: string }>;
-  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
-}) {
-  return ReviewDetail({
-    params,
-    searchParams,
-    defaultTab: "verification",
-  });
+export default async function VerificationRoute({ params }: { params: Promise<{ caseId: string }> }) {
+  const { caseId } = await params;
+  return <ReviewCase caseId={caseId} initialTab="verification" />;
 }

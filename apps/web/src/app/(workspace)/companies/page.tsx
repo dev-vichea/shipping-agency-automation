@@ -2,12 +2,12 @@ import { NativeSelect } from "@/components/ui/native-select";
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight, Building2, Plus } from "lucide-react";
-import { CompanyForm } from "@/components/company-forms";
-import { RecordDialog } from "@/components/record-dialog";
+import { CompanyForm } from "@/features/companies/company-forms";
+import { FormSheet } from "@/components/ui/form-sheet";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, PageHeading, Section } from "@/components/workspace";
+import { Empty, PageHeading, Section } from "@/components/ui/page-layout";
 import { ListPagination } from "@/components/ui/pagination";
 import type { Company } from "@/lib/contracts";
 import { timestamp } from "@/lib/format";
@@ -28,7 +28,7 @@ export default async function CompaniesPage({ searchParams }: { searchParams: Pr
   const { items: companies, hasNext } = pageWindow(results);
   const admin = workspace.workspaces.some(({id, role}) => id === workspace.active_id && role === "admin");
   return <div className="space-y-4">
-    <PageHeading title="Companies" action={admin && <RecordDialog title="Add company" trigger={<><Plus aria-hidden /> Add company</>} openInitially={create === "1"}><CompanyForm /></RecordDialog>} />
+    <PageHeading title="Companies" action={admin && <FormSheet title="Add company" trigger={<><Plus aria-hidden /> Add company</>} openInitially={create === "1"}><CompanyForm /></FormSheet>} />
     <Section title="Client companies">
       <form action="/companies" className="flex flex-wrap items-center gap-2 border-b p-3" role="search">
         <SearchInput name="q" aria-label="Search companies" placeholder="Name or identifier…" defaultValue={query} maxLength={160} containerClassName="w-full max-w-72" />

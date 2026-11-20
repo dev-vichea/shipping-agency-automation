@@ -1,7 +1,7 @@
 import Link from "next/link";
-import { AutomationAction } from "@/components/forms";
-import { LiveRefresh } from "@/components/live-refresh";
-import { PageHeading, Section, Status } from "@/components/workspace";
+import { AutomationAction } from "@/features/automation/automation-action";
+import { LiveRefresh } from "@/lib/live-refresh";
+import { PageHeading, Section, Status } from "@/components/ui/page-layout";
 import type { CaseDetail, InvestigationRun, Run } from "@/lib/contracts";
 import { label, timestamp } from "@/lib/format";
 import { api } from "@/lib/server-api";

@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { ListPagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Empty, PageHeading, Section } from "@/components/workspace";
+import { Empty, PageHeading, Section } from "@/components/ui/page-layout";
 import type { ImportReport } from "@/lib/contracts";
 import { timestamp } from "@/lib/format";
 import { pageSize, parseOffset } from "@/lib/pagination";

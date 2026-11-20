@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { toast } from "@/components/ui/toast";
+import { toast } from "@/lib/toast";
 
 export interface ResizableColumn<T> {
   id: string;
