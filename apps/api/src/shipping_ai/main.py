@@ -15,6 +15,7 @@ from .core.config import settings
 from .core.db import engine
 from .core.http import PrivateAPI
 from .documents.routes import router as documents_router
+from .fleet.routes import router as fleet_router
 from .imports.routes import router as imports_router
 from .intakes.routes import router as intakes_router
 from .integrations.folders import router as folders_router
@@ -45,6 +46,7 @@ def create_app() -> FastAPI:
         intakes_router,
         imports_router,
         documents_router,
+        fleet_router,
         automation_router,
         cdc_router,
         review_router,
@@ -78,7 +80,7 @@ def create_app() -> FastAPI:
     def ready():
         try:
             with engine().connect() as connection:
-                if connection.scalar(text("SELECT version_num FROM alembic_version")) != "0012":
+                if connection.scalar(text("SELECT version_num FROM alembic_version")) not in ("0012", "0013"):
                     return JSONResponse({"status": "unavailable"}, status_code=503)
             with Redis.from_url(str(cfg.redis_url), socket_timeout=2) as redis:
                 redis.ping()

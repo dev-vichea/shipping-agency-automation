@@ -1,8 +1,13 @@
-export async function write<T>(path: string, body?: FormData | object, signal?: AbortSignal): Promise<T> {
+export async function apiRequest<T>(
+  path: string,
+  method: "GET" | "POST" | "PATCH" | "DELETE" = "GET",
+  body?: FormData | object,
+  signal?: AbortSignal
+): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api/v1${path}`, {
-      method: "POST",
+      method,
       signal,
       headers: body && !(body instanceof FormData) ? { "Content-Type": "application/json" } : {},
       body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
@@ -20,4 +25,8 @@ export async function write<T>(path: string, body?: FormData | object, signal?: 
     throw new Error(typeof data?.detail === "string" ? data.detail : "The request could not be completed.");
   }
   return (response.status === 204 ? undefined : await response.json()) as T;
+}
+
+export async function write<T>(path: string, body?: FormData | object, signal?: AbortSignal): Promise<T> {
+  return apiRequest<T>(path, "POST", body, signal);
 }

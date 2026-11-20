@@ -8,10 +8,13 @@ import {
   Files,
   Inbox,
   LayoutDashboard,
+  Navigation,
   PackageCheck,
   Plug,
   Scale,
   Settings,
+  Truck,
+  Users,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -108,6 +111,37 @@ export const navSections: NavSection[] = [
           ariaLabel: "Export",
           icon: ArrowUpRight,
           filtered: true,
+        },
+      },
+      {
+        type: "group",
+        group: {
+          label: "Fleet",
+          icon: Truck,
+          baseHref: "/fleet",
+          items: [
+            {
+              href: "/fleet",
+              label: "Vehicles & Chassis",
+              ariaLabel: "Vehicles & Chassis",
+              icon: Truck,
+              filtered: true,
+            },
+            {
+              href: "/fleet/drivers",
+              label: "Drivers",
+              ariaLabel: "Drivers Directory",
+              icon: Users,
+              filtered: true,
+            },
+            {
+              href: "/fleet/dispatches",
+              label: "Active Trips",
+              ariaLabel: "Active Dispatch Trips",
+              icon: Navigation,
+              filtered: true,
+            },
+          ],
         },
       },
       {
@@ -215,5 +249,7 @@ export const navLinks: NavLink[] = navSections.flatMap((section) =>
 
 export function isActiveRoute(pathname: string, href: string) {
   const urlPath = href.split("?")[0];
-  return pathname === urlPath || (urlPath !== "/home" && pathname.startsWith(`${urlPath}/`));
+  if (pathname === urlPath) return true;
+  if (urlPath === "/fleet" || urlPath === "/home" || urlPath === "/reports") return false;
+  return urlPath !== "/home" && pathname.startsWith(`${urlPath}/`);
 }

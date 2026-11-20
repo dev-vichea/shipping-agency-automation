@@ -440,3 +440,56 @@ export type TelegramPreview = {
   recipients: { id: string; email: string; name: string }[];
 };
 export type QuickApproval = { eligible: boolean; message: string; revision: number; review_id: string | null };
+
+export type Vehicle = {
+  id: string;
+  plate_number: string;
+  trailer_plate?: string | null;
+  vehicle_type: string;
+  haulier_type: "in_house" | "subcontractor";
+  haulier_name: string;
+  assigned_driver_id?: string | null;
+  assigned_driver_name?: string | null;
+  driver_phone?: string | null;
+  status: "available" | "on_trip" | "maintenance";
+  capacity: string;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type Driver = {
+  id: string;
+  name: string;
+  phone: string;
+  license_number?: string | null;
+  national_id?: string | null;
+  assigned_vehicle_plate?: string | null;
+  status: "available" | "on_trip" | "off_duty";
+  total_trips: number;
+  safety_rating: string;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type DispatchTrip = {
+  id: string;
+  trip_number: string;
+  shipment_ref: string;
+  company_name: string;
+  direction: "inbound" | "outbound";
+  truck_plate: string;
+  trailer_plate?: string | null;
+  driver_name: string;
+  driver_phone: string;
+  container_no: string;
+  seal_no: string;
+  origin: string;
+  destination: string;
+  milestone: "dispatched" | "gate_out" | "in_transit" | "at_factory" | "empty_returned";
+  eta?: string | null;
+  notes?: string | null;
+  created_at?: string;
+  updated_at?: string;
+};

@@ -14,6 +14,13 @@ export function location(item: Evidence) {
 }
 
 const documentFields: Record<string, string> = {
+  shipper: "Shipper",
+  shipper_address: "Shipper Address",
+  supplier: "Supplier",
+  supplier_address: "Supplier Address",
+  consignee: "Consignee",
+  consignee_address: "Consignee Address",
+  vat: "VAT",
   bl_no: "B/L Number",
   booking_no: "Booking Number",
   invoice_no: "Invoice Number",

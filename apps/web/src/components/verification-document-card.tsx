@@ -1,11 +1,13 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { CheckCheck, ChevronDown, FileText, History } from "lucide-react";
 import { ReviewActions } from "@/components/review-actions";
+import { VerificationCardSkeleton } from "@/components/verification-skeleton";
 import { VerificationCdcCleanOptions } from "@/components/verification-cdc-row";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { toast } from "@/lib/toast";
 import type {
   CaseDetail,
   ExtractedField,
@@ -24,6 +26,7 @@ const fullWidthHeaderFields = new Set([
   "supplier_address",
   "consignee",
   "consignee_address",
+  "origin",
   "destination",
   "delivery",
   "discharge",
@@ -76,14 +79,14 @@ function minColumnPixelWidth(name: string): number {
   return 60;
 }
 
-function tableColumnLabel(name: string) {
+function tableColumnLabel(name: string, role?: string) {
   switch (name) {
     case "item_code":
       return "Code";
     case "hs_code":
       return "HS Code";
     case "description":
-      return "Description";
+      return role === "invoice" ? "No. & Description" : "Description";
     case "english_description":
       return "English Description";
     case "specification":
@@ -114,6 +117,8 @@ function VerificationDescriptionWithCdc({
   document,
   role,
   options,
+  otherCandidates,
+  master,
   review,
   disabled,
   fieldEditor,
@@ -124,10 +129,12 @@ function VerificationDescriptionWithCdc({
   document: Extraction;
   role: "invoice" | "packing_list";
   options: ReviewAnalysis["candidates"];
+  otherCandidates?: ReviewAnalysis["candidates"];
+  master?: MasterVersion | null;
   review: StaffReview | null;
   disabled: boolean;
   fieldEditor: (ref: ReviewField, raw: ExtractedField, compact?: boolean) => React.ReactNode;
-  onSelectCandidate: (row: number, candidate: ReviewAnalysis["candidates"][number]) => Promise<void>;
+  onSelectCandidate: (row: number, candidate: ReviewAnalysis["candidates"][number], reason?: string) => Promise<void>;
   onClearCandidate: (row: number) => Promise<void>;
 }) {
   const [open, setOpen] = useState(false);
@@ -138,15 +145,23 @@ function VerificationDescriptionWithCdc({
     evidence: [],
   };
 
+  const mapping = review?.mappings.find((m) => m.invoice_row === line.row);
+  const selectedCandidate = mapping
+    ? options.find((c) => c.master_row === mapping.master_row)
+    : options[0];
+  const cdcSerial = selectedCandidate?.serial ?? mapping?.master_row;
+
   return (
     <VerificationCdcCleanOptions
       row={line.row}
       candidates={options}
+      otherCandidates={otherCandidates}
+      master={master}
       review={review}
       disabled={disabled}
       open={open}
       onOpenChange={setOpen}
-      onSelectCandidate={async (candidate) => {
+      onSelectCandidate={async (candidate, reason) => {
         if (typeof window !== "undefined") {
           const el = window.document.getElementById(
             `verify-${role}-${line.row}-description`
@@ -156,7 +171,7 @@ function VerificationDescriptionWithCdc({
             el.dispatchEvent(new Event("input", { bubbles: true }));
           }
         }
-        await onSelectCandidate(line.row, candidate);
+        await onSelectCandidate(line.row, candidate, reason);
       }}
       onClearMapping={async () => {
         await onClearCandidate(line.row);
@@ -164,19 +179,50 @@ function VerificationDescriptionWithCdc({
     >
       <div
         data-cdc-anchor={line.row}
-        className="w-full min-w-0"
+        className="w-full min-w-0 relative flex items-center gap-1.5"
         onFocus={() => {
-          if (options.length > 0) setOpen(true);
+          setOpen(true);
         }}
         onClick={() => {
-          if (options.length > 0) setOpen(true);
+          setOpen(true);
         }}
       >
-        {fieldEditor(
-          { document_id: document.document_id, role, row: line.row, name: "description" },
-          rawField,
-          true
-        )}
+        {cdcSerial ? (
+          <button
+            type="button"
+            title={`CDC Item #${cdcSerial} (${selectedCandidate?.description ?? "Mapped"}) · Click to change`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (options.length > 0) setOpen((prev) => !prev);
+            }}
+            className="shrink-0 flex items-center justify-center px-1 text-xs text-foreground hover:text-primary transition-colors select-none cursor-pointer leading-snug"
+          >
+            {cdcSerial}
+          </button>
+        ) : null}
+        <div className="flex-1 min-w-0">
+          {fieldEditor(
+            { document_id: document.document_id, role, row: line.row, name: "description" },
+            rawField,
+            true
+          )}
+        </div>
+        <button
+          type="button"
+          aria-label="Review CDC material"
+          title="Review CDC material"
+          tabIndex={-1}
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((prev) => !prev);
+          }}
+          className={cn(
+            "shrink-0 p-0.5 rounded text-muted-foreground hover:text-primary hover:bg-muted/60 transition-colors cursor-pointer flex items-center",
+            options.length > 0 ? "text-primary/70" : "opacity-40 hover:opacity-100"
+          )}
+        >
+          <ChevronDown className="size-3" />
+        </button>
       </div>
     </VerificationCdcCleanOptions>
   );
@@ -216,8 +262,28 @@ export interface VerificationDocumentCardProps {
   total: (key: string) => string;
   quotaChecks: Finding[];
   blockerCount: number;
-  onSelectCandidate: (row: number, candidate: ReviewAnalysis["candidates"][number]) => Promise<void>;
+  onSelectCandidate: (row: number, candidate: ReviewAnalysis["candidates"][number], reason?: string) => Promise<void>;
   onClearCandidate: (row: number) => Promise<void>;
+}
+
+function subscribeColWidths(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener("storage", callback);
+  return () => window.removeEventListener("storage", callback);
+}
+
+function getColWidthsSnapshot(): string {
+  try {
+    const inv = localStorage.getItem("shipping_col_widths_invoice") ?? "{}";
+    const pl = localStorage.getItem("shipping_col_widths_packing_list") ?? "{}";
+    return `${inv}|${pl}`;
+  } catch {
+    return "{}|{}";
+  }
+}
+
+function getColWidthsServerSnapshot(): string {
+  return "{}|{}";
 }
 
 export function VerificationDocumentCard({
@@ -260,29 +326,34 @@ export function VerificationDocumentCard({
 
   const candidates = review?.candidates ?? analysis.candidates;
 
-  const [colWidthsByRole, setColWidthsByRole] = useState<Record<string, Record<string, number>>>(() => {
-    if (typeof window === "undefined") return {};
-    const result: Record<string, Record<string, number>> = {};
-    for (const r of ["invoice", "packing_list"]) {
-      try {
-        const saved = localStorage.getItem(`shipping_col_widths_${r}`);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed && typeof parsed === "object") {
-            result[r] = parsed;
-          }
-        }
-      } catch {}
-    }
+  const widthsSnapshot = useSyncExternalStore(
+    subscribeColWidths,
+    getColWidthsSnapshot,
+    getColWidthsServerSnapshot
+  );
+
+  const savedColWidthsByRole = useMemo(() => {
+    const [invStr, plStr] = widthsSnapshot.split("|");
+    const result: Record<string, Record<string, number>> = { invoice: {}, packing_list: {} };
+    try {
+      if (invStr) result.invoice = JSON.parse(invStr);
+    } catch {}
+    try {
+      if (plStr) result.packing_list = JSON.parse(plStr);
+    } catch {}
     return result;
-  });
+  }, [widthsSnapshot]);
 
-  const colWidths = useMemo(() => colWidthsByRole[role] ?? {}, [colWidthsByRole, role]);
-  const colWidthsRef = useRef<Record<string, number>>(colWidths);
+  const [dragOverride, setDragOverride] = useState<{ col: string; width: number } | null>(null);
 
-  useEffect(() => {
-    colWidthsRef.current = colWidths;
-  }, [colWidths]);
+  const colWidths = useMemo(() => {
+    const base = savedColWidthsByRole[role] ?? {};
+    if (dragOverride) {
+      return { ...base, [dragOverride.col]: dragOverride.width };
+    }
+    return base;
+  }, [savedColWidthsByRole, role, dragOverride]);
+
 
   const [resizing, setResizing] = useState<{
     col: string;
@@ -303,85 +374,95 @@ export function VerificationDocumentCard({
     return hashWidth + colsWidth;
   }, [columns, colWidths]);
 
-  useEffect(() => {
-    if (!resizing || typeof window === "undefined") return;
-    const bodyStyle = window.document.body.style;
-    const prevUserSelect = bodyStyle.userSelect;
-    const prevCursor = bodyStyle.cursor;
-    bodyStyle.userSelect = "none";
-    bodyStyle.cursor = "col-resize";
-
-    const onPointerMove = (e: PointerEvent) => {
-      const deltaX = e.clientX - resizing.startX;
-      const minWidth = minColumnPixelWidth(resizing.col);
-      const newWidth = Math.max(minWidth, Math.round(resizing.startWidth + deltaX));
-      setColWidthsByRole((prev) => {
-        const currentRole = prev[role] ?? {};
-        const nextRole = { ...currentRole, [resizing.col]: newWidth };
-        colWidthsRef.current = nextRole;
-        return { ...prev, [role]: nextRole };
-      });
-    };
-
-    const onPointerUp = () => {
-      setResizing(null);
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem(
-            `shipping_col_widths_${role}`,
-            JSON.stringify(colWidthsRef.current)
-          );
-        } catch {}
-      }
-    };
-
-    window.addEventListener("pointermove", onPointerMove);
-    window.addEventListener("pointerup", onPointerUp);
-    window.addEventListener("pointercancel", onPointerUp);
-
-    return () => {
-      bodyStyle.userSelect = prevUserSelect;
-      bodyStyle.cursor = prevCursor;
-      window.removeEventListener("pointermove", onPointerMove);
-      window.removeEventListener("pointerup", onPointerUp);
-      window.removeEventListener("pointercancel", onPointerUp);
-    };
-  }, [resizing, role]);
-
-  const handleResizeStart = (col: string, e: React.PointerEvent) => {
+  const handlePointerDown = (col: string, e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault();
     e.stopPropagation();
+    const startW = getColWidth(col);
     setResizing({
       col,
       startX: e.clientX,
-      startWidth: getColWidth(col),
+      startWidth: startW,
     });
   };
 
-  const handleResetColWidth = (col: string) => {
-    setColWidthsByRole((prev) => {
-      const currentRole = { ...(prev[role] ?? {}) };
-      delete currentRole[col];
-      colWidthsRef.current = currentRole;
+  useEffect(() => {
+    if (!resizing) return;
+
+    const handleGlobalPointerMove = (e: PointerEvent) => {
+      const { col, startX, startWidth } = resizing;
+      const deltaX = e.clientX - startX;
+      const minWidth = minColumnPixelWidth(col);
+      const newWidth = Math.max(minWidth, Math.round(startWidth + deltaX));
+      setDragOverride({ col, width: newWidth });
+    };
+
+    const handleGlobalPointerUp = (e: PointerEvent) => {
+      const { col, startX, startWidth } = resizing;
+      const deltaX = e.clientX - startX;
+      const minWidth = minColumnPixelWidth(col);
+      const finalWidth = Math.max(minWidth, Math.round(startWidth + deltaX));
+      const didChange = Math.abs(finalWidth - startWidth) > 1;
+
+      setResizing(null);
+      setDragOverride(null);
+
       if (typeof window !== "undefined") {
         try {
+          const currentRole = { ...(savedColWidthsByRole[role] ?? {}) };
+          currentRole[col] = finalWidth;
           localStorage.setItem(`shipping_col_widths_${role}`, JSON.stringify(currentRole));
+          window.dispatchEvent(new Event("storage"));
         } catch {}
       }
-      return { ...prev, [role]: currentRole };
-    });
+
+      if (didChange) {
+        toast.saved("Saved!");
+      }
+    };
+
+    const domBody = typeof window !== "undefined" ? window.document.body : null;
+    const prevCursor = domBody?.style.cursor;
+    const prevSelect = domBody?.style.userSelect;
+    if (domBody) {
+      domBody.style.cursor = "col-resize";
+      domBody.style.userSelect = "none";
+    }
+
+    window.addEventListener("pointermove", handleGlobalPointerMove);
+    window.addEventListener("pointerup", handleGlobalPointerUp);
+    window.addEventListener("pointercancel", handleGlobalPointerUp);
+
+    return () => {
+      if (domBody) {
+        domBody.style.cursor = prevCursor ?? "";
+        domBody.style.userSelect = prevSelect ?? "";
+      }
+      window.removeEventListener("pointermove", handleGlobalPointerMove);
+      window.removeEventListener("pointerup", handleGlobalPointerUp);
+      window.removeEventListener("pointercancel", handleGlobalPointerUp);
+    };
+  }, [resizing, role, savedColWidthsByRole]);
+
+  const handleResetColWidth = (col: string) => {
+    if (typeof window !== "undefined") {
+      try {
+        const currentRole = { ...(savedColWidthsByRole[role] ?? {}) };
+        delete currentRole[col];
+        localStorage.setItem(`shipping_col_widths_${role}`, JSON.stringify(currentRole));
+        window.dispatchEvent(new Event("storage"));
+      } catch {}
+    }
+    toast.updated(`Column "${tableColumnLabel(col, role)}" reset`);
   };
 
   const handleResetAllColWidths = () => {
-    setColWidthsByRole((prev) => {
-      colWidthsRef.current = {};
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.removeItem(`shipping_col_widths_${role}`);
-        } catch {}
-      }
-      return { ...prev, [role]: {} };
-    });
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.removeItem(`shipping_col_widths_${role}`);
+        window.dispatchEvent(new Event("storage"));
+      } catch {}
+    }
+    toast.updated("Column widths reset to default");
   };
 
   return (
@@ -515,7 +596,10 @@ export function VerificationDocumentCard({
                 key={name}
                 className={cn(fullWidthHeaderFields.has(name) ? "col-span-2" : "col-span-1")}
               >
-                {fieldEditor({ document_id: document.document_id, role, row: null, name }, document.fields[name])}
+                {fieldEditor(
+                  { document_id: document.document_id, role, row: null, name },
+                  document.fields[name] ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+                )}
               </div>
             ))}
           </div>
@@ -575,13 +659,13 @@ export function VerificationDocumentCard({
                       role="separator"
                       aria-orientation="vertical"
                       title="Drag to resize column · Double-click to reset"
-                      onPointerDown={(e) => handleResizeStart("#", e)}
+                      onPointerDown={(e) => handlePointerDown("#", e)}
                       onDoubleClick={(e) => {
                         e.stopPropagation();
                         handleResetColWidth("#");
                       }}
                       className={cn(
-                        "absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize select-none touch-none flex items-center justify-end pr-0.5 group/resize z-20",
+                        "absolute -right-1.5 top-0 bottom-0 w-3.5 cursor-col-resize select-none touch-none flex items-center justify-center group/resize z-20",
                         resizing?.col === "#" && "z-30"
                       )}
                     >
@@ -589,7 +673,7 @@ export function VerificationDocumentCard({
                         className={cn(
                           "w-[1.5px] rounded-full transition-colors",
                           resizing?.col === "#"
-                            ? "bg-primary w-[2.5px] h-full"
+                            ? "bg-primary w-[2px] h-full"
                             : "h-3.5 bg-border/60 group-hover/resize:bg-primary group-hover/resize:h-full"
                         )}
                       />
@@ -607,18 +691,18 @@ export function VerificationDocumentCard({
                           name !== "description" && name !== "unit" ? "text-right" : "text-left"
                         )}
                       >
-                        <span className="truncate block pr-2.5">{tableColumnLabel(name)}</span>
+                        <span className="truncate block pr-2.5">{tableColumnLabel(name, role)}</span>
                         <div
                           role="separator"
                           aria-orientation="vertical"
                           title="Drag to resize column · Double-click to reset"
-                          onPointerDown={(e) => handleResizeStart(name, e)}
+                          onPointerDown={(e) => handlePointerDown(name, e)}
                           onDoubleClick={(e) => {
                             e.stopPropagation();
                             handleResetColWidth(name);
                           }}
                           className={cn(
-                            "absolute right-0 top-0 bottom-0 w-2.5 cursor-col-resize select-none touch-none flex items-center justify-end pr-0.5 group/resize z-20",
+                            "absolute -right-1.5 top-0 bottom-0 w-3.5 cursor-col-resize select-none touch-none flex items-center justify-center group/resize z-20",
                             isColResizing && "z-30"
                           )}
                         >
@@ -626,7 +710,7 @@ export function VerificationDocumentCard({
                             className={cn(
                               "w-[1.5px] rounded-full transition-colors",
                               isColResizing
-                                ? "bg-primary w-[2.5px] h-full"
+                                ? "bg-primary w-[2px] h-full"
                                 : "h-3.5 bg-border/60 group-hover/resize:bg-primary group-hover/resize:h-full"
                             )}
                           />
@@ -638,11 +722,15 @@ export function VerificationDocumentCard({
               </TableHeader>
               <TableBody>
                 {document.items.map((line, index) => {
-                  const options = suggestions
+                  const rowCandidates = suggestions
                     ? candidates.filter(
                         (entry) =>
-                          entry.invoice_document_id === document.document_id && entry.invoice_row === line.row
+                          (!entry.invoice_document_id || entry.invoice_document_id === document.document_id) &&
+                          entry.invoice_row === line.row
                       )
+                    : [];
+                  const otherCandidates = suggestions
+                    ? candidates.filter((entry) => entry.invoice_row !== line.row)
                     : [];
 
                   return (
@@ -675,13 +763,15 @@ export function VerificationDocumentCard({
                             <TableCell
                               key={name}
                               style={{ width: `${colW}px` }}
-                              className="whitespace-normal px-1 py-1 align-top cursor-text overflow-hidden"
+                              className="whitespace-normal px-1 py-1 align-middle cursor-text overflow-hidden"
                             >
                               <VerificationDescriptionWithCdc
                                 line={line}
                                 document={document}
                                 role={role}
-                                options={options}
+                                options={rowCandidates}
+                                otherCandidates={otherCandidates}
+                                master={master}
                                 review={review}
                                 disabled={disabled}
                                 fieldEditor={fieldEditor}
@@ -890,9 +980,7 @@ export function VerificationDocumentCard({
           </div>
         </>
       ) : (
-        <p className="p-6 text-center text-xs text-muted-foreground">
-          No {role === "invoice" ? "invoice" : "packing list"} has been extracted for this revision.
-        </p>
+        <VerificationCardSkeleton />
       )}
     </div>
   );

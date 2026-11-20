@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import type { Extraction, ExtractedField, ReviewAnalysis, ReviewField } from "@/lib/contracts";
 import { reviewKey, type ReviewDraft } from "@/components/staff-review";
+import { splitPartyAndAddress } from "@/lib/verification-review";
 
 export type PermitTemplate = "cdc_classic" | "freight_agency" | "commercial_billing";
 
@@ -277,10 +278,26 @@ export function PermitDraftPreview({
     else setInternalTemplate(next);
   };
   const [templateDrawerOpen, setTemplateDrawerOpen] = useState<boolean>(false);
-  const [zoom, setZoom] = useState<number>(0.92);
+  const [zoom, setZoom] = useState<number>(100);
   const [isExpanded, setIsExpanded] = useState<boolean>(false);
   const viewport = useRef<HTMLDivElement>(null);
-  const fitZoom = useRef(0.92);
+  const fitZoom = useRef(100);
+  const userZoomed = useRef(false);
+
+  function handleZoom(next: number) {
+    userZoomed.current = true;
+    setZoom(Math.max(40, Math.min(250, Math.round(next))));
+  }
+
+  function handleResetZoom() {
+    userZoomed.current = false;
+    setZoom(embedded ? fitZoom.current : 100);
+  }
+
+  useEffect(() => {
+    userZoomed.current = false;
+  }, [isExpanded]);
+
   useEffect(() => {
     const element = viewport.current;
     if (!embedded || !element) return;
@@ -289,12 +306,36 @@ export function PermitDraftPreview({
       if (element.clientWidth === previousWidth) return;
       previousWidth = element.clientWidth;
       const style = getComputedStyle(element);
-      fitZoom.current = Math.max(0.2, Math.min(0.92, (element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 820));
-      setZoom(fitZoom.current);
+      const availableWidth =
+        element.clientWidth -
+        parseFloat(style.paddingLeft || "0") -
+        parseFloat(style.paddingRight || "0");
+      fitZoom.current = Math.max(40, Math.min(100, Math.round(((availableWidth - 16) / 820) * 100)));
+      if (!userZoomed.current) {
+        setZoom(fitZoom.current);
+      }
     });
     observer.observe(element);
     return () => observer.disconnect();
   }, [embedded, isExpanded]);
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = -e.deltaY;
+        const step = delta > 0 ? 15 : -15;
+        setZoom((prev) => {
+          userZoomed.current = true;
+          return Math.max(40, Math.min(250, prev + step));
+        });
+      }
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, []);
 
   useEffect(() => {
     if (!isExpanded) return;
@@ -352,16 +393,21 @@ export function PermitDraftPreview({
   // Shared shipment headers use the active document's saved review values.
   const header = (name: string) => getFieldValue(sheetTab === "inv" ? "invoice" : "packing_list", name) || getFieldValue("invoice", name);
   const bill = (name: string) => getFieldValue(blExt?.role ?? "draft_bl", name);
-  const supplier = header("supplier") || "—";
-  const supplierAddress = header("supplier_address");
-  const consignee = header("consignee") || companyName || "—";
-  const consigneeAddressRaw = header("consignee_address");
+  const supplierRaw = header("supplier");
+  const { name: splitSupName, address: splitSupAddr } = splitPartyAndAddress(supplierRaw);
+  const supplier = splitSupName || supplierRaw || "—";
+  const supplierAddress = header("supplier_address") || splitSupAddr || undefined;
+
+  const consigneeRaw = header("consignee");
+  const { name: splitCneeName, address: splitCneeAddr } = splitPartyAndAddress(consigneeRaw);
+  const consignee = splitCneeName || consigneeRaw || companyName || "—";
+  const consigneeAddressRaw = header("consignee_address") || splitCneeAddr || "";
   const vatNo = header("vat") || "—";
   const invoiceNo = header("invoice_no") || reference || "—";
   const invoiceDate = header("invoice_date") || "—";
   const blNo = bill("bl_no") || "—";
   const vessel = header("shipping_mode") || bill("shipping_mode") || bill("vessel") || "—";
-  const container = bill("container") || header("container") || "—";
+  const container = bill("container") || header("container") || "";
   const originCountry = header("country_of_origin") || header("origin") || bill("origin") || "—";
   const pol = header("origin") || bill("port_of_loading") || "—";
   const pod = header("destination") || bill("port_of_discharge") || "—";
@@ -404,8 +450,24 @@ export function PermitDraftPreview({
       "0";
 
     const mapping = mappings.find((m) => m.invoice_row === row);
-    const candidate = mapping && candidates.find((entry) => entry.invoice_document_id === docId && entry.invoice_row === row && entry.master_row === mapping.master_row);
-    const matchedRow = candidate?.serial ?? mapping?.master_row ?? "—";
+    const candidate =
+      mapping &&
+      candidates.find(
+        (entry) =>
+          entry.invoice_document_id === docId &&
+          entry.invoice_row === row &&
+          entry.master_row === mapping.master_row
+      );
+    const rowCandidates = candidates.filter(
+      (entry) => entry.invoice_document_id === docId && entry.invoice_row === row
+    );
+    const topCandidate = rowCandidates[0];
+    const matchedRow =
+      candidate?.serial ??
+      mapping?.master_row ??
+      topCandidate?.serial ??
+      topCandidate?.master_row ??
+      "";
 
     const qty = parseNumeric(qtyStr);
     const price = parseNumeric(priceStr);
@@ -615,7 +677,7 @@ export function PermitDraftPreview({
       <DocumentCanvasSurface
         viewportRef={viewport}
         viewportLabel="Print preview canvas"
-        viewportClassName="p-3 pt-6 sm:p-4 sm:pt-6 md:p-6 md:pt-8 justify-center"
+        viewportClassName="p-3 pt-6 sm:p-4 sm:pt-6 md:p-6 md:pt-8"
         controls={
           <>
             {/* Hover-to-expand vertical card with rotated label "TEMPLATE" */}
@@ -696,14 +758,14 @@ export function PermitDraftPreview({
             </div>
 
             <DocumentCanvasControls
-              zoom={zoom * 100}
+              zoom={zoom}
               expanded={isExpanded}
               onExpand={() => setIsExpanded(!isExpanded)}
-              onZoomIn={() => setZoom((value) => Math.min(1.4, value + 0.1))}
-              onZoomOut={() => setZoom((value) => Math.max(0.2, value - 0.1))}
-              zoomInDisabled={zoom >= 1.4}
-              zoomOutDisabled={zoom <= 0.2}
-              onReset={() => setZoom(embedded ? fitZoom.current : 0.92)}
+              onZoomIn={() => handleZoom(zoom + 15)}
+              onZoomOut={() => handleZoom(zoom - 15)}
+              zoomInDisabled={zoom >= 250}
+              zoomOutDisabled={zoom <= 40}
+              onReset={handleResetZoom}
             />
           </>
         }
@@ -712,7 +774,7 @@ export function PermitDraftPreview({
         <div
           data-permit-print-sheet={sheetTab}
           style={{
-            zoom,
+            zoom: zoom / 100,
             fontFamily:
               template === "cdc_classic"
                 ? '"Times New Roman", Times, serif'

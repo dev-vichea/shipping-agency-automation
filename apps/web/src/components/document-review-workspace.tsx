@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useRef, useState, useTransition, type ReactNode } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus, FileText, ScanSearch, Search, Sparkles, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AutoSuggestionReview } from "@/components/auto-suggestion-review";
@@ -60,10 +60,22 @@ const auditViews = ["All", "Blockers", "Warnings", "Passed"] as const;
 
 const consignmentFields = ["bl_no", "vessel", "consignee", "container", "seal", "origin", "port", "destination"];
 
-export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin }: {
-  item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode;
+export function DocumentReviewWorkspace({ item, analysis, workflow, companies, activity, share, versions, admin, initialTab }: {
+  item: CaseDetail; analysis: ReviewAnalysis; versions: MasterVersion[]; workflow: ReviewWorkflow; companies: Company[]; activity: CaseActivity[]; admin: boolean; share?: ReactNode; initialTab?: "documents" | "verification";
 }) {
-  const [workspaceTab, setWorkspaceTab] = useState<"documents" | "verification">("documents");
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const tabParam = searchParams.get("tab");
+  const tabFromUrl: "documents" | "verification" =
+    initialTab ??
+    (tabParam === "verification" || pathname.endsWith("/verification")
+      ? "verification"
+      : "documents");
+
+  const [activeTabOverride, setActiveTabOverride] = useState<"documents" | "verification">();
+  const workspaceTab = activeTabOverride ?? tabFromUrl;
   const [chosenMainTab, setChosenMainTab] = useState<MainTab>();
   const [chosenBlSubTabKey, setChosenBlSubTabKey] = useState<string>();
   const [selectedKey, setSelectedKey] = useState<string>();
@@ -76,7 +88,30 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [cdcAutoRuleEnabled, setCdcAutoRuleEnabled] = useState(true);
   const [docSearchQuery, setDocSearchQuery] = useState("");
-  const router = useRouter();
+
+  const handleWorkspaceTabChange = useCallback((nextTab: "documents" | "verification") => {
+    setActiveTabOverride(nextTab);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      if (nextTab === "verification") {
+        url.searchParams.set("tab", "verification");
+      } else {
+        url.searchParams.delete("tab");
+      }
+      if (url.pathname.endsWith("/verification") && nextTab === "documents") {
+        url.pathname = url.pathname.replace(/\/verification$/, "");
+      }
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+  }, []);
+
+  useEffect(() => {
+    const onPopState = () => {
+      setActiveTabOverride(undefined);
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
   const [saving, setSaving] = useState(false);
   const [refreshing, startRefresh] = useTransition();
   const [actionError, setActionError] = useState("");
@@ -648,7 +683,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     try {
       await handleVerifyAll();
       toast.saved("Draft created! Review CDC verification and preview.");
-      setWorkspaceTab("verification");
+      handleWorkspaceTabChange("verification");
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Failed to create draft.");
     } finally {
@@ -700,7 +735,9 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
             </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage>Document review</BreadcrumbPage>
+              <BreadcrumbPage>
+                {workspaceTab === "verification" ? "Document verification" : "Document review"}
+              </BreadcrumbPage>
             </BreadcrumbItem>
           </BreadcrumbList>
         </Breadcrumb>
@@ -794,7 +831,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         <button
           type="button"
           disabled={busy}
-          onClick={() => setWorkspaceTab("documents")}
+          onClick={() => handleWorkspaceTabChange("documents")}
           aria-pressed={workspaceTab === "documents"}
           className={cn(
             "cursor-pointer border-b-2 px-4 py-2.5 text-xs font-semibold transition-all flex items-center gap-1.5",
@@ -809,7 +846,7 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         <button
           type="button"
           disabled={busy}
-          onClick={() => setWorkspaceTab("verification")}
+          onClick={() => handleWorkspaceTabChange("verification")}
           aria-pressed={workspaceTab === "verification"}
           className={cn(
             "cursor-pointer border-b-2 px-4 py-2.5 text-xs font-semibold transition-all flex items-center gap-1.5",

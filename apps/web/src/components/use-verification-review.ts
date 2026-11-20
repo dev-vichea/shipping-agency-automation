@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { reviewDraft, type ReviewDraft } from "@/components/staff-review";
 import { write } from "@/lib/client-api";
+import { toast } from "@/lib/toast";
 import type { StaffReview } from "@/lib/contracts";
 
 export function useVerificationReview({ caseId, revision, saved, onSaved, onPending }: {
@@ -34,6 +35,8 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
     count.current += 1;
     onPending(true);
     setPending(count.current);
+    const toastId = "verification-save-status";
+    toast.updated({ id: toastId, title: "Updating...", duration: 2500 });
     const job = queue.current.then(async () => {
       // Build from the last completed save, never from a stale render of another cell.
       const draft = mutate(reviewDraft(latest.current));
@@ -44,10 +47,13 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
       latest.current = result;
       onSaved(result);
       if (mounted.current) { setReview(result); setError(""); }
+      toast.saved({ id: toastId, title: "Saved!", duration: 2500 });
       return result;
     });
     const handled = job.catch((cause) => {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : "Could not save this edit.");
+      const msg = cause instanceof Error ? cause.message : "Could not save this edit.";
+      if (mounted.current) setError(msg);
+      toast.error({ id: toastId, title: "Save failed", description: msg, duration: 4000 });
       throw cause;
     }).finally(() => {
       count.current -= 1;
@@ -60,5 +66,5 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
     queue.current = handled.catch(() => undefined);
     return handled;
   }
-  return { review, pending, error, save };
+  return { review, pending, error, clearError: () => setError(""), save };
 }

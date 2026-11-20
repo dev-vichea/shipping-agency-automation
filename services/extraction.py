@@ -187,13 +187,23 @@ def extract_shipping(data, filename, *, workbook=None):
                                 break
                     if found_co and not meta['consignee']:
                         meta['consignee'] = found_co
+                        if '\n' in meta['consignee']:
+                            c_lines = [l.strip() for l in meta['consignee'].splitlines() if l.strip()]
+                            if len(c_lines) > 1:
+                                meta['consignee'] = c_lines[0]
+                                if not meta.get('consignee_address'):
+                                    meta['consignee_address'] = '\n'.join(c_lines[1:])
                         # Check subsequent row for address block
-                        if rn < len(rows):
+                        if rn < len(rows) and not meta.get('consignee_address'):
                             next_row_vals = [_value(cv) for cv in rows[rn][1]]
                             for nv in next_row_vals:
                                 if len(nv) > 15 and any(akw in nv.upper() for kw, akw in [('', 'PHNOM PENH'), ('', 'CAMBODIA'), ('', 'ROAD'), ('', 'STREET'), ('', 'PHUM'), ('', 'SINGAPORE')]):
                                     meta['consignee_address'] = nv
                                     break
+                        if not meta.get('vat') and meta.get('consignee_address'):
+                            m_vat = re.search(r'VAT[:\s]*([A-Za-z0-9\-]+)', meta['consignee_address'])
+                            if m_vat:
+                                meta['vat'] = m_vat.group(1).strip()
 
                 # Route / Origin / Destination
                 if v_clean in ['from', 'from:', '装船口岸', '起运港：', '起运港']:

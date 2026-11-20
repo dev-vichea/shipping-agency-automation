@@ -171,6 +171,55 @@ def normalize_date(value: str) -> str:
         raise HTTPException(422, "Use a calendar date in YYYY-MM-DD format") from None
 
 
+VALID_DOCUMENT_HEADER_FIELDS = {
+    "supplier",
+    "supplier_address",
+    "shipper",
+    "shipper_address",
+    "consignee",
+    "consignee_address",
+    "vat",
+    "notify_party",
+    "origin",
+    "destination",
+    "port",
+    "container",
+    "seal",
+    "booking_no",
+    "bl_no",
+    "vessel",
+    "voyage",
+    "etd",
+    "eta",
+    "invoice_no",
+    "invoice_date",
+    "contract_no",
+    "shipping_mode",
+    "issue_date",
+    "gross_weight",
+    "net_weight",
+    "packages",
+    "measurement",
+    "amount",
+}
+
+VALID_LINE_ITEM_FIELDS = {
+    "item_code",
+    "hs_code",
+    "description",
+    "english_description",
+    "specification",
+    "quantity",
+    "unit",
+    "unit_price",
+    "amount",
+    "packages",
+    "net_weight",
+    "gross_weight",
+    "measurement",
+}
+
+
 def apply_corrections(docs, corrections):
     index = {(doc.document_id, doc.role): doc for doc in docs}
     seen = set()
@@ -186,8 +235,13 @@ def apply_corrections(docs, corrections):
         doc = index.get(key[:2])
         row = next((item for item in doc.items if item.row == edit.row), None) if doc else None
         values = (row.fields if row else None) if edit.row else (doc.fields if doc else None)
-        if key in seen or values is None or edit.name not in values:
+        if key in seen or values is None:
             raise HTTPException(422, "A correction does not identify a unique extracted field")
+        if edit.name not in values:
+            allowed = VALID_LINE_ITEM_FIELDS if edit.row is not None else VALID_DOCUMENT_HEADER_FIELDS
+            if edit.name not in allowed:
+                raise HTTPException(422, "A correction does not identify a unique extracted field")
+            values[edit.name] = field(None)
         seen.add(key)
         original = values[edit.name]
         citations = original.evidence

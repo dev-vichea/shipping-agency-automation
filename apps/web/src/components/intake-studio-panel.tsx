@@ -13,6 +13,7 @@ import { lastPageOffset, pageSize } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/toast";
 import { highlightMatch } from "@/components/permit-draft-preview";
+import { splitPartyAndAddress } from "@/lib/verification-review";
 
 export type InspectedField = {
   name: string;
@@ -23,7 +24,36 @@ export type InspectedField = {
 };
 
 const groups = [
-  { title: "Document Details", icon: FileText, keys: ["bl_no", "booking_no", "invoice_no", "invoice_date", "issue_date", "shipper", "supplier", "consignee", "notify_party", "carrier", "origin", "port", "destination", "shipping_mode", "vessel", "voyage", "etd", "eta", "payment_terms", "incoterms"] },
+  {
+    title: "Document Details",
+    icon: FileText,
+    keys: [
+      "bl_no",
+      "booking_no",
+      "invoice_no",
+      "invoice_date",
+      "issue_date",
+      "shipper",
+      "shipper_address",
+      "supplier",
+      "supplier_address",
+      "consignee",
+      "consignee_address",
+      "vat",
+      "notify_party",
+      "carrier",
+      "origin",
+      "port",
+      "destination",
+      "shipping_mode",
+      "vessel",
+      "voyage",
+      "etd",
+      "eta",
+      "payment_terms",
+      "incoterms",
+    ],
+  },
   { title: "Container & Cargo", icon: Package, keys: ["container", "seal", "packages", "gross_weight", "net_weight", "measurement"] },
   { title: "Amounts", icon: DollarSign, keys: ["amount", "currency", "subtotal", "total"] },
   { title: "Goods", icon: Box, keys: ["cargo_summary"] },
@@ -509,7 +539,97 @@ export function IntakeStudioPanel({
     ?? roleDetails[activeRole as keyof typeof roleDetails]
     ?? { name: "Bill of Lading", icon: Anchor };
   const DocumentIcon = details.icon;
-  const fields = document?.fields ?? {};
+  const rawFields = document?.fields ?? {};
+  const fields: Record<string, ExtractedField> = { ...rawFields };
+
+  // Resolve Shipper / Supplier address
+  const rawShipper = fields.shipper?.value ?? "";
+  const rawSupplier = fields.supplier?.value ?? "";
+  const rawShipperAddr = fields.shipper_address?.value ?? "";
+  const rawSupplierAddr = fields.supplier_address?.value ?? "";
+
+  if (rawShipper.includes("\n") && !rawShipperAddr) {
+    const { name, address } = splitPartyAndAddress(rawShipper);
+    if (address) {
+      fields.shipper = { ...fields.shipper, value: name };
+      fields.shipper_address = { status: "present", value: address, evidence: fields.shipper?.evidence ?? [], unit: null, currency: null };
+    }
+  }
+  if (rawSupplier.includes("\n") && !rawSupplierAddr) {
+    const { name, address } = splitPartyAndAddress(rawSupplier);
+    if (address) {
+      fields.supplier = { ...fields.supplier, value: name };
+      fields.supplier_address = { status: "present", value: address, evidence: fields.supplier?.evidence ?? [], unit: null, currency: null };
+    }
+  }
+
+  // Check reviewed fields for current document and sibling documents
+  for (const key of ["shipper_address", "supplier_address", "consignee_address", "vat"]) {
+    if (!fields[key]?.value) {
+      const target: ReviewField = { document_id: document?.document_id ?? "", role: (document?.role === "final_bl" ? "final_bl" : activeRole) as ReviewField["role"], row: null, name: key };
+      const reviewed = viewedField(target, { status: "missing", value: "", evidence: [], unit: null, currency: null });
+      if (reviewed?.value?.trim()) {
+        fields[key] = reviewed;
+      }
+    }
+  }
+
+  // Cross-reference between shipper_address and supplier_address
+  if (fields.shipper_address?.value && !fields.supplier_address?.value) {
+    fields.supplier_address = fields.shipper_address;
+  } else if (fields.supplier_address?.value && !fields.shipper_address?.value) {
+    fields.shipper_address = fields.supplier_address;
+  }
+
+  // Cross-reference from sibling document extractions (both raw and reviewed) if not present on this document
+  if (!fields.shipper_address?.value && !fields.supplier_address?.value) {
+    for (const otherDoc of analysis.extractions) {
+      for (const checkKey of ["supplier_address", "shipper_address"]) {
+        const target: ReviewField = { document_id: otherDoc.document_id, role: otherDoc.role as ReviewField["role"], row: null, name: checkKey };
+        const reviewed = viewedField(target, otherDoc.fields[checkKey] ?? { status: "missing", value: "", evidence: [], unit: null, currency: null });
+        if (reviewed?.value?.trim()) {
+          if (isTransport) {
+            fields.shipper_address = reviewed;
+          } else {
+            fields.supplier_address = reviewed;
+          }
+          break;
+        }
+      }
+      if (fields.shipper_address?.value || fields.supplier_address?.value) break;
+    }
+  }
+
+  // Resolve Consignee address & VAT
+  const rawConsignee = fields.consignee?.value ?? "";
+  const rawConsigneeAddr = fields.consignee_address?.value ?? "";
+  if (rawConsignee.includes("\n") && !rawConsigneeAddr) {
+    const { name, address } = splitPartyAndAddress(rawConsignee);
+    if (address) {
+      fields.consignee = { ...fields.consignee, value: name };
+      fields.consignee_address = { status: "present", value: address, evidence: fields.consignee?.evidence ?? [], unit: null, currency: null };
+    }
+  }
+  if (!fields.consignee_address?.value) {
+    for (const otherDoc of analysis.extractions) {
+      const target: ReviewField = { document_id: otherDoc.document_id, role: otherDoc.role as ReviewField["role"], row: null, name: "consignee_address" };
+      const reviewed = viewedField(target, otherDoc.fields.consignee_address ?? { status: "missing", value: "", evidence: [], unit: null, currency: null });
+      if (reviewed?.value?.trim()) {
+        fields.consignee_address = reviewed;
+        break;
+      }
+    }
+  }
+
+  // Check VAT in address if not explicitly present
+  if (!fields.vat?.value) {
+    const combinedAddr = `${fields.consignee_address?.value ?? ""} ${rawConsignee}`;
+    const vatMatch = combinedAddr.match(/VAT[:\s]*([A-Za-z0-9\-]+)/i);
+    if (vatMatch) {
+      fields.vat = { status: "present", value: vatMatch[1].trim(), evidence: fields.consignee?.evidence ?? [], unit: null, currency: null };
+    }
+  }
+
   const extraKeys = Object.keys(fields).filter((key) => !knownFields.has(key)).sort();
   const required = activeRole === "invoice" ? ["invoice_no", "supplier", "consignee"]
     : activeRole === "packing_list" && hasConsigneeOptions ? ["consignee"] : [];

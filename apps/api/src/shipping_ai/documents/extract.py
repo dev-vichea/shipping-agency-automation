@@ -406,8 +406,10 @@ def printed_route_name(rows, key, source, raw):
 def metadata(doc: UUID, sheet: str, rows: list[Row], legacy: dict, role: Role) -> dict:
     keys = [
         "supplier",
+        "supplier_address",
         "shipper",
         "consignee",
+        "consignee_address",
         "notify_party",
         "origin",
         "destination",
@@ -432,22 +434,68 @@ def metadata(doc: UUID, sheet: str, rows: list[Row], legacy: dict, role: Role) -
             accept = place_value
         elif key in {"supplier", "consignee"}:
             accept = party_value
+        elif key in {"supplier_address", "consignee_address"}:
+            accept = lambda v: bool(clean(v))
         else:
             accept = bool
-        source = labelled(rows, doc, sheet, META_LABELS[key], accept=accept)
+        source = labelled(rows, doc, sheet, META_LABELS[key], accept=accept) if key in META_LABELS else None
         if source:
             raw, evidence = source
             value = date_text(raw) if key in {"invoice_date", "etd", "eta"} else clean(raw)[:350]
             result[key] = field(value or None, evidence, uncertain=not value)
             if key in {"origin", "destination", "port"}:
                 result[key].english = printed_route_name(rows, key, evidence, raw)
-        elif key in {"supplier", "consignee", "invoice_no", "invoice_date", "contract_no"} and (
-            evidence := anchored(rows, doc, sheet, legacy.get(key))
+        elif key in {"supplier", "supplier_address", "consignee", "consignee_address", "invoice_no", "invoice_date", "contract_no"} and (
+            evidence := anchored(rows, doc, sheet, legacy.get(key)) or (
+                anchored(rows, doc, sheet, clean(legacy.get(key))[:40]) if legacy.get(key) and len(clean(legacy.get(key))) > 40 else []
+            )
         ) and accept(legacy.get(key)):
             value = clean(legacy[key])[:350]
             result[key] = field(value or None, evidence)
         else:
             result[key] = field(None)
+    # Split multiline consignee into consignee name and consignee_address
+    if result.get("consignee") and result["consignee"].value and "\n" in result["consignee"].value:
+        c_lines = [l.strip() for l in result["consignee"].value.splitlines() if l.strip()]
+        if len(c_lines) > 1:
+            result["consignee"] = field(c_lines[0], result["consignee"].evidence)
+            if not result.get("consignee_address", field(None)).value:
+                result["consignee_address"] = field("\n".join(c_lines[1:])[:350], result["consignee"].evidence)
+
+    # Split multiline supplier into supplier name and supplier_address
+    if result.get("supplier") and result["supplier"].value and "\n" in result["supplier"].value:
+        s_lines = [l.strip() for l in result["supplier"].value.splitlines() if l.strip()]
+        if len(s_lines) > 1:
+            result["supplier"] = field(s_lines[0], result["supplier"].evidence)
+            if not result.get("supplier_address", field(None)).value:
+                result["supplier_address"] = field("\n".join(s_lines[1:])[:350], result["supplier"].evidence)
+
+    if result.get("supplier") and result["supplier"].value and not result.get("supplier_address", field(None)).value and result["supplier"].evidence:
+        sup_ev = result["supplier"].evidence[0]
+        for n, cells in rows:
+            if n == sup_ev.row:  # row after supplier
+                for col_idx, cell_val in enumerate(cells):
+                    txt = clean(cell_val)
+                    if txt and len(txt) > 5 and not is_any_meta_label(txt):
+                        result["supplier_address"] = field(txt[:350], cell_evidence(doc, sheet, n, col_idx, cell_val))
+                        break
+                break
+
+    if result.get("consignee") and result["consignee"].value and not result.get("consignee_address", field(None)).value and result["consignee"].evidence:
+        cnee_ev = result["consignee"].evidence[0]
+        for n, cells in rows:
+            if n == cnee_ev.row:  # row after consignee
+                for col_idx, cell_val in enumerate(cells):
+                    txt = clean(cell_val)
+                    if txt and len(txt) > 5 and not is_any_meta_label(txt):
+                        result["consignee_address"] = field(txt[:350], cell_evidence(doc, sheet, n, col_idx, cell_val))
+                        break
+                break
+
+    if not result.get("vat", field(None)).value and result.get("consignee_address") and result["consignee_address"].value:
+        m_vat = re.search(r"VAT[:\s]*([A-Za-z0-9\-]+)", result["consignee_address"].value)
+        if m_vat:
+            result["vat"] = field(m_vat.group(1).strip(), result["consignee_address"].evidence)
     for number, cells in rows[:35]:
         mode = next(
             (
@@ -1025,7 +1073,9 @@ def extract_pdf_legacy(data: bytes, name: str, doc: UUID, classification: str):
         "bl_no",
         "issue_date",
         "shipper",
+        "shipper_address",
         "consignee",
+        "consignee_address",
         "carrier",
         "vessel",
         "voyage",
@@ -1034,12 +1084,24 @@ def extract_pdf_legacy(data: bytes, name: str, doc: UUID, classification: str):
         "origin",
         "destination",
         "port",
+        "vat",
     ):
         value = clean(raw.get(key))[:350]
         if key == "container" and not CONTAINER_VALUE_RE.match(value):
             value = ""
         original = clean(raw.get("raw_date")) if key == "issue_date" else value
         evidence = locate(original)
+        if not evidence and key in {"shipper_address", "consignee_address"} and value:
+            for line_part in value.splitlines():
+                cl_part = clean(line_part)
+                if len(cl_part) >= 4:
+                    evidence = locate(cl_part)
+                    if evidence:
+                        break
+            if not evidence:
+                fallback_parent = "shipper" if key == "shipper_address" else "consignee"
+                if fields.get(fallback_parent) and fields[fallback_parent].evidence:
+                    evidence = fields[fallback_parent].evidence[0]
         if key in {"origin", "destination", "port"} and evidence:
             context = " ".join(
                 line.raw or ""
@@ -1066,6 +1128,8 @@ def extract_pdf_legacy(data: bytes, name: str, doc: UUID, classification: str):
             fields[key] = field(value, evidence, uncertain=uncertain)
         else:
             fields[key] = field(None)
+    if fields.get("shipper_address") and fields["shipper_address"].value and not fields.get("supplier_address"):
+        fields["supplier_address"] = fields["shipper_address"]
     for key in ("notify_party", "booking_no", "etd", "eta"):
         token = {
             "notify_party": "notify party",

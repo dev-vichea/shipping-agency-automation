@@ -33,7 +33,7 @@ def company_key(name: str | None) -> str:
 REFERENCE_LABEL = r"(?:(?:file|letter|reference|ref)\s+(?:no\.?|number|[:：])|no\.?|number)"
 REFERENCE_NUMBER = r"(?:[A-Z]*[0-9][A-Z0-9]*(?:[/-][A-Z0-9]+)*|[A-Z]{2,}[/-][0-9][A-Z0-9/-]*)"
 DOCUMENT_REFERENCE = re.compile(
-    rf"\b(?P<kind>QIP|CIB)\s*(?P<label>{REFERENCE_LABEL})?\s*(?:[.:：#/-]\s*)?"
+    rf"\b(?P<kind>CDC|QIP|CIB)\s*(?P<label>{REFERENCE_LABEL})?\s*(?:[.:：#/-]\s*)?"
     rf"(?P<code>{REFERENCE_NUMBER})\b",
     re.I,
 )
@@ -50,7 +50,7 @@ def document_reference(text: str) -> re.Match[str] | None:
 
 def approval_key(ref: str) -> str:
     return (
-        re.sub(rf"^(?:qip|cib)\s*(?:{REFERENCE_LABEL})?[\s:#./：-]*", "", folded(ref))
+        re.sub(rf"^(?:cdc|qip|cib)\s*(?:{REFERENCE_LABEL})?[\s:#./：-]*", "", folded(ref))
         .strip()
         .upper()
     )
@@ -340,10 +340,15 @@ def matches_master_company(invoice, master):
     alias = printed.english if printed else None
     if master and consignee and alias and alias.status == "verified_company_alias" and alias.company_id and alias.company_id == getattr(master, "company_id", None):
         return True
+    if not (master and consignee):
+        return False
+    ck_c = company_key(consignee)
+    ck_m = master.company_key
+    si_c = source_identity(consignee)
+    si_m = source_identity(master.company)
     return bool(
-        master and consignee
-        and company_key(consignee) == master.company_key
-        and source_identity(consignee) == source_identity(master.company)
+        (ck_c == ck_m or ck_m in ck_c or ck_c in ck_m or ck_c.startswith(ck_m))
+        and (si_c == si_m or si_m in si_c or si_c in si_m or si_c.startswith(si_m))
     )
 
 

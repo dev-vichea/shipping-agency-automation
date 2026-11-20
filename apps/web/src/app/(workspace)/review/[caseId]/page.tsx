@@ -9,19 +9,31 @@ import { api, workspaceList } from "@/lib/server-api";
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: Promise<{ caseId: string }>;
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
 }): Promise<Metadata> {
   const { caseId } = await params;
-  return { title: `Review ${caseId.slice(0, 8)}` };
+  const sp = searchParams ? await searchParams : {};
+  const isVerif = sp.tab === "verification";
+  return { title: `Review ${caseId.slice(0, 8)}${isVerif ? " · Verification" : ""}` };
 }
 
 export default async function ReviewDetail({
   params,
+  searchParams,
+  defaultTab,
 }: {
   params: Promise<{ caseId: string }>;
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+  defaultTab?: "documents" | "verification";
 }) {
   const { caseId } = await params;
+  const sp = searchParams ? await searchParams : {};
+  const tabParam = typeof sp.tab === "string" ? sp.tab : undefined;
+  const initialTab: "documents" | "verification" =
+    defaultTab ?? (tabParam === "verification" ? "verification" : "documents");
   const path = `/intakes/${encodeURIComponent(caseId)}`;
 
   const [item, analysis, workflow, activity, workspace] = await Promise.all([
@@ -43,7 +55,7 @@ export default async function ReviewDetail({
   return <>
     <LiveRefresh active={item.state === "queued" || item.state === "processing" || analysis.ai_state === "pending"} />
     <DocumentReviewWorkspace item={item} analysis={analysis} versions={versions} workflow={workflow}
-      companies={companies} activity={activity} admin={admin}
+      companies={companies} activity={activity} admin={admin} initialTab={initialTab}
       share={telegram && (
         <RecordDialog
           key="telegram-share"

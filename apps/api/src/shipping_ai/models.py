@@ -527,3 +527,97 @@ class CdcReservation(Base):
     approval_id: Mapped[UUID] = mapped_column(ForeignKey("approvals.id"))
     quantity: Mapped[Decimal] = mapped_column(Numeric(20, 6))
     amount: Mapped[Decimal] = mapped_column(Numeric(20, 6))
+
+
+class FleetDriver(Identified, Created, Base):
+    __tablename__ = "fleet_drivers"
+    __table_args__ = (
+        CheckConstraint("status IN ('available','on_trip','off_duty')", name="driver_status"),
+        Index("ix_fleet_drivers_workspace", "workspace_id"),
+        Index("ix_fleet_drivers_phone", "phone"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), server_default=str(DEFAULT_WORKSPACE), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160), index=True)
+    phone: Mapped[str] = mapped_column(String(64), index=True)
+    license_number: Mapped[str | None] = mapped_column(String(64))
+    national_id: Mapped[str | None] = mapped_column(String(64))
+    assigned_vehicle_plate: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), server_default="available")
+    total_trips: Mapped[int] = mapped_column(Integer, server_default="0")
+    safety_rating: Mapped[str] = mapped_column(String(16), server_default="5.0")
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FleetVehicle(Identified, Created, Base):
+    __tablename__ = "fleet_vehicles"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('available','on_trip','maintenance')", name="vehicle_status"
+        ),
+        CheckConstraint(
+            "haulier_type IN ('in_house','subcontractor')", name="haulier_type"
+        ),
+        UniqueConstraint("workspace_id", "plate_number", name="uq_fleet_vehicle_plate"),
+        Index("ix_fleet_vehicles_workspace", "workspace_id"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), server_default=str(DEFAULT_WORKSPACE), index=True
+    )
+    plate_number: Mapped[str] = mapped_column(String(64), index=True)
+    trailer_plate: Mapped[str | None] = mapped_column(String(64))
+    vehicle_type: Mapped[str] = mapped_column(String(64), server_default="40ft Flatbed Chassis")
+    haulier_type: Mapped[str] = mapped_column(String(32), server_default="in_house")
+    haulier_name: Mapped[str] = mapped_column(String(160), server_default="Harborway Fleet")
+    assigned_driver_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("fleet_drivers.id", ondelete="SET NULL"), index=True
+    )
+    assigned_driver_name: Mapped[str | None] = mapped_column(String(160))
+    driver_phone: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(24), server_default="available")
+    capacity: Mapped[str] = mapped_column(String(64), server_default="45 Tons")
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FleetDispatch(Identified, Created, Base):
+    __tablename__ = "fleet_dispatches"
+    __table_args__ = (
+        CheckConstraint("direction IN ('inbound','outbound')", name="dispatch_direction"),
+        CheckConstraint(
+            "milestone IN ('dispatched','gate_out','in_transit','at_factory','empty_returned')",
+            name="dispatch_milestone",
+        ),
+        Index("ix_fleet_dispatches_workspace", "workspace_id"),
+        Index("ix_fleet_dispatches_shipment", "shipment_ref"),
+    )
+
+    workspace_id: Mapped[UUID] = mapped_column(
+        ForeignKey("workspaces.id"), server_default=str(DEFAULT_WORKSPACE), index=True
+    )
+    trip_number: Mapped[str] = mapped_column(String(64), index=True)
+    shipment_ref: Mapped[str] = mapped_column(String(160), index=True)
+    company_name: Mapped[str] = mapped_column(String(254), server_default="XIN CAI FU")
+    direction: Mapped[str] = mapped_column(String(16), server_default="inbound")
+    truck_plate: Mapped[str] = mapped_column(String(64))
+    trailer_plate: Mapped[str | None] = mapped_column(String(64))
+    driver_name: Mapped[str] = mapped_column(String(160))
+    driver_phone: Mapped[str] = mapped_column(String(64))
+    container_no: Mapped[str] = mapped_column(String(64))
+    seal_no: Mapped[str] = mapped_column(String(64))
+    origin: Mapped[str] = mapped_column(String(254))
+    destination: Mapped[str] = mapped_column(String(254))
+    milestone: Mapped[str] = mapped_column(String(32), server_default="dispatched")
+    eta: Mapped[str | None] = mapped_column(String(64))
+    notes: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

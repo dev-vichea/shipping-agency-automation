@@ -38,3 +38,26 @@ export function decimalTotal(values: (string | null | undefined)[]): string | nu
   }, BigInt(0));
   return `${sum / scale}${sum % scale ? `.${String(sum % scale).padStart(6, "0").replace(/0+$/, "")}` : ""}`;
 }
+
+/** Split party company name from multiline address/contact blocks */
+export function splitPartyAndAddress(rawText: string | null | undefined): { name: string; address: string } {
+  if (!rawText || !rawText.trim()) {
+    return { name: "", address: "" };
+  }
+
+  const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (lines.length <= 1) {
+    return { name: lines[0] ?? "", address: "" };
+  }
+
+  const companySuffix = /\b(?:LTD\.?|LIMITED|CORP\.?|INC\.?|COMPANY|CO\.,?\s*LTD\.?|LLC|PTE|PLC)\b/i;
+  let splitIdx = 1;
+  if (!companySuffix.test(lines[0]) && lines.length > 2 && companySuffix.test(lines[1])) {
+    splitIdx = 2;
+  }
+
+  const name = lines.slice(0, splitIdx).join(" ");
+  const address = lines.slice(splitIdx).join("\n");
+
+  return { name, address };
+}

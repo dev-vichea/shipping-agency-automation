@@ -1,9 +1,18 @@
 "use client";
 
-import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
-import { AlertTriangle, RotateCcw } from "lucide-react";
+import { useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, ChevronDown, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import {
+  COMMON_COUNTRIES,
+  COMMON_DESTINATIONS,
+  COMMON_ORIGINS,
+  COMMON_PORTS,
+  COMMON_SHIPPING_UNITS,
+  COMMON_TRANSPORT_MODES,
+} from "@/lib/shipping-units";
 import type { Evidence, ExtractedField, ReviewCorrection, ReviewField } from "@/lib/contracts";
 import { documentFieldLabel } from "@/lib/format";
 import { dateFields, numericFields } from "@/lib/verification-review";
@@ -56,8 +65,9 @@ export function VerificationField({
   onInspect: () => void;
   onDirtyChange: (key: string, dirty: boolean) => void;
 }) {
-  const [text, setText] = useState(field.value ?? "");
-  const [previous, setPrevious] = useState(field.value);
+  const safeField = field ?? rawField ?? { status: "missing" as const, value: "", confidence: 1, evidence: [] };
+  const [text, setText] = useState(safeField.value ?? "");
+  const [previous, setPrevious] = useState(safeField.value);
   const [editingVerified, setEditingVerified] = useState(false);
   const [note, setNote] = useState("");
   const [error, setError] = useState("");
@@ -68,7 +78,7 @@ export function VerificationField({
 
   const money = ["unit_price", "amount"].includes(target.name);
   const hasUnit = ["gross_weight", "net_weight", "packages", "measurement"].includes(target.name);
-  const dimension = money ? field.currency ?? "" : field.unit ?? "";
+  const dimension = money ? safeField.currency ?? "" : safeField.unit ?? "";
 
   const inFlight = useRef(false);
   const confirmAfterSave = useRef(false);
@@ -82,9 +92,9 @@ export function VerificationField({
     }
   }, [text]);
 
-  if (field.value !== previous) {
-    setPrevious(field.value);
-    setText(field.value ?? "");
+  if (safeField.value !== previous) {
+    setPrevious(safeField.value);
+    setText(safeField.value ?? "");
   }
 
   const verified = !!correction && correction.confirmed !== false;
@@ -108,8 +118,8 @@ export function VerificationField({
   };
 
   const dirty =
-    text.trim() !== (field.value ?? "") ||
-    ((money || hasUnit) && dimension !== (money ? field.currency ?? "" : field.unit ?? ""));
+    text.trim() !== (safeField.value ?? "").trim() ||
+    ((money || hasUnit) && dimension !== (money ? safeField.currency ?? "" : safeField.unit ?? ""));
   const fieldKey = `${target.document_id}:${target.role}:${target.row ?? 0}:${target.name}`;
 
   useEffect(() => {
@@ -140,13 +150,15 @@ export function VerificationField({
     ? "Uncertain"
     : "AI-filled";
 
-  async function persist(confirmed: boolean) {
+  async function persist(confirmed: boolean, overrideValue?: string, overrideSource?: ReviewField) {
+    const val = overrideValue !== undefined ? overrideValue : text;
+    const src = overrideSource !== undefined ? overrideSource : suggestionSource;
     if (confirmed && inFlight.current) {
       confirmAfterSave.current = true;
       return;
     }
-    if (!text.trim() || disabled || (locked && !compact) || inFlight.current || (!compact && editingVerified && !note.trim())) return;
-    const fingerprint = `${text.trim()}:${dimension}:${confirmed}:${alternative ?? ""}`;
+    if (!val.trim() || disabled || inFlight.current) return;
+    const fingerprint = `${val.trim()}:${dimension}:${confirmed}:${alternative ?? ""}`;
     if (!confirmed && lastSubmitted.current === fingerprint) return;
     inFlight.current = true;
     lastSubmitted.current = fingerprint;
@@ -155,19 +167,19 @@ export function VerificationField({
     try {
       const chosenSource = sourceChoices.find(
         (entry) =>
-          entry.source.document_id === suggestionSource?.document_id &&
-          entry.source.role === suggestionSource?.role &&
-          entry.source.row === suggestionSource?.row &&
-          entry.source.name === suggestionSource?.name
+          entry.source.document_id === src?.document_id &&
+          entry.source.role === src?.role &&
+          entry.source.row === src?.row &&
+          entry.source.name === src?.name
       )?.field;
       await onSave({
-        value: text.trim(),
+        value: val.trim(),
         unit: chosenSource ? chosenSource.unit : hasUnit ? dimension || null : field.unit,
         currency: money ? dimension || null : chosenSource ? chosenSource.currency : field.currency,
         confirmed,
         note: note.trim() || (confirmed ? "Confirmed individually." : "Autosaved edit."),
         alternative_index: alternative,
-        suggestion_source: suggestionSource,
+        suggestion_source: src,
       });
       if (confirmed) {
         setEditingVerified(false);
@@ -191,21 +203,65 @@ export function VerificationField({
       void persistLatest(true);
       return;
     }
-    if (!autosave || !dirty || (locked && !compact) || (verified && !compact) || disabled || !text.trim()) return;
+    if (!autosave || !dirty || disabled || !text.trim()) return;
     const timer = setTimeout(() => void persistLatest(false), 650);
     return () => clearTimeout(timer);
-  }, [autosave, dirty, locked, verified, disabled, text, dimension, saving, compact]);
+  }, [autosave, dirty, disabled, text, dimension, saving]);
+
+  // Header field suggestions combobox options
+  const headerComboboxOptions: ComboboxOption<VerificationSourceChoice>[] = useMemo(() => {
+    const list: ComboboxOption<VerificationSourceChoice>[] = [];
+
+    if (sourceChoices.length > 0) {
+      for (const sc of sourceChoices) {
+        list.push({
+          value: sc.field?.value ?? "",
+          label: sc.field?.value ?? "",
+          description: sc.label,
+          badge: sc.source.role.replaceAll("_", " "),
+          category: "Document Sources",
+          data: sc,
+        });
+      }
+    }
+
+    if (suggestion?.value && !list.some((opt) => opt.value === suggestion.value)) {
+      list.push({
+        value: suggestion.value,
+        label: suggestion.value,
+        description: "Rule / AI extraction suggestion",
+        badge: "Suggested",
+        badgeVariant: "warning",
+        category: "Suggestions",
+      });
+    }
+
+    if (target.name === "transport_mode" || target.name === "shipping_mode") {
+      list.push(...(COMMON_TRANSPORT_MODES as ComboboxOption<VerificationSourceChoice>[]));
+    } else if (target.name === "origin") {
+      list.push(...(COMMON_ORIGINS as ComboboxOption<VerificationSourceChoice>[]));
+    } else if (target.name === "destination") {
+      list.push(...(COMMON_DESTINATIONS as ComboboxOption<VerificationSourceChoice>[]));
+    } else if (target.name === "port") {
+      list.push(...(COMMON_PORTS as ComboboxOption<VerificationSourceChoice>[]));
+    } else if (target.name === "country_of_origin") {
+      list.push(...(COMMON_COUNTRIES as ComboboxOption<VerificationSourceChoice>[]));
+    }
+
+    return list;
+  }, [sourceChoices, suggestion, target.name]);
 
   // Compact mode for table cells (simple, clean input, no icons, no overflow, flexible text)
   if (compact) {
     const isTotal = target.row === null;
     const unitSuffix = isTotal ? (dimension || field.currency || field.unit) : null;
     const isDescription = target.name === "description";
+    const isUnit = target.name === "unit";
 
     return (
       <div className="w-full min-w-0" data-field-state={status}>
         {isDescription ? (
-          <div className="flex items-start w-full min-w-0 gap-1">
+          <div className="flex items-center w-full min-w-0 gap-1">
             <textarea
               id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
               aria-label={label}
@@ -233,6 +289,7 @@ export function VerificationField({
               }}
               onChange={(event) => {
                 setText(event.target.value);
+                if (error) setError("");
                 setAlternative(undefined);
                 setSuggestionSource(undefined);
               }}
@@ -260,7 +317,60 @@ export function VerificationField({
                 title="Undo change (revert to original)"
                 aria-label={`Undo change for ${label}`}
                 onClick={handleUndo}
-                className="shrink-0 mt-1 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
+                className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer flex items-center"
+              >
+                <RotateCcw className="size-3" />
+              </button>
+            )}
+          </div>
+        ) : isUnit ? (
+          <div className="flex items-center w-full min-w-0 gap-1 justify-end">
+            <Combobox
+              id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
+              ariaLabel={label}
+              value={text}
+              disabled={disabled}
+              readOnly={disabled}
+              compact
+              numeric={false}
+              popoverWidth="w-[280px]"
+              headerTitle="Select Unit"
+              options={COMMON_SHIPPING_UNITS}
+              onChange={(val) => {
+                setText(val);
+                if (error) setError("");
+                setAlternative(undefined);
+                setSuggestionSource(undefined);
+              }}
+              onSelectOption={(opt) => {
+                setText(opt.value);
+                if (error) setError("");
+                setAlternative(undefined);
+                setSuggestionSource(undefined);
+                void persist(false, opt.value, undefined);
+              }}
+              onFocus={() => {
+                if (locked) setEditingVerified(true);
+                onInspect();
+              }}
+              onBlur={() => {
+                if (autosave && dirty) void persist(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void persist(true);
+                }
+              }}
+              error={error}
+            />
+            {isChanged && onUndo && (
+              <button
+                type="button"
+                title="Undo change (revert to original)"
+                aria-label={`Undo change for ${label}`}
+                onClick={handleUndo}
+                className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
               >
                 <RotateCcw className="size-3" />
               </button>
@@ -279,7 +389,6 @@ export function VerificationField({
               step={numeric ? "any" : undefined}
               min={numeric ? "0" : undefined}
               placeholder={text ? undefined : "—"}
-              list={target.name === "unit" ? "common-shipping-units" : undefined}
               className={cn(
                 "h-7 flex-1 min-w-0 rounded border border-transparent bg-transparent hover:border-border/60 hover:bg-background/40 hover:shadow-2xs focus:border-primary focus:bg-background focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text",
                 numeric ? "font-mono text-right tabular-nums" : "text-left",
@@ -295,6 +404,7 @@ export function VerificationField({
               }}
               onChange={(event) => {
                 setText(event.target.value);
+                if (error) setError("");
                 setAlternative(undefined);
                 setSuggestionSource(undefined);
               }}
@@ -326,30 +436,13 @@ export function VerificationField({
             )}
           </div>
         )}
-        {target.name === "unit" && (
-          <datalist id="common-shipping-units">
-            <option value="KG" />
-            <option value="MTR" />
-            <option value="PCS" />
-            <option value="DOZ" />
-            <option value="CONE" />
-            <option value="SET" />
-            <option value="ROLL" />
-            <option value="PKG" />
-            <option value="YARD" />
-            <option value="PAIR" />
-            <option value="BOX" />
-            <option value="CTN" />
-            <option value="CBM" />
-          </datalist>
-        )}
         {error && <p role="alert" className="text-[9px] text-destructive">{error}</p>}
       </div>
     );
   }
 
   // Header field mode (clean form field with label on top, flexible expanding text, subtle border & soft shadow)
-  const isFlexibleText = !numeric && !dateFields.has(target.name) && !money && !hasUnit;
+  const isAddress = target.name.endsWith("address") || target.name === "address";
 
   return (
     <div className="group/field w-full min-w-0 space-y-1.5" data-field-state={status}>
@@ -374,7 +467,7 @@ export function VerificationField({
         )}
       </div>
 
-      {isFlexibleText ? (
+      {isAddress ? (
         <textarea
           ref={textareaRef}
           id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
@@ -404,102 +497,69 @@ export function VerificationField({
           }}
           onChange={(event) => {
             setText(event.target.value);
+            if (error) setError("");
             setAlternative(undefined);
             setSuggestionSource(undefined);
           }}
           onBlur={() => {
-            if (autosave && dirty) void persist(false);
+            if (dirty) void persist(false);
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void persist(true);
+              void persist(false);
             }
           }}
         />
-      ) : (money || hasUnit) ? (
-        <div
-          className={cn(
-            "flex h-9 w-full items-center rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-sm hover:border-primary/50 hover:shadow focus-within:border-primary focus-within:ring-1 focus-within:ring-primary/40 focus-within:shadow-sm transition-all duration-150",
-            error && "border-destructive bg-destructive/5"
-          )}
-        >
-          <input
-            id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
-            aria-label={label}
-            value={text}
-            readOnly={disabled}
-            disabled={disabled}
-            maxLength={350}
-            type={type}
-            step={numeric ? "any" : undefined}
-            min={numeric ? "0" : undefined}
-            placeholder={text ? undefined : "—"}
-            className="h-full flex-1 border-0 bg-transparent px-3 text-xs text-foreground outline-none cursor-text [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-            onFocus={() => {
-              if (locked) setEditingVerified(true);
-              onInspect();
-            }}
-            onClick={() => {
-              if (locked) setEditingVerified(true);
-            }}
-            onChange={(event) => {
-              setText(event.target.value);
-              setAlternative(undefined);
-              setSuggestionSource(undefined);
-            }}
-            onBlur={() => {
-              if (autosave && dirty) void persist(false);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                void persist(true);
-              }
-            }}
-          />
-          <span className="shrink-0 text-[11px] font-mono font-semibold uppercase text-muted-foreground px-2.5 select-none">
-            {dimension || (money ? "USD" : "")}
-          </span>
-        </div>
       ) : (
-        <input
+        <Combobox
           id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
-          aria-label={label}
+          ariaLabel={label}
           value={text}
-          readOnly={disabled}
           disabled={disabled}
-          maxLength={350}
+          readOnly={disabled}
+          multiline={["cargo_summary", "description", "remark"].includes(target.name)}
+          numeric={numeric}
           type={type}
-          step={numeric ? "any" : undefined}
-          min={numeric ? "0" : undefined}
-          placeholder={text ? undefined : "—"}
-          className={cn(
-            "h-9 w-full rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-sm hover:border-primary/50 hover:shadow focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-sm px-3 text-xs text-foreground outline-none transition-all duration-150 cursor-text",
-            numeric ? "font-mono tabular-nums" : "text-left",
-            error && "border-destructive bg-destructive/5"
-          )}
+          headerTitle={`${documentFieldLabel(target.name)} Suggestions`}
+          popoverWidth="w-[380px]"
+          options={headerComboboxOptions}
+          showWhenEmpty={false}
+          rightAdornment={
+            headerComboboxOptions.length > 0 ? (
+              <ChevronDown className="size-3.5 text-muted-foreground/40 absolute right-2.5 pointer-events-none" />
+            ) : undefined
+          }
+          inputClassName={headerComboboxOptions.length > 0 ? "pr-8" : ""}
+          onChange={(val) => {
+            setText(val);
+            if (error) setError("");
+            setAlternative(undefined);
+            setSuggestionSource(undefined);
+          }}
+          onSelectOption={(opt) => {
+            setText(opt.value);
+            if (error) setError("");
+            const source = (opt.data as VerificationSourceChoice | undefined)?.source;
+            if (source) {
+              setSuggestionSource(source);
+            }
+            void persist(false, opt.value, source);
+          }}
           onFocus={() => {
             if (locked) setEditingVerified(true);
             onInspect();
           }}
-          onClick={() => {
-            if (locked) setEditingVerified(true);
-          }}
-          onChange={(event) => {
-            setText(event.target.value);
-            setAlternative(undefined);
-            setSuggestionSource(undefined);
-          }}
           onBlur={() => {
-            if (autosave && dirty) void persist(false);
+            if (dirty) void persist(false);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void persist(true);
+              void persist(false);
             }
           }}
+          error={error}
         />
       )}
       {error && <p role="alert" className="text-[10px] text-destructive">{error}</p>}
@@ -551,4 +611,3 @@ export function VerificationField({
     </div>
   );
 }
-

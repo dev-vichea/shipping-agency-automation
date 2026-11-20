@@ -117,9 +117,8 @@ test("verification edits real document cells, synchronizes print previews, confi
 
   await left.getByRole("button", { name: "Review CDC material", exact: true }).first().click();
   const material = left.getByRole("region", { name: "CDC options for row 10" });
-  await expect(material.getByText("Approved material candidates")).toBeVisible();
-  await material.getByLabel("CDC decision reason row 10").fill("Confirmed identity in the CDC workbook; discrepancies remain open.");
-  await material.getByRole("button", { name: "Confirm material", exact: true }).click();
+  await expect(material.getByText(/Best Matches/i)).toBeVisible();
+  await material.getByRole("button").first().click();
   await expect.poll(async () => (await workflow()).review?.mappings.length).toBe(1);
   expect((await workflow()).review?.cdc_ready).toBe(false);
   await editor.getByRole("button", { name: "History", exact: true }).click();

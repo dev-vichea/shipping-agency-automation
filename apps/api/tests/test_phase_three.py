@@ -454,6 +454,34 @@ def test_original_candidate_review_binds_its_own_evidence():
     assert changes[0]["before"]["evidence"] == [first.model_dump(mode="json")]
 
 
+def test_apply_corrections_allows_adding_unextracted_fields():
+    from shipping_ai.approvals.review import Correction, apply_corrections
+    from shipping_ai.review.schemas import Extraction
+    from shipping_ai.review.values import field
+
+    doc_id = uuid4()
+    doc = Extraction(
+        document_id=doc_id,
+        role="invoice",
+        status="extracted",
+        method="deterministic",
+        fields={"invoice_no": field("INV-101")},
+        items=[],
+    )
+    # supplier_address is NOT in doc.fields originally
+    correction = Correction(
+        document_id=doc_id,
+        role="invoice",
+        row=None,
+        name="supplier_address",
+        value="123 Export St, Shanghai",
+        note="Entered supplier address manually.",
+    )
+    changes = apply_corrections([doc], [correction])
+    assert len(changes) == 1
+    assert doc.fields["supplier_address"].value == "123 Export St, Shanghai"
+
+
 def test_missing_ref_correction_request_rejection_and_unauthorized_approval(staff):
     import httpx
 

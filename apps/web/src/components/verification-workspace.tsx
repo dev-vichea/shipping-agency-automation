@@ -24,7 +24,7 @@ import type {
   StaffReview,
 } from "@/lib/contracts";
 import { documentFieldLabel, location, timestamp } from "@/lib/format";
-import { decimalTotal, replaceVerificationField } from "@/lib/verification-review";
+import { decimalTotal, replaceVerificationField, splitPartyAndAddress } from "@/lib/verification-review";
 
 const totals = ["packages", "quantity", "net_weight", "gross_weight", "measurement", "amount"];
 const headerOrder = [
@@ -96,6 +96,81 @@ function columnWeight(name: string) {
   }
 }
 
+function normalizeDocument(document: Extraction | undefined): Extraction | undefined {
+  if (!document) return undefined;
+  const fields = { ...document.fields };
+
+  // Consignee & Consignee Address split
+  const rawConsignee = fields.consignee?.value ?? "";
+  const rawConsigneeAddress = fields.consignee_address?.value ?? "";
+  if (rawConsignee && (!rawConsigneeAddress.trim() || rawConsignee.includes("\n"))) {
+    const { name, address } = splitPartyAndAddress(rawConsignee);
+    if (address && !rawConsigneeAddress.trim()) {
+      fields.consignee = {
+        ...fields.consignee,
+        status: "present",
+        value: name,
+      };
+      fields.consignee_address = {
+        status: "present",
+        value: address,
+        evidence: fields.consignee?.evidence ?? [],
+        unit: null,
+        currency: null,
+      };
+    } else if (rawConsignee.includes("\n")) {
+      fields.consignee = {
+        ...fields.consignee,
+        value: name,
+      };
+    }
+  }
+
+  // Supplier & Supplier Address split
+  const rawSupplier = fields.supplier?.value ?? "";
+  const rawSupplierAddress = fields.supplier_address?.value ?? "";
+  if (rawSupplier && (!rawSupplierAddress.trim() || rawSupplier.includes("\n"))) {
+    const { name, address } = splitPartyAndAddress(rawSupplier);
+    if (address && !rawSupplierAddress.trim()) {
+      fields.supplier = {
+        ...fields.supplier,
+        status: "present",
+        value: name,
+      };
+      fields.supplier_address = {
+        status: "present",
+        value: address,
+        evidence: fields.supplier?.evidence ?? [],
+        unit: null,
+        currency: null,
+      };
+    } else if (rawSupplier.includes("\n")) {
+      fields.supplier = {
+        ...fields.supplier,
+        value: name,
+      };
+    }
+  }
+
+  // Extract VAT if present in address and not yet set
+  const fullText = `${fields.consignee_address?.value ?? ""} ${rawConsignee}`;
+  const vatMatch = fullText.match(/VAT[:\s]*([A-Za-z0-9\-]+)/i);
+  if (vatMatch && (!fields.vat?.value || !fields.vat.value.trim())) {
+    fields.vat = {
+      status: "present",
+      value: vatMatch[1].trim(),
+      evidence: fields.consignee?.evidence ?? [],
+      unit: null,
+      currency: null,
+    };
+  }
+
+  return {
+    ...document,
+    fields,
+  };
+}
+
 export function VerificationWorkspace({
   item,
   analysis,
@@ -141,7 +216,7 @@ export function VerificationWorkspace({
     onPending(isPending || dirtyCount.current > 0);
   }, [onPending]);
 
-  const { review, pending, error, save } = useVerificationReview({
+  const { review, pending, error, clearError, save } = useVerificationReview({
     caseId: item.id,
     revision: analysis.revision,
     saved,
@@ -186,20 +261,54 @@ export function VerificationWorkspace({
   ];
   const columnWeights = columns.reduce((sum, name) => sum + columnWeight(name), 0);
 
-  const fields = document
-    ? Object.keys(document.fields)
+  const normalizedDoc = normalizeDocument(document);
+
+  const allFieldKeys = normalizedDoc
+    ? Array.from(new Set([...Object.keys(normalizedDoc.fields), "supplier_address", "consignee_address"]))
+    : [];
+
+  const fields = normalizedDoc
+    ? allFieldKeys
         .filter((key) => !totals.includes(key) && !["english_description", "delivery", "discharge", "route_legs"].includes(key))
         .filter(
           (key) =>
-            document.fields[key].value !== null ||
-            document.fields[key].evidence.length ||
-            ["invoice_no", "invoice_date", "supplier", "consignee"].includes(key)
+            (normalizedDoc.fields[key] && (normalizedDoc.fields[key].value !== null || normalizedDoc.fields[key].evidence?.length > 0)) ||
+            ["invoice_no", "invoice_date", "supplier", "supplier_address", "consignee", "consignee_address"].includes(key)
         )
         .sort((a, b) => (headerOrder.indexOf(a) < 0 ? 100 : headerOrder.indexOf(a)) - (headerOrder.indexOf(b) < 0 ? 100 : headerOrder.indexOf(b)))
     : [];
 
   function displayed(ref: ReviewField, fallback: ExtractedField) {
-    return changed.get(reviewKey(ref)) ?? fallback;
+    const val = changed.get(reviewKey(ref)) ?? fallback;
+    if (ref.row === null) {
+      if (ref.name === "consignee" && val.value && val.value.includes("\n")) {
+        const { name } = splitPartyAndAddress(val.value);
+        return { ...val, value: name };
+      }
+      if (ref.name === "supplier" && val.value && val.value.includes("\n")) {
+        const { name } = splitPartyAndAddress(val.value);
+        return { ...val, value: name };
+      }
+      if (ref.name === "consignee_address") {
+        const explicit = changed.get(reviewKey(ref));
+        if (explicit?.value && explicit.value.trim()) return explicit;
+        const cVal = changed.get(reviewKey({ ...ref, name: "consignee" }))?.value ?? normalizedDoc?.fields.consignee?.value ?? "";
+        if (cVal && cVal.includes("\n") && (!fallback.value || !fallback.value.trim())) {
+          const { address } = splitPartyAndAddress(cVal);
+          if (address) return { ...fallback, status: "present" as const, value: address };
+        }
+      }
+      if (ref.name === "supplier_address") {
+        const explicit = changed.get(reviewKey(ref));
+        if (explicit?.value && explicit.value.trim()) return explicit;
+        const sVal = changed.get(reviewKey({ ...ref, name: "supplier" }))?.value ?? normalizedDoc?.fields.supplier?.value ?? "";
+        if (sVal && sVal.includes("\n") && (!fallback.value || !fallback.value.trim())) {
+          const { address } = splitPartyAndAddress(sVal);
+          if (address) return { ...fallback, status: "present" as const, value: address };
+        }
+      }
+    }
+    return val;
   }
 
   function inspect(ref: ReviewField) {
@@ -216,11 +325,12 @@ export function VerificationWorkspace({
     )?.explanation;
   }
 
-  function fieldEditor(ref: ReviewField, raw: ExtractedField, compact = false) {
-    const value = displayed(ref, raw);
+  function fieldEditor(ref: ReviewField, raw?: ExtractedField, compact = false) {
+    const rawVal: ExtractedField = raw ?? { status: "missing", value: "", evidence: [], unit: null, currency: null };
+    const value = displayed(ref, rawVal);
     const proposed = workflow.issues?.find((issue) => issue.target && reviewKey(issue.target) === reviewKey(ref))?.suggestion;
     const suggestion = suggestions && proposed?.value && proposed.evidence.length ? { value: proposed.value, evidence: proposed.evidence } : undefined;
-    const sourceChoices: VerificationSourceChoice[] = suggestions
+    const workflowChoices: VerificationSourceChoice[] = suggestions
       ? [
           ...new Map(
             (workflow.field_suggestions ?? [])
@@ -244,14 +354,70 @@ export function VerificationWorkspace({
         ]
       : [];
 
+    // Document choices from other extractions in the same shipment
+    const validRoles = new Set<ReviewField["role"]>(["invoice", "packing_list", "draft_bl", "final_bl"]);
+    const extraDocChoices: VerificationSourceChoice[] = [];
+    for (const doc of analysis.extractions) {
+      if ((doc.document_id === ref.document_id && doc.role === ref.role) || !validRoles.has(doc.role as ReviewField["role"])) continue;
+      const otherField = doc.fields[ref.name];
+      if (otherField?.value && otherField.value.trim() && otherField.value !== rawVal.value) {
+        const docObj = item.documents.find((d) => d.id === doc.document_id);
+        const docLabel = docObj?.original_filename || doc.role.replaceAll("_", " ");
+        const loc = otherField.evidence?.[0] ? ` · ${location(otherField.evidence[0])}` : "";
+        extraDocChoices.push({
+          source: { document_id: doc.document_id, role: doc.role as ReviewField["role"], row: null, name: ref.name },
+          field: otherField,
+          label: `${docLabel}${loc}`,
+        });
+      }
+    }
+
+    if (ref.name === "consignee" && analysis.analyzed_master?.company && analysis.analyzed_master.company !== rawVal.value) {
+      extraDocChoices.push({
+        source: { document_id: "master", role: "invoice", row: null, name: "consignee" },
+        field: {
+          status: "present",
+          value: analysis.analyzed_master.company,
+          evidence: [],
+          unit: null,
+          currency: null,
+        },
+        label: `Verified Master List · ${analysis.analyzed_master.approval_ref || "QIP"}`,
+      });
+    }
+
+    if (ref.name === "consignee" && item.company && item.company !== rawVal.value && !extraDocChoices.some((c) => c.field.value === item.company)) {
+      extraDocChoices.push({
+        source: { document_id: "intake", role: "invoice", row: null, name: "consignee" },
+        field: {
+          status: "present",
+          value: item.company,
+          evidence: [],
+          unit: null,
+          currency: null,
+        },
+        label: "Company Profile",
+      });
+    }
+
+    const seenValues = new Set<string>();
+    const sourceChoices: VerificationSourceChoice[] = [];
+    for (const choice of [...workflowChoices, ...extraDocChoices]) {
+      const val = choice.field?.value?.trim();
+      if (val && !seenValues.has(val)) {
+        seenValues.add(val);
+        sourceChoices.push(choice);
+      }
+    }
+
     return (
       <VerificationField
         key={reviewKey(ref)}
         target={ref}
         field={value}
-        rawField={raw}
+        rawField={rawVal}
         correction={corrections.get(reviewKey(ref))}
-        conflict={conflict(ref, raw)}
+        conflict={conflict(ref, rawVal)}
         suggestion={suggestion}
         sourceChoices={sourceChoices}
         autosave={autosave}
@@ -413,7 +579,8 @@ export function VerificationWorkspace({
 
   const handleSelectCandidate = async (
     row: number,
-    candidate: ReviewAnalysis["candidates"][number]
+    candidate: ReviewAnalysis["candidates"][number],
+    reason?: string
   ) => {
     if (!document) return;
     await save((draft) => {
@@ -424,7 +591,7 @@ export function VerificationWorkspace({
       const mappingDecision: FindingDecision = {
         key: `cdc.row.${row}.mapping`,
         action: "approved",
-        note: `Selected CDC material ${candidate.serial ? `${candidate.serial} · ` : ""}${candidate.description}`,
+        note: reason || `Selected CDC material ${candidate.serial ? `${candidate.serial} · ` : ""}${candidate.description}`,
         master_row: candidate.master_row,
       };
 
@@ -484,9 +651,17 @@ export function VerificationWorkspace({
   return (
     <section aria-label="Verification document editor" className="min-w-0">
       {error && (
-        <p role="alert" className="mb-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
-          {error} Your input remains in the editor. Refresh before retrying if another review changed.
-        </p>
+        <div role="alert" className="mb-3 flex items-center justify-between rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          <span>{error} Your input remains in the editor. Refresh before retrying if another review changed.</span>
+          <button
+            type="button"
+            onClick={clearError}
+            className="ml-2 rounded p-0.5 text-destructive/70 hover:text-destructive hover:bg-destructive/10 transition-colors cursor-pointer"
+            aria-label="Dismiss error"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
       )}
 
       {disabled && (
@@ -536,7 +711,7 @@ export function VerificationWorkspace({
             <VerificationDocumentCard
               role={role}
               onRoleChange={changeRole}
-              document={document}
+              document={normalizedDoc ?? document}
               documents={documents}
               original={original}
               chosenDocument={chosenDocument}
