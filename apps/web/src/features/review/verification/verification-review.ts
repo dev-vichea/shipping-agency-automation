@@ -11,7 +11,7 @@ export function replaceVerificationField(draft: ReviewDraft, edit: ReviewCorrect
     (offer.target && reviewKey(offer.target) === key) || offer.options.some((option) => reviewKey(option.source) === key),
   ).map((offer) => offer.key));
   const cdcHeader = edit.role === "invoice" && ["consignee", "invoice_date"].includes(edit.name);
-  const cdcRow = edit.role === "invoice" && edit.row !== null;
+  const cdcDesc = edit.role === "invoice" && edit.row !== null && edit.name === "description";
   return {
     ...draft,
     corrections: [...draft.corrections.filter((entry) => reviewKey(entry) !== key && (!entry.finding_key || !affected.has(entry.finding_key))), edit],
@@ -19,9 +19,23 @@ export function replaceVerificationField(draft: ReviewDraft, edit: ReviewCorrect
     resolutions: draft.resolutions.filter((entry) => !affected.has(entry.key)),
     finding_decisions: draft.finding_decisions?.filter((entry) => !affected.has(entry.key) &&
       !(entry.source && reviewKey(entry.source) === key) &&
-      !(entry.key.startsWith("cdc.row.") && (cdcHeader || (cdcRow && entry.key === `cdc.row.${edit.row}.mapping`)))),
-    mappings: draft.mappings.filter((entry) => !cdcHeader && !(cdcRow && entry.invoice_row === edit.row)),
+      !(entry.key.startsWith("cdc.row.") && (cdcHeader || (cdcDesc && entry.key === `cdc.row.${edit.row}.mapping`)))),
+    mappings: draft.mappings.filter((entry) => !cdcHeader && !(cdcDesc && entry.invoice_row === edit.row)),
   };
+}
+
+/** Compute amount from quantity and unit price, formatted cleanly with up to 2 decimal places. */
+export function calculateAmount(qtyStr: string | null | undefined, priceStr: string | null | undefined): string | null {
+  if (!qtyStr || !priceStr) return null;
+  const qty = parseFloat(qtyStr.replace(/,/g, ""));
+  const price = parseFloat(priceStr.replace(/,/g, ""));
+  if (isNaN(qty) || isNaN(price)) return null;
+  const product = Math.round(qty * price * 100) / 100;
+  const str = product.toFixed(2);
+  if (str.endsWith("0")) {
+    return str.slice(0, -1);
+  }
+  return str;
 }
 
 /** Fixed decimal addition keeps display totals out of binary floating-point arithmetic. */

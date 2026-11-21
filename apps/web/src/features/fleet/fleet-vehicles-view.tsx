@@ -8,15 +8,20 @@ import {
   CheckCircle2,
   Clock,
   Wrench,
-  Search,
   Trash2,
   Link2,
   UserCheck,
   Send,
   ChevronDown,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { PageHeading, Section } from "@/components/ui/page-layout";
 import {
@@ -644,29 +649,29 @@ export function FleetVehiclesView() {
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Available in Yard</span>
             <CheckCircle2 size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-emerald-600 dark:text-emerald-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.available}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-sky-600 dark:text-sky-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">On Trip (In Transit)</span>
             <Clock size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-sky-600 dark:text-sky-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.onTrip}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-rose-600 dark:text-rose-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Maintenance</span>
             <Wrench size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-rose-600 dark:text-rose-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.maintenance}
           </div>
         </div>
@@ -677,37 +682,48 @@ export function FleetVehiclesView() {
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
           <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-xl">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-1/2 text-muted-foreground"
-              />
-              <Input
-                placeholder="Search plate, trailer, driver, haulier…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 h-8 text-xs bg-background"
-              />
-            </div>
-            <NativeSelect
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-8 text-xs w-36 bg-background"
-            >
-              <option value="all">All statuses</option>
-              <option value="available">Available</option>
-              <option value="on_trip">On Trip</option>
-              <option value="maintenance">Maintenance</option>
-            </NativeSelect>
-            <NativeSelect
-              value={haulierFilter}
-              onChange={(e) => setHaulierFilter(e.target.value)}
-              className="h-8 text-xs w-36 bg-background"
-            >
-              <option value="all">All fleets</option>
-              <option value="in_house">In-House Fleet</option>
-              <option value="subcontractor">3PL Subcontractor</option>
-            </NativeSelect>
+            <SearchInput
+              placeholder="Search plate, trailer, driver, haulier…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              containerClassName="flex-1 min-w-[200px]"
+              className="h-8 text-xs bg-background"
+            />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-8 text-xs w-36 bg-background">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="available">Available</SelectItem>
+                <SelectItem value="on_trip">On Trip</SelectItem>
+                <SelectItem value="maintenance">Maintenance</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={haulierFilter} onValueChange={setHaulierFilter}>
+              <SelectTrigger className="h-8 text-xs w-36 bg-background">
+                <SelectValue placeholder="All fleets" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All fleets</SelectItem>
+                <SelectItem value="in_house">In-House Fleet</SelectItem>
+                <SelectItem value="subcontractor">3PL Subcontractor</SelectItem>
+              </SelectContent>
+            </Select>
+            {(search || statusFilter !== "all" || haulierFilter !== "all") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("all");
+                  setHaulierFilter("all");
+                }}
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Reset
+              </Button>
+            )}
           </div>
         </div>
 

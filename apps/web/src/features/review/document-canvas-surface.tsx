@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode, Ref } from "react";
+import { useEffect, useRef, type ReactNode, type Ref } from "react";
 import { Maximize2, Minimize2, RotateCcw, RotateCw, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -8,18 +8,95 @@ import { cn } from "@/lib/utils";
 export const documentCanvasPaper = "rounded-xs border border-slate-200/90 bg-white shadow-[0_4px_24px_-4px_rgba(0,0,0,0.14),0_2px_8px_-2px_rgba(0,0,0,0.06)] ring-1 ring-slate-900/5 dark:border-slate-800 dark:ring-white/5";
 
 /** Shared canvas chrome; source rendering and printable templates stay separate. */
-export function DocumentCanvasSurface({ children, controls, overlay, viewportRef, viewportLabel = "Document canvas viewport", viewportClassName, connectorViewport = false }: {
-  children: ReactNode; controls: ReactNode; overlay?: ReactNode; viewportRef?: Ref<HTMLDivElement>;
-  viewportLabel?: string; viewportClassName?: string; connectorViewport?: boolean;
+export function DocumentCanvasSurface({
+  children,
+  controls,
+  overlay,
+  viewportRef,
+  viewportLabel = "Document canvas viewport",
+  viewportClassName,
+  connectorViewport = false,
+  onWheelZoom,
+}: {
+  children: ReactNode;
+  controls: ReactNode;
+  overlay?: ReactNode;
+  viewportRef?: Ref<HTMLDivElement>;
+  viewportLabel?: string;
+  viewportClassName?: string;
+  connectorViewport?: boolean;
+  onWheelZoom?: (step: number) => void;
 }) {
-  return <div data-document-canvas className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-white [background-image:radial-gradient(#cbd5e1_1.25px,transparent_1.25px)] [background-size:24px_24px] dark:bg-slate-950 dark:[background-image:radial-gradient(#334155_1.25px,transparent_1.25px)]">
-    {controls}
-    {overlay}
-    <div ref={viewportRef} tabIndex={0} aria-label={viewportLabel} data-connector-viewport={connectorViewport ? "" : undefined}
-      className={cn("flex h-full w-full items-start overflow-auto p-6 pt-16 focus-visible:outline-hidden md:p-12", viewportClassName)}>
-      {children}
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const element = containerRef.current;
+    if (!element || !onWheelZoom) return;
+
+    let pendingDelta = 0;
+    let rafId: number | null = null;
+
+    const flushZoom = () => {
+      rafId = null;
+      if (pendingDelta !== 0) {
+        onWheelZoom(pendingDelta);
+        pendingDelta = 0;
+      }
+    };
+
+    const onWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rawDelta = -e.deltaY;
+
+        // Differentiate discrete mouse wheel notches from continuous trackpad pinches:
+        // Discrete mouse wheels emit large deltaY (usually >= 50 or deltaMode !== 0).
+        // Trackpad pinches emit dozens of high-frequency events with small deltaY.
+        let step: number;
+        if (e.deltaMode !== 0 || Math.abs(rawDelta) >= 50) {
+          // Discrete wheel: gentle 4% zoom step per notch
+          step = Math.sign(rawDelta) * 4;
+        } else {
+          // Continuous trackpad pinch: smooth 0.05x multiplier with soft clamp to avoid runaway jumps
+          const scaled = rawDelta * 0.05;
+          step = Math.sign(scaled) * Math.min(2.5, Math.abs(scaled));
+        }
+
+        pendingDelta += step;
+        if (rafId === null) {
+          rafId = requestAnimationFrame(flushZoom);
+        }
+      }
+    };
+
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+      }
+    };
+  }, [onWheelZoom]);
+
+  return (
+    <div
+      ref={containerRef}
+      data-document-canvas
+      className="relative h-full min-h-0 w-full flex-1 overflow-hidden bg-white [background-image:radial-gradient(#cbd5e1_1.25px,transparent_1.25px)] [background-size:24px_24px] dark:bg-slate-950 dark:[background-image:radial-gradient(#334155_1.25px,transparent_1.25px)]"
+    >
+      {controls}
+      {overlay}
+      <div
+        ref={viewportRef}
+        tabIndex={0}
+        aria-label={viewportLabel}
+        data-connector-viewport={connectorViewport ? "" : undefined}
+        className={cn("flex h-full w-full items-start overflow-auto p-6 pt-16 focus-visible:outline-hidden md:p-12", viewportClassName)}
+      >
+        {children}
+      </div>
     </div>
-  </div>;
+  );
 }
 
 export function DocumentCanvasControls({ zoom, expanded, onExpand, onZoomIn, onZoomOut, zoomInDisabled, zoomOutDisabled, onRotate, onReset }: {

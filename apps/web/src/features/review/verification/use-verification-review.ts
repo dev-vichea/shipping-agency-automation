@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { reviewDraft, type ReviewDraft } from "@/features/review/staff-review";
 import { write } from "@/lib/client-api";
 import { toast } from "@/lib/toast";
@@ -10,7 +9,6 @@ import type { StaffReview } from "@/lib/contracts";
 export function useVerificationReview({ caseId, revision, saved, onSaved, onPending }: {
   caseId: string; revision: number; saved: StaffReview | null; onSaved: (review: StaffReview) => void; onPending: (pending: boolean) => void;
 }) {
-  const router = useRouter();
   const [review, setReview] = useState(saved);
   const [pending, setPending] = useState(0);
   const [error, setError] = useState("");
@@ -19,9 +17,8 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
   const queue = useRef<Promise<unknown>>(Promise.resolve());
   const count = useRef(0);
   const mounted = useRef(true);
-  const refresh = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const remote = useRef(saved?.id);
-  useEffect(() => { mounted.current = true; return () => { mounted.current = false; clearTimeout(refresh.current); }; }, []);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
     if (remote.current === saved?.id) return;
     remote.current = saved?.id;
@@ -31,7 +28,6 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
   }, [saved]);
 
   function save(mutate: (draft: ReviewDraft) => ReviewDraft): Promise<StaffReview> {
-    clearTimeout(refresh.current);
     count.current += 1;
     onPending(true);
     setPending(count.current);
@@ -60,7 +56,6 @@ export function useVerificationReview({ caseId, revision, saved, onSaved, onPend
       onPending(count.current > 0);
       if (mounted.current) {
         setPending(count.current);
-        if (!count.current) refresh.current = setTimeout(() => router.refresh(), 400);
       }
     });
     queue.current = handled.catch(() => undefined);

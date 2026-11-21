@@ -287,6 +287,8 @@ export interface FileAttachmentGroupProps {
   maxIcons?: number;
   size?: FileIconSize;
   className?: string;
+  hideCount?: boolean;
+  showDocsLabel?: boolean;
 }
 
 /**
@@ -299,20 +301,29 @@ export function FileAttachmentGroup({
   maxIcons = 3,
   size = "md",
   className,
+  hideCount = false,
+  showDocsLabel = false,
 }: FileAttachmentGroupProps) {
   const resolvedTypes: FileType[] = React.useMemo(() => {
     if (files && files.length > 0) {
       return files.map((f) => detectFileType(f));
     }
     if (types && types.length > 0) {
-      return types.map((t) => detectFileType(t));
+      const detected = types.map((t) => detectFileType(t));
+      const total = count ?? detected.length;
+      if (detected.length < total && detected.length < maxIcons) {
+        const primary = detected[0];
+        while (detected.length < Math.min(total, maxIcons)) {
+          detected.push(primary);
+        }
+      }
+      return detected;
     }
     const total = count ?? 0;
     if (total === 1) return ["pdf"];
-    if (total === 2) return ["excel", "pdf"];
-    if (total > 2) return ["excel", "pdf"];
+    if (total >= 2) return ["excel", "pdf"];
     return [];
-  }, [files, types, count]);
+  }, [files, types, count, maxIcons]);
 
   const totalCount = count ?? files?.length ?? types?.length ?? resolvedTypes.length;
 
@@ -339,9 +350,9 @@ export function FileAttachmentGroup({
           </span>
         ))}
       </div>
-      {remaining > 0 && (
-        <span className="text-[11px] font-mono text-muted-foreground font-semibold pl-0.5">
-          +{remaining}
+      {!hideCount && remaining > 0 && (
+        <span className="text-[11px] font-mono text-muted-foreground font-medium pl-0.5 whitespace-nowrap">
+          +{remaining}{showDocsLabel ? ` ${remaining === 1 ? "doc" : "docs"}` : ""}
         </span>
       )}
     </div>

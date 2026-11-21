@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
-import { AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, FilePlus, FileText, ScanSearch, Search, Sparkles, X } from "lucide-react";
+import { AlertCircle, Check, CheckCircle2, FilePlus, FileText, ScanSearch, Search, Sparkles, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { AutoSuggestionReview } from "@/features/review/auto-suggestion-review";
 import { AssignCompanyForm } from "@/features/companies/company-forms";
@@ -26,7 +26,7 @@ import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/compone
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "@/lib/toast";
 import { write } from "@/lib/client-api";
-import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewIssue, ReviewWorkflow, StaffReview } from "@/lib/contracts";
+import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -83,7 +83,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const [selection, setSelection] = useState<Evidence>();
   const [partyPreview, setPartyPreview] = useState<{ source: ConsigneeSourceRef; evidence: Evidence }>();
   const [activeFieldInfo, setActiveFieldInfo] = useState<InspectedField>();
-  const [issueSelection, setIssueSelection] = useState<{ key: string; revision: number }>();
   const [auditView, setAuditView] = useState<typeof auditViews[number]>("All");
   const [auditOpen, setAuditOpen] = useState(false);
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
@@ -302,12 +301,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const knownIssueKeys = saved?.reviewed_issue_keys && new Set(saved.reviewed_issue_keys);
   const pendingIssues = stale ? [] : (workflow.issues ?? []).map((issue, index) => ({ issue, index })).filter(({ issue }) =>
     !saved?.open_issues || issue.key in saved.open_issues || (knownIssueKeys && !knownIssueKeys.has(issue.key)));
-  const issueAnchor = issueSelection?.revision === analysis.revision
-    ? workflow.issues?.findIndex((issue) => issue.key === issueSelection.key) ?? -1 : -1;
-  const issuePosition = pendingIssues.findIndex(({ index }) => index === issueAnchor);
-  const currentIssue = pendingIssues[issuePosition]?.issue;
-  const previousIssue = pendingIssues.findLast(({ index }) => index < issueAnchor)?.issue;
-  const nextIssue = pendingIssues.find(({ index }) => index > issueAnchor)?.issue;
   const candidates = Array.from(new Map(
     [...(saved?.candidates ?? []), ...(analysis.candidates ?? [])]
       .map((entry) => [`${entry.invoice_document_id}:${entry.invoice_row}:${entry.master_row}`, entry]),
@@ -328,7 +321,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   function handleSelectMainTab(tab: MainTab) {
     setChosenMainTab(tab);
     setPartyPreview(undefined);
-    setIssueSelection(undefined);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
 
@@ -352,7 +344,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     setChosenMainTab("B/L");
     setChosenBlSubTabKey(subTab.key);
     setPartyPreview(undefined);
-    setIssueSelection(undefined);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
 
@@ -365,7 +356,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
 
   function chooseSource(key?: string) {
     setPartyPreview(undefined);
-    setIssueSelection(undefined);
     setSelectedKey(key);
     setSelection(undefined);
     setActiveFieldInfo(undefined);
@@ -391,7 +381,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       ?? options.find((option) => option.id === documentId && (!role || option.key.endsWith(`:${role}`)))
       ?? options.find((option) => option.id === documentId);
     setPartyPreview(undefined);
-    setIssueSelection(undefined);
     if (match) {
       setSelectedKey(match.key);
       const docId = documentId ?? match.id;
@@ -454,41 +443,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   function isReviewed(target: ReviewField) {
     return reviewedFields.has(reviewKey(target)) || (target.name === "description" && !!target.row &&
       reviewedFields.has(reviewKey({ ...target, name: "english_description" })));
-  }
-
-  function showIssue(issue: ReviewIssue) {
-    const target = issue.target ?? undefined;
-    const doc = target && analysis.extractions.find((entry) => entry.document_id === target.document_id && entry.role === target.role);
-    const key = target?.row && target.name === "english_description" ? "description" : target?.name;
-    const values = target?.row ? doc?.items.find(({ row }) => row === target.row)?.fields : doc?.fields;
-    const raw = key ? values?.[key] : undefined;
-    const field = target && key && raw ? displayedField({ ...target, name: key }, raw) : undefined;
-    const text = intakeField(field);
-    const evidence = issue.suggestion?.evidence[0] ?? text.evidence ?? issue.evidence.find((cite) =>
-      !target || (cite.document_id === target.document_id && (!doc?.sheet || cite.sheet === doc.sheet)));
-    const meta: InspectedField = {
-      id: key ? target?.row ? `item:${target.row}:${key}` : `field:${key}` : undefined,
-      name: documentFieldLabel(key ?? issue.name),
-      value: field?.value ? text.value : issue.value ?? issue.message,
-      target,
-      uncertain: true,
-    };
-    if (evidence || target) {
-      inspect(evidence, meta);
-    } else {
-      if (issue.name === "draft_bl" || issue.name === "final_bl") {
-        handleSelectMainTab("B/L");
-      } else if (issue.name === "invoice") {
-        handleSelectMainTab("Invoice");
-      } else if (issue.name === "packing_list") {
-        handleSelectMainTab("Packing list");
-      }
-      setSelection(undefined);
-      setPartyPreview(undefined);
-      setActiveFieldInfo(meta);
-      focusSource();
-    }
-    setIssueSelection({ key: issue.key, revision: analysis.revision });
   }
 
   async function updateReview<T>(action: () => Promise<T>) {
@@ -614,6 +568,33 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       },
     };
   }
+
+  const handleMarkCorrect = useCallback(async (target: ReviewField, value: string) => {
+    const isAlreadyReviewed = isReviewed(target);
+    if (isAlreadyReviewed) {
+      await saveReview(clearField(reviewDraft(saved), [target]));
+      toast.updated(`Reset ${documentFieldLabel(target.name)}`);
+    } else {
+      const next = clearField(reviewDraft(saved), [target]);
+      next.corrections.push({
+        ...target,
+        value,
+        unit: null,
+        currency: null,
+        note: "Confirmed as correct by staff.",
+      });
+      await saveReview(next);
+      toast.saved(`Marked ${documentFieldLabel(target.name)} as correct`);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isReviewed, saved]);
+
+  const handleOpenVerification = useCallback((target?: ReviewField) => {
+    if (target) {
+      toast.info(`Opening verification for ${documentFieldLabel(target.name)}`);
+    }
+    handleWorkspaceTabChange("verification");
+  }, [handleWorkspaceTabChange]);
 
   async function decide(kind: "approve" | "reject" | "processed", notes = "Approved after staff review.", reviewId?: string | null) {
     await updateReview(() => write(`${path}/${kind}`, kind === "processed"
@@ -1125,28 +1106,16 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               activeRole={activeRole}
               onInspect={inspect}
               editor={editor}
+              onMarkCorrect={handleMarkCorrect}
+              onOpenVerification={handleOpenVerification}
               onDismissField={() => {
                 setPartyPreview(undefined);
-                setIssueSelection(undefined);
                 setSelection(undefined);
                 setActiveFieldInfo(undefined);
               }}
               searchQuery={docSearchQuery}
             />
           </div>
-          <nav aria-label="Review issues" className="grid grid-cols-[1fr_auto_1fr] items-center px-1">
-            <Button type="button" variant="ghost" size="icon-sm" className="justify-self-start"
-              aria-label="Previous issue" title="Previous issue" disabled={!previousIssue}
-              onClick={() => { if (previousIssue) showIssue(previousIssue); }}><ChevronLeft aria-hidden /></Button>
-            <span role="status" className="text-xs text-muted-foreground tabular-nums" title={currentIssue?.message}>
-              {issuePosition >= 0 ? `${issuePosition + 1} / ${pendingIssues.length}` :
-                `${pendingIssues.length} ${pendingIssues.length === 1 ? "issue" : "issues"}`}
-              {currentIssue && <span className="sr-only">{` · ${documentFieldLabel(currentIssue.name)}. ${currentIssue.message}`}</span>}
-            </span>
-            <Button type="button" variant="ghost" size="icon-sm" className="justify-self-end"
-              aria-label="Next issue" title="Next issue" disabled={!nextIssue}
-              onClick={() => { if (nextIssue) showIssue(nextIssue); }}><ChevronRight aria-hidden /></Button>
-          </nav>
         </div>
         </div>
       }

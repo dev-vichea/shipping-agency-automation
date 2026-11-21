@@ -93,6 +93,10 @@ class CaseSummary(ORM):
     shipper: str | None = None
     consignee: str | None = None
     invoice_number: str | None = None
+    origin: str | None = None
+    destination: str | None = None
+    port: str | None = None
+    shipping_mode: str | None = None
 
 
 class CaseDetail(CaseSummary):

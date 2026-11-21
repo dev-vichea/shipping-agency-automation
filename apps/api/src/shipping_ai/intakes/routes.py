@@ -274,6 +274,60 @@ def list_cases(
             .correlate(ReviewSnapshot)
             .scalar_subquery()
         )
+        origin = (
+            select(DocumentExtraction.payload["fields"]["origin"]["value"].astext)
+            .where(
+                DocumentExtraction.snapshot_id == ReviewSnapshot.id,
+                DocumentExtraction.payload["fields"]["origin"]["value"].astext.is_not(None),
+            )
+            .order_by(DocumentExtraction.document_id)
+            .limit(1)
+            .correlate(ReviewSnapshot)
+            .scalar_subquery()
+        )
+        destination = (
+            select(DocumentExtraction.payload["fields"]["destination"]["value"].astext)
+            .where(
+                DocumentExtraction.snapshot_id == ReviewSnapshot.id,
+                DocumentExtraction.payload["fields"]["destination"]["value"].astext.is_not(None),
+            )
+            .order_by(DocumentExtraction.document_id)
+            .limit(1)
+            .correlate(ReviewSnapshot)
+            .scalar_subquery()
+        )
+        port = (
+            select(
+                func.coalesce(
+                    DocumentExtraction.payload["fields"]["port"]["value"].astext,
+                    DocumentExtraction.payload["fields"]["discharge"]["value"].astext,
+                    DocumentExtraction.payload["fields"]["destination_port"]["value"].astext,
+                )
+            )
+            .where(
+                DocumentExtraction.snapshot_id == ReviewSnapshot.id,
+                or_(
+                    DocumentExtraction.payload["fields"]["port"]["value"].astext.is_not(None),
+                    DocumentExtraction.payload["fields"]["discharge"]["value"].astext.is_not(None),
+                    DocumentExtraction.payload["fields"]["destination_port"]["value"].astext.is_not(None),
+                ),
+            )
+            .order_by(DocumentExtraction.document_id)
+            .limit(1)
+            .correlate(ReviewSnapshot)
+            .scalar_subquery()
+        )
+        shipping_mode = (
+            select(DocumentExtraction.payload["fields"]["shipping_mode"]["value"].astext)
+            .where(
+                DocumentExtraction.snapshot_id == ReviewSnapshot.id,
+                DocumentExtraction.payload["fields"]["shipping_mode"]["value"].astext.is_not(None),
+            )
+            .order_by(DocumentExtraction.document_id)
+            .limit(1)
+            .correlate(ReviewSnapshot)
+            .scalar_subquery()
+        )
         query = query.add_columns(
             ReviewSnapshot.findings,
             roles,
@@ -283,6 +337,10 @@ def list_cases(
             shipper,
             consignee,
             inv_no,
+            origin,
+            destination,
+            port,
+            shipping_mode,
         )
     rows = db.execute(
         query.order_by(
@@ -304,9 +362,20 @@ def list_cases(
         if processing and case_item.state == "queued":
             item["state"] = "processing"
         if checks:
-            findings, roles, bill, file_types, cargo_val, shipper_val, consignee_val, inv_no_val = (
-                checks + [None] * (8 - len(checks))
-            )[:8]
+            (
+                findings,
+                roles,
+                bill,
+                file_types,
+                cargo_val,
+                shipper_val,
+                consignee_val,
+                inv_no_val,
+                origin_val,
+                destination_val,
+                port_val,
+                mode_val,
+            ) = (checks + [None] * (12 - len(checks)))[:12]
             statuses = {}
             for finding in findings or []:
                 group, status = finding["group"], finding["outcome"]
@@ -318,6 +387,10 @@ def list_cases(
                 shipper=shipper_val,
                 consignee=consignee_val or company,
                 invoice_number=inv_no_val or case_item.detected_reference,
+                origin=origin_val,
+                destination=destination_val,
+                port=port_val,
+                shipping_mode=mode_val,
                 review_checks=statuses,
                 document_roles=roles or [],
                 file_types=file_types or [],

@@ -48,6 +48,7 @@ export interface ComboboxProps<T = unknown> {
   inputMode?: React.HTMLAttributes<HTMLInputElement>["inputMode"];
 
   // Dropdown customization
+  align?: "start" | "center" | "end";
   popoverWidth?: string;
   headerTitle?: string;
   emptyText?: string;
@@ -103,6 +104,7 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
       numeric = false,
       type = "text",
       inputMode,
+      align = "start",
       popoverWidth = "w-[360px]",
       headerTitle,
       emptyText = "No matching options found",
@@ -317,6 +319,18 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
                 onFocus={handleFocus}
                 onBlur={handleBlur}
                 onKeyDown={handleKeyDown}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = "auto";
+                  el.style.height = `${el.scrollHeight}px`;
+                }}
+                onClick={() => {
+                  if (!isOpen && !disabled && !readOnly) {
+                    if (options.length > 0 || helpNotice || showWhenEmpty) {
+                      setOpen(true);
+                    }
+                  }
+                }}
                 onChange={(e) => {
                   onChange(e.target.value);
                   if (!isOpen && (options.length > 0 || helpNotice || showWhenEmpty)) {
@@ -352,6 +366,18 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
                 onFocus={handleFocus}
                 onBlur={handleBlur}
                 onKeyDown={handleKeyDown}
+                onInput={(e) => {
+                  const el = e.currentTarget;
+                  el.style.height = "auto";
+                  el.style.height = `${el.scrollHeight}px`;
+                }}
+                onClick={() => {
+                  if (!isOpen && !disabled && !readOnly) {
+                    if (options.length > 0 || helpNotice || showWhenEmpty) {
+                      setOpen(true);
+                    }
+                  }
+                }}
                 onChange={(e) => {
                   onChange(e.target.value);
                   if (!isOpen && (options.length > 0 || helpNotice || showWhenEmpty)) {
@@ -366,7 +392,7 @@ export const Combobox = forwardRef<ComboboxRef, ComboboxProps<unknown>>(
         </PopoverAnchor>
 
         <PopoverContent
-          align="start"
+          align={align}
           side="bottom"
           sideOffset={4}
           role="region"

@@ -147,10 +147,11 @@ function VerificationDescriptionWithCdc({
   };
 
   const mapping = review?.mappings.find((m) => m.invoice_row === line.row);
+  const allCandidates = [...options, ...(otherCandidates ?? [])];
   const selectedCandidate = mapping
-    ? options.find((c) => c.master_row === mapping.master_row)
-    : options[0];
-  const cdcSerial = selectedCandidate?.serial ?? mapping?.master_row;
+    ? (allCandidates.find((c) => c.master_row === mapping.master_row) ?? null)
+    : null;
+  const cdcSerial = mapping ? (selectedCandidate?.serial ?? mapping.master_row) : null;
 
   return (
     <VerificationCdcCleanOptions
@@ -170,12 +171,6 @@ function VerificationDescriptionWithCdc({
       <div
         data-cdc-anchor={line.row}
         className="w-full min-w-0 relative flex items-center gap-1.5"
-        onFocus={(event) => {
-          if (event.target instanceof HTMLTextAreaElement || event.target instanceof HTMLInputElement) setOpen(true);
-        }}
-        onClick={() => {
-          setOpen(true);
-        }}
       >
         {cdcSerial ? (
           <button
@@ -183,9 +178,11 @@ function VerificationDescriptionWithCdc({
             title={`CDC Item #${cdcSerial} (${selectedCandidate?.description ?? "Mapped"}) · Click to change`}
             onClick={(e) => {
               e.stopPropagation();
-              if (options.length > 0) setOpen((prev) => !prev);
+              if (options.length > 0 || (otherCandidates && otherCandidates.length > 0)) {
+                setOpen((prev) => !prev);
+              }
             }}
-            className="shrink-0 flex items-center justify-center px-1 text-xs text-foreground hover:text-primary transition-colors select-none cursor-pointer leading-snug"
+            className="shrink-0 flex items-center justify-center px-1 text-xs text-foreground hover:text-primary transition-colors select-none cursor-pointer leading-snug font-mono"
           >
             {cdcSerial}
           </button>
@@ -208,7 +205,7 @@ function VerificationDescriptionWithCdc({
           }}
           className={cn(
             "shrink-0 p-0.5 rounded text-muted-foreground hover:text-primary hover:bg-muted/60 transition-colors cursor-pointer flex items-center",
-            options.length > 0 ? "text-primary/70" : "opacity-40 hover:opacity-100"
+            options.length > 0 || (otherCandidates && otherCandidates.length > 0) ? "text-primary/70" : "opacity-40 hover:opacity-100"
           )}
         >
           <ChevronDown className="size-3" />
@@ -638,7 +635,7 @@ export function VerificationDocumentCard({
                   <col key={name} style={{ width: `${getColWidth(name)}px` }} />
                 ))}
               </colgroup>
-              <TableHeader className="bg-muted/15 border-b border-border/70">
+              <TableHeader className="bg-muted/65 border-b border-border/70">
                 <TableRow className="hover:bg-transparent">
                   <TableHead
                     style={{ width: `${getColWidth("#")}px` }}
@@ -719,8 +716,15 @@ export function VerificationDocumentCard({
                           entry.invoice_row === line.row
                       )
                     : [];
+                  const rowMasterRows = new Set(rowCandidates.map((c) => c.master_row));
+                  const seenOtherMasterRows = new Set<number>();
                   const otherCandidates = suggestions
-                    ? candidates.filter((entry) => entry.invoice_row !== line.row)
+                    ? candidates.filter((entry) => {
+                        if (rowMasterRows.has(entry.master_row)) return false;
+                        if (seenOtherMasterRows.has(entry.master_row)) return false;
+                        seenOtherMasterRows.add(entry.master_row);
+                        return true;
+                      })
                     : [];
 
                   return (
@@ -753,7 +757,7 @@ export function VerificationDocumentCard({
                             <TableCell
                               key={name}
                               style={{ width: `${colW}px` }}
-                              className="whitespace-normal px-1 py-1 align-middle cursor-text overflow-hidden"
+                              className="whitespace-normal px-1 py-1 align-middle cursor-text overflow-visible"
                             >
                               <VerificationDescriptionWithCdc
                                 line={line}
@@ -783,7 +787,7 @@ export function VerificationDocumentCard({
                           <TableCell
                             key={name}
                             style={{ width: `${colW}px` }}
-                            className="whitespace-normal px-1 py-1 align-middle cursor-text overflow-hidden"
+                            className="whitespace-normal px-1 py-1 align-middle cursor-text overflow-visible"
                             onClick={(event) => {
                               event.stopPropagation();
                               const input = event.currentTarget.querySelector<HTMLInputElement | HTMLTextAreaElement>("input, textarea");

@@ -5,8 +5,8 @@ import { AlertTriangle, ChevronDown, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
 import {
   COMMON_COUNTRIES,
   COMMON_DESTINATIONS,
@@ -77,7 +77,6 @@ export function VerificationField({
   const [alternative, setAlternative] = useState<number>();
   const [suggestionSource, setSuggestionSource] = useState<ReviewField>();
   const [emptyDescAlert, setEmptyDescAlert] = useState(false);
-  const [lineSuggestionsOpen, setLineSuggestionsOpen] = useState(false);
 
   const money = ["unit_price", "amount"].includes(target.name);
   const hasUnit = ["gross_weight", "net_weight", "packages", "measurement"].includes(target.name);
@@ -100,9 +99,9 @@ export function VerificationField({
     setText(safeField.value ?? "");
   }
 
-  const verified = !!correction && correction.confirmed !== false;
+  const verified = !compact && !!correction && correction.confirmed !== false;
   const locked = verified && !editingVerified;
-  const canAutosave = autosave && !verified;
+  const canAutosave = autosave && (compact || !verified);
   const isChanged =
     Boolean(correction) ||
     (Boolean(rawField) &&
@@ -160,7 +159,8 @@ export function VerificationField({
   async function persist(confirmed: boolean, overrideValue?: string, overrideSource?: ReviewField) {
     const val = overrideValue !== undefined ? overrideValue : text;
     const src = overrideValue === undefined ? suggestionSource : overrideSource;
-    if (!val.trim() || disabled || locked || (verified && (!confirmed || !note.trim()))) return;
+    if (!val.trim() || disabled) return;
+    if (!compact && (locked || (verified && (!confirmed || !note.trim())))) return;
     if (confirmed && inFlight.current) {
       confirmAfterSave.current = true;
       return;
@@ -216,8 +216,8 @@ export function VerificationField({
     return () => clearTimeout(timer);
   }, [canAutosave, dirty, disabled, text, dimension, saving]);
 
-  // Header field suggestions combobox options
-  const headerComboboxOptions: ComboboxOption<VerificationSourceChoice>[] = useMemo(() => {
+  // Combobox options for source choices and suggestions
+  const comboboxOptions: ComboboxOption<VerificationSourceChoice>[] = useMemo(() => {
     const list: ComboboxOption<VerificationSourceChoice>[] = [];
 
     if (sourceChoices.length > 0) {
@@ -244,20 +244,22 @@ export function VerificationField({
       });
     }
 
-    if (target.name === "transport_mode" || target.name === "shipping_mode") {
-      list.push(...(COMMON_TRANSPORT_MODES as ComboboxOption<VerificationSourceChoice>[]));
-    } else if (target.name === "origin") {
-      list.push(...(COMMON_ORIGINS as ComboboxOption<VerificationSourceChoice>[]));
-    } else if (target.name === "destination") {
-      list.push(...(COMMON_DESTINATIONS as ComboboxOption<VerificationSourceChoice>[]));
-    } else if (target.name === "port") {
-      list.push(...(COMMON_PORTS as ComboboxOption<VerificationSourceChoice>[]));
-    } else if (target.name === "country_of_origin") {
-      list.push(...(COMMON_COUNTRIES as ComboboxOption<VerificationSourceChoice>[]));
+    if (target.row === null) {
+      if (target.name === "transport_mode" || target.name === "shipping_mode") {
+        list.push(...(COMMON_TRANSPORT_MODES as ComboboxOption<VerificationSourceChoice>[]));
+      } else if (target.name === "origin") {
+        list.push(...(COMMON_ORIGINS as ComboboxOption<VerificationSourceChoice>[]));
+      } else if (target.name === "destination") {
+        list.push(...(COMMON_DESTINATIONS as ComboboxOption<VerificationSourceChoice>[]));
+      } else if (target.name === "port") {
+        list.push(...(COMMON_PORTS as ComboboxOption<VerificationSourceChoice>[]));
+      } else if (target.name === "country_of_origin") {
+        list.push(...(COMMON_COUNTRIES as ComboboxOption<VerificationSourceChoice>[]));
+      }
     }
 
     return list;
-  }, [sourceChoices, suggestion, target.name]);
+  }, [sourceChoices, suggestion, target.name, target.row]);
 
   function selectSource(value: string, source?: ReviewField) {
     setText(value);
@@ -299,6 +301,7 @@ export function VerificationField({
     const unitSuffix = isTotal ? (dimension || field.currency || field.unit) : null;
     const isDescription = target.name === "description";
     const isUnit = target.name === "unit";
+    const isAmount = target.name === "amount";
 
     return (
       <div className="w-full min-w-0" data-field-state={status}>
@@ -308,7 +311,7 @@ export function VerificationField({
               id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
               aria-label={label}
               value={text}
-              readOnly={disabled || locked}
+              readOnly={disabled || (!compact && locked)}
               disabled={disabled}
               rows={1}
               placeholder={text ? undefined : "—"}
@@ -366,7 +369,7 @@ export function VerificationField({
               ariaLabel={label}
               value={text}
               disabled={disabled}
-              readOnly={disabled || locked}
+              readOnly={disabled || (!compact && locked)}
               compact
               numeric={false}
               popoverWidth="w-[280px]"
@@ -403,22 +406,19 @@ export function VerificationField({
               </button>
             )}
           </div>
-        ) : (
+        ) : isAmount ? (
           <div className="flex items-center w-full min-w-0 gap-1 justify-end">
             <input
               id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
               aria-label={label}
               value={text}
-              readOnly={disabled || locked}
+              readOnly={disabled || (!compact && locked)}
               disabled={disabled}
-              type={numeric ? "text" : type}
-              inputMode={numeric ? "decimal" : undefined}
-              step={numeric ? "any" : undefined}
-              min={numeric ? "0" : undefined}
+              type="text"
+              inputMode="decimal"
               placeholder={text ? undefined : "—"}
               className={cn(
-                "h-7 flex-1 min-w-0 rounded border border-transparent bg-transparent hover:border-border/60 hover:bg-background/40 hover:shadow-2xs focus:border-primary focus:bg-background focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text",
-                numeric ? "font-mono text-right tabular-nums" : "text-left",
+                "h-7 flex-1 min-w-0 rounded border border-transparent bg-transparent hover:border-border/60 hover:bg-background/40 hover:shadow-2xs focus:border-primary focus:bg-background focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text font-mono text-right tabular-nums",
                 isTotal && "font-semibold",
                 error && "border-destructive bg-destructive/5"
               )}
@@ -456,30 +456,66 @@ export function VerificationField({
               </button>
             )}
           </div>
-        )}
-        {!disabled && !locked && numeric && target.row !== null && sourceChoices.length > 0 && (
-          <div>
-            <Button type="button" size="icon-xs" variant="ghost" aria-label={`Suggestions for ${label}`}
-              aria-expanded={lineSuggestionsOpen} onClick={() => setLineSuggestionsOpen((open) => !open)}>
-              <ChevronDown aria-hidden />
-            </Button>
-            {lineSuggestionsOpen && (
-              <NativeSelect aria-label={`Source suggestions for ${label}`} className="max-w-full" value=""
-                onChange={(event) => {
-                  if (event.target.value === "") return;
-                  const choice = sourceChoices[Number(event.target.value)];
-                  if (choice?.field.value) selectSource(choice.field.value, choice.source);
-                  setLineSuggestionsOpen(false);
-                }}>
-                <option value="">Choose cited value</option>
-                {sourceChoices.map((choice, index) => (
-                  <option key={index} value={index}>{choice.field.value} · {choice.label}</option>
-                ))}
-              </NativeSelect>
+        ) : (
+          <div className="flex items-center w-full min-w-0 gap-1 justify-end">
+            <Combobox
+              id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
+              ariaLabel={label}
+              value={text}
+              disabled={disabled}
+              readOnly={disabled || (!compact && locked)}
+              compact
+              numeric={numeric}
+              type={numeric ? "text" : type}
+              inputMode={numeric ? "decimal" : undefined}
+              popoverWidth="w-[280px]"
+              align={numeric ? "end" : "start"}
+              headerTitle={comboboxOptions.length > 0 ? `${documentFieldLabel(target.name)} Suggestions` : undefined}
+              options={comboboxOptions}
+              filterOptions={false}
+              showWhenEmpty={false}
+              placeholder={text ? undefined : "—"}
+              inputClassName={cn(isTotal && "font-semibold")}
+              onChange={(val) => {
+                setText(val);
+                if (error) setError("");
+                setAlternative(undefined);
+                setSuggestionSource(undefined);
+              }}
+              onSelectOption={(opt) => {
+                const choice = opt.data as VerificationSourceChoice | undefined;
+                selectSource(opt.value, choice?.source);
+              }}
+              onFocus={onInspect}
+              onBlur={() => {
+                if (canAutosave && dirty) void persist(false);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void persist(true);
+                }
+              }}
+              error={error}
+            />
+            {unitSuffix && (
+              <span className="shrink-0 text-[10px] font-mono font-bold text-muted-foreground uppercase select-none px-1">
+                {unitSuffix}
+              </span>
+            )}
+            {isChanged && !verified && onUndo && (
+              <button
+                type="button"
+                title="Undo change (revert to original)"
+                aria-label={`Undo change for ${label}`}
+                onClick={handleUndo}
+                className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors cursor-pointer"
+              >
+                <RotateCcw className="size-3" />
+              </button>
             )}
           </div>
         )}
-        {reviewControls}
         {error && <p role="alert" className="text-[9px] text-destructive">{error}</p>}
       </div>
     );
@@ -511,43 +547,37 @@ export function VerificationField({
         )}
       </div>
 
-      {isAddress ? (
-        <textarea
-          ref={textareaRef}
+      {dateFields.has(target.name) ? (
+        <DatePicker
           id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
-          aria-label={label}
+          ariaLabel={label}
           value={text}
-          readOnly={disabled || locked}
           disabled={disabled}
-          maxLength={500}
-          rows={1}
-          placeholder={text ? undefined : "—"}
-          style={{ fieldSizing: "content" } as React.CSSProperties}
-          className={cn(
-            "w-full min-h-[30px] resize-none overflow-hidden rounded-md border border-border/80 bg-white dark:bg-slate-900 shadow-2xs hover:border-primary/50 hover:shadow-xs focus:border-primary focus:ring-1 focus:ring-primary/40 focus:shadow-xs px-2.5 py-1.5 text-xs text-foreground outline-none transition-all duration-150 cursor-text leading-snug whitespace-pre-wrap break-words",
-            error && "border-destructive bg-destructive/5"
-          )}
-          onFocus={onInspect}
-          onInput={(e) => {
-            const el = e.currentTarget;
-            el.style.height = "auto";
-            el.style.height = `${Math.max(30, el.scrollHeight)}px`;
-          }}
-          onChange={(event) => {
-            setText(event.target.value);
+          readOnly={disabled || locked}
+          placeholder="DD/MM/YYYY"
+          sourceOptions={sourceChoices.map((sc) => ({
+            value: sc.field?.value ?? "",
+            label: sc.label,
+            badge: sc.source.role.replaceAll("_", " "),
+          }))}
+          onChange={(val) => {
+            setText(val);
             if (error) setError("");
             setAlternative(undefined);
             setSuggestionSource(undefined);
+            if (canAutosave) void persist(false, val);
           }}
+          onFocus={onInspect}
           onBlur={() => {
             if (canAutosave && dirty) void persist(false);
           }}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+            if (event.key === "Enter") {
               event.preventDefault();
               void persist(true);
             }
           }}
+          error={error}
         />
       ) : (
         <Combobox
@@ -556,19 +586,20 @@ export function VerificationField({
           value={text}
           disabled={disabled}
           readOnly={disabled || locked}
-          multiline={["cargo_summary", "description", "remark"].includes(target.name)}
+          multiline={isAddress || ["cargo_summary", "description", "remark"].includes(target.name)}
           numeric={numeric}
           type={type}
-          headerTitle={`${documentFieldLabel(target.name)} Suggestions`}
-          popoverWidth="w-[380px]"
-          options={headerComboboxOptions}
+          headerTitle={comboboxOptions.length > 0 ? `${documentFieldLabel(target.name)} Suggestions` : undefined}
+          popoverWidth={isAddress ? "w-[420px]" : "w-[380px]"}
+          options={comboboxOptions}
           showWhenEmpty={false}
+          autoOpenOnFocus={true}
           rightAdornment={
-            headerComboboxOptions.length > 0 ? (
+            comboboxOptions.length > 0 ? (
               <ChevronDown className="size-3 text-muted-foreground/40 absolute right-2 pointer-events-none" />
             ) : undefined
           }
-          inputClassName={headerComboboxOptions.length > 0 ? "pr-7" : ""}
+          inputClassName={comboboxOptions.length > 0 && !isAddress ? "pr-7" : ""}
           onChange={(val) => {
             setText(val);
             if (error) setError("");

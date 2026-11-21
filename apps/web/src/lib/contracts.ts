@@ -21,6 +21,10 @@ export type CaseSummary = {
   shipper?: string | null;
   consignee?: string | null;
   invoice_number?: string | null;
+  origin?: string | null;
+  destination?: string | null;
+  port?: string | null;
+  shipping_mode?: string | null;
   created_at: string;
   updated_at: string;
   attachment_count: number;

@@ -29,7 +29,7 @@ import { cn } from "@/lib/utils";
 
 function FilesCell({ item }: { item: CaseSummary }) {
   const types = item.file_types && item.file_types.length > 0 ? item.file_types : undefined;
-  return <FileAttachmentGroup types={types} count={item.attachment_count} />;
+  return <FileAttachmentGroup types={types} count={item.attachment_count} maxIcons={2} showDocsLabel />;
 }
 
 function roleShortLabel(role: string): string {
@@ -89,6 +89,11 @@ function isGenericSubject(subject?: string | null): boolean {
 function isHexReference(ref?: string | null): boolean {
   if (!ref) return true;
   return /^[0-9a-f]{8}$/i.test(ref.trim());
+}
+
+function singleLine(text?: string | null): string | null {
+  if (!text) return null;
+  return text.replace(/\s+/g, " ").trim();
 }
 
 function formatDocPackageSummary(roles?: string[]): string {
@@ -210,29 +215,6 @@ function ChannelBadge({ channel }: { channel: string }) {
   }
 }
 
-function rowToneClass(state: string) {
-  switch (state) {
-    case "needs_review":
-    case "manual_matching":
-    case "awaiting_updated_document":
-      return "bg-background";
-    case "ready_for_approval":
-    case "ready":
-      return "bg-background";
-    case "processing":
-    case "running":
-    case "queued":
-      return "bg-background/80";
-    case "failed":
-    case "rejected":
-    case "mismatch":
-      return "bg-rose-50/20 dark:bg-rose-950/10";
-    case "approved":
-    default:
-      return "bg-muted/30 text-muted-foreground";
-  }
-}
-
 /**
  * Resolves the primary grouping key for a case.
  * Prioritizes extracted invoice number / reference so multiple arrivals
@@ -259,6 +241,10 @@ export interface CaseGroup {
   blNo?: string | null;
   shipper?: string | null;
   consignee?: string | null;
+  origin?: string | null;
+  destination?: string | null;
+  port?: string | null;
+  shippingMode?: string | null;
   cargoSummary?: string | null;
   allRoles: string[];
   rolesText: string;
@@ -309,6 +295,11 @@ export function groupCasesByInvoice(items: CaseSummary[]): CaseGroup[] {
       primaryCase.consignee ||
       primaryCase.company ||
       null;
+
+    const origin = arrivals.find((a) => a.origin)?.origin ?? primaryCase.origin ?? null;
+    const destination = arrivals.find((a) => a.destination)?.destination ?? primaryCase.destination ?? null;
+    const port = arrivals.find((a) => a.port)?.port ?? primaryCase.port ?? null;
+    const shippingMode = arrivals.find((a) => a.shipping_mode)?.shipping_mode ?? primaryCase.shipping_mode ?? null;
 
     const cargoSummary = arrivals.find((a) => a.cargo_summary)?.cargo_summary ?? null;
 
@@ -375,6 +366,10 @@ export function groupCasesByInvoice(items: CaseSummary[]): CaseGroup[] {
       blNo,
       shipper,
       consignee,
+      origin,
+      destination,
+      port,
+      shippingMode,
       cargoSummary,
       allRoles,
       rolesText,
@@ -425,18 +420,22 @@ export function IntakeTableView({
 
     return (
       <div className="relative">
-        <Table className="min-w-[1080px]">
+        <Table className="min-w-[1340px]">
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="w-48 pl-4">Intake Reference / Inv No</TableHead>
-              <TableHead className="w-36 font-mono">B/L Number</TableHead>
-              <TableHead className="min-w-44 max-w-56">Shipper</TableHead>
-              <TableHead className="min-w-44 max-w-56">Consignee</TableHead>
-              <TableHead className="w-36">Documents</TableHead>
-              <TableHead className="w-28 text-center">Verification</TableHead>
-              <TableHead className="w-36">Received</TableHead>
+              <TableHead className="w-44 pl-4">INV Number</TableHead>
+              <TableHead className="w-32 font-mono">B/L Number</TableHead>
+              <TableHead className="min-w-36 max-w-48">Shipper</TableHead>
+              <TableHead className="min-w-36 max-w-48">Consignee</TableHead>
+              <TableHead className="w-32">Origin</TableHead>
+              <TableHead className="w-36">Destination</TableHead>
+              <TableHead className="w-32">Port</TableHead>
+              <TableHead className="w-24">Mode</TableHead>
+              <TableHead className="w-32">Documents</TableHead>
+              <TableHead className="w-24 text-center">Verification</TableHead>
+              <TableHead className="w-32">Received</TableHead>
               <TableHead className="w-24 text-center">Status</TableHead>
-              <TableHead className="w-24 text-right pr-4">
+              <TableHead className="w-20 text-right pr-4">
                 <span className="sr-only">Actions</span>
               </TableHead>
             </TableRow>
@@ -523,10 +522,7 @@ export function IntakeTableView({
                   }
                   router.push(href);
                 }}
-                className={cn(
-                  "group relative cursor-pointer border-b transition-colors duration-100 hover:bg-accent/40",
-                  rowToneClass(item.state)
-                )}
+                className="group relative cursor-pointer border-b bg-white dark:bg-card transition-colors duration-100 hover:bg-muted/40"
               >
                 {/* 1. Reference */}
                 <TableCell className="max-w-36 truncate font-mono text-code-tabular align-middle pl-4">
@@ -724,13 +720,10 @@ function TableRowGroup({
           }
           onNavigate();
         }}
-        className={cn(
-          "group relative cursor-pointer border-b transition-colors duration-100 hover:bg-accent/40",
-          rowToneClass(group.worstState)
-        )}
+        className="group relative cursor-pointer border-b bg-white dark:bg-card transition-colors duration-100 hover:bg-muted/40"
       >
-        {/* 1. Intake Reference / Inv No (with group count badge & expand toggle) */}
-        <TableCell className="max-w-48 align-middle pl-4 py-2.5">
+        {/* 1. INV Number (with group count badge & expand toggle) */}
+        <TableCell className="max-w-44 align-middle pl-4 py-2.5">
           <div className="flex items-center gap-1.5 min-w-0">
             {hasMultipleArrivals ? (
               <button
@@ -777,9 +770,9 @@ function TableRowGroup({
         </TableCell>
 
         {/* 2. B/L Number */}
-        <TableCell className="max-w-36 truncate font-mono text-code-tabular align-middle">
+        <TableCell className="max-w-32 truncate font-mono text-code-tabular align-middle">
           {group.blNo ? (
-            <span className="inline-block rounded bg-muted/70 px-1.5 py-0.5 text-xs text-foreground font-medium truncate max-w-32" title={group.blNo}>
+            <span className="inline-block rounded bg-muted/70 px-1.5 py-0.5 text-xs text-foreground font-medium truncate max-w-28" title={group.blNo}>
               {group.blNo}
             </span>
           ) : (
@@ -788,7 +781,7 @@ function TableRowGroup({
         </TableCell>
 
         {/* 3. Shipper */}
-        <TableCell className="max-w-56 truncate align-middle text-body-sm" title={group.shipper ?? undefined}>
+        <TableCell className="max-w-48 truncate align-middle text-body-sm" title={group.shipper ?? undefined}>
           {group.shipper ? (
             <span className="font-medium text-foreground">{group.shipper}</span>
           ) : (
@@ -797,7 +790,7 @@ function TableRowGroup({
         </TableCell>
 
         {/* 4. Consignee */}
-        <TableCell className="max-w-56 truncate align-middle text-body-sm" title={group.consignee ?? undefined}>
+        <TableCell className="max-w-48 truncate align-middle text-body-sm" title={group.consignee ?? undefined}>
           {group.consignee ? (
             <span className="font-medium text-foreground">{group.consignee}</span>
           ) : (
@@ -805,19 +798,56 @@ function TableRowGroup({
           )}
         </TableCell>
 
-        {/* 5. Documents & Files */}
-        <TableCell className="max-w-36 align-middle">
-          <div className="flex items-center gap-1.5 text-xs">
-            <FileAttachmentGroup types={group.allFileTypes} count={group.totalAttachments} size="sm" />
-            {group.rolesText ? (
-              <span className="font-mono text-[11px] font-semibold text-foreground/75 truncate" title={group.rolesText}>
-                {group.rolesText}
-              </span>
-            ) : null}
-          </div>
+        {/* 5. Origin */}
+        <TableCell className="max-w-32 truncate align-middle text-body-sm" title={group.origin ?? undefined}>
+          {group.origin ? (
+            <span className="text-foreground">{singleLine(group.origin)}</span>
+          ) : (
+            <span className="text-muted-foreground font-normal">—</span>
+          )}
         </TableCell>
 
-        {/* 6. Verification / Issues */}
+        {/* 6. Destination */}
+        <TableCell className="max-w-36 truncate align-middle text-body-sm" title={group.destination ?? undefined}>
+          {group.destination ? (
+            <span className="text-foreground">{singleLine(group.destination)}</span>
+          ) : (
+            <span className="text-muted-foreground font-normal">—</span>
+          )}
+        </TableCell>
+
+        {/* 7. Port */}
+        <TableCell className="max-w-32 truncate align-middle text-body-sm" title={group.port ?? undefined}>
+          {group.port ? (
+            <span className="text-foreground font-mono text-xs">{singleLine(group.port)}</span>
+          ) : (
+            <span className="text-muted-foreground font-normal">—</span>
+          )}
+        </TableCell>
+
+        {/* 8. Mode */}
+        <TableCell className="max-w-24 truncate align-middle text-xs">
+          {group.shippingMode ? (
+            <span className="inline-block rounded bg-muted/70 px-1.5 py-0.5 font-medium text-foreground text-[11px] uppercase tracking-wider" title={group.shippingMode}>
+              {group.shippingMode.replace(/^BY\s+/i, "")}
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </TableCell>
+
+        {/* 9. Documents */}
+        <TableCell className="max-w-32 align-middle">
+          <FileAttachmentGroup
+            types={group.allFileTypes}
+            count={group.totalAttachments}
+            maxIcons={2}
+            showDocsLabel
+            size="sm"
+          />
+        </TableCell>
+
+        {/* 10. Verification / Issues */}
         <TableCell className="text-center whitespace-nowrap align-middle">
           {group.totalIssues > 0 ? (
             <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">
@@ -834,17 +864,17 @@ function TableRowGroup({
           )}
         </TableCell>
 
-        {/* 7. Received Date */}
+        {/* 11. Received Date */}
         <TableCell className="whitespace-nowrap font-mono text-code-tabular align-middle text-xs text-muted-foreground">
           {timestamp(group.latestReceived)}
         </TableCell>
 
-        {/* 8. Status */}
+        {/* 12. Status */}
         <TableCell className="text-center whitespace-nowrap align-middle">
           <Status value={group.worstState} />
         </TableCell>
 
-        {/* 9. Action */}
+        {/* 13. Action */}
         <TableCell className="text-right whitespace-nowrap align-middle pr-4">
           <div className="flex items-center justify-end">
             <Link
@@ -875,34 +905,64 @@ function TableRowGroup({
             <TableRow
               key={arrival.id}
               onClick={() => router.push(arrivalHref)}
-              className="group/sub cursor-pointer border-b bg-muted/20 dark:bg-muted/10 hover:bg-accent/30 text-xs transition-colors"
+              className="group/sub cursor-pointer border-b bg-white dark:bg-card hover:bg-muted/40 text-xs transition-colors"
             >
               {/* Indented Arrival indicator */}
-              <TableCell className="pl-9 py-2 align-middle max-w-48 font-mono text-[11px] text-muted-foreground">
+              <TableCell className="pl-9 py-2 align-middle max-w-44 font-mono text-[11px] text-muted-foreground" title={arrivalSubject}>
                 <div className="flex items-center gap-1.5">
                   <CornerDownRight className="size-3 text-muted-foreground/60 shrink-0" aria-hidden />
                   <span className="font-semibold text-foreground/80">Arrival #{group.arrivals.length - idx}</span>
                 </div>
               </TableCell>
 
-              {/* Sub B/L or dash */}
-              <TableCell className="font-mono text-[11px] text-muted-foreground">
+              {/* Sub B/L */}
+              <TableCell className="font-mono text-[11px] text-muted-foreground truncate max-w-32" title={arrival.bill_of_lading ?? undefined}>
                 {arrival.bill_of_lading || "—"}
               </TableCell>
 
-              {/* Sub Subject / Shipper details */}
-              <TableCell colSpan={2} className="text-muted-foreground truncate max-w-80" title={arrivalSubject}>
-                <div className="flex items-center gap-2 truncate">
-                  <ChannelBadge channel={arrival.channel} />
-                  <span className="truncate">{arrivalSubject}</span>
-                </div>
+              {/* Sub Shipper */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-48" title={arrival.shipper ?? undefined}>
+                {arrival.shipper || "—"}
               </TableCell>
 
-              {/* Sub Files */}
+              {/* Sub Consignee */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-48" title={arrival.consignee ?? undefined}>
+                {arrival.consignee || "—"}
+              </TableCell>
+
+              {/* Sub Origin */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-32" title={arrival.origin ?? undefined}>
+                {singleLine(arrival.origin) || "—"}
+              </TableCell>
+
+              {/* Sub Destination */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-36" title={arrival.destination ?? undefined}>
+                {singleLine(arrival.destination) || "—"}
+              </TableCell>
+
+              {/* Sub Port */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-32 font-mono" title={arrival.port ?? undefined}>
+                {singleLine(arrival.port) || "—"}
+              </TableCell>
+
+              {/* Sub Mode */}
+              <TableCell className="text-muted-foreground text-xs truncate max-w-24">
+                {arrival.shipping_mode ? (
+                  <span className="inline-block rounded bg-muted/60 px-1.5 py-0.2 text-[10px] uppercase font-medium">
+                    {arrival.shipping_mode.replace(/^BY\s+/i, "")}
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </TableCell>
+
+              {/* Sub Documents */}
               <TableCell className="align-middle">
                 <FileAttachmentGroup
                   types={arrival.file_types}
                   count={arrival.attachment_count}
+                  maxIcons={2}
+                  showDocsLabel
                   size="xs"
                 />
               </TableCell>

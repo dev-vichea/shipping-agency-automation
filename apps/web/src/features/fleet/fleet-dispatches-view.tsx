@@ -9,13 +9,19 @@ import {
   ArrowDownLeft,
   ArrowUpRight,
   Phone,
-  Search,
   Box,
   Trash2,
   Lock,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { NativeSelect } from "@/components/ui/native-select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { PageHeading, Section } from "@/components/ui/page-layout";
 import { ResizableTable, type ResizableColumn } from "@/components/ui/resizable-table";
@@ -363,29 +369,29 @@ export function FleetDispatchesView() {
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-sky-600 dark:text-sky-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">In Transit (Highway)</span>
             <Clock size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-sky-600 dark:text-sky-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.inTransit}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-purple-600 dark:text-purple-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">At Factory</span>
             <Box size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-purple-600 dark:text-purple-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.atFactory}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Empty Returned (Done)</span>
             <CheckCircle2 size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-emerald-600 dark:text-emerald-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.completed}
           </div>
         </div>
@@ -396,39 +402,50 @@ export function FleetDispatchesView() {
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
           <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-xl">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-1/2 text-muted-foreground"
-              />
-              <Input
-                placeholder="Search trip #, shipment, container, seal, driver…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 h-8 text-xs bg-background"
-              />
-            </div>
-            <NativeSelect
-              value={directionFilter}
-              onChange={(e) => setDirectionFilter(e.target.value)}
-              className="h-8 text-xs w-32 bg-background"
-            >
-              <option value="all">All directions</option>
-              <option value="inbound">Inbound</option>
-              <option value="outbound">Outbound</option>
-            </NativeSelect>
-            <NativeSelect
-              value={milestoneFilter}
-              onChange={(e) => setMilestoneFilter(e.target.value)}
-              className="h-8 text-xs w-36 bg-background"
-            >
-              <option value="all">All milestones</option>
-              <option value="dispatched">Dispatched</option>
-              <option value="gate_out">Port Gate-Out</option>
-              <option value="in_transit">In Transit</option>
-              <option value="at_factory">At Factory</option>
-              <option value="empty_returned">Empty Returned</option>
-            </NativeSelect>
+            <SearchInput
+              placeholder="Search trip #, shipment, container, seal, driver…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              containerClassName="flex-1 min-w-[200px]"
+              className="h-8 text-xs bg-background"
+            />
+            <Select value={directionFilter} onValueChange={setDirectionFilter}>
+              <SelectTrigger className="h-8 text-xs w-32 bg-background">
+                <SelectValue placeholder="All directions" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All directions</SelectItem>
+                <SelectItem value="inbound">Inbound</SelectItem>
+                <SelectItem value="outbound">Outbound</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select value={milestoneFilter} onValueChange={setMilestoneFilter}>
+              <SelectTrigger className="h-8 text-xs w-36 bg-background">
+                <SelectValue placeholder="All milestones" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All milestones</SelectItem>
+                <SelectItem value="dispatched">Dispatched</SelectItem>
+                <SelectItem value="gate_out">Port Gate-Out</SelectItem>
+                <SelectItem value="in_transit">In Transit</SelectItem>
+                <SelectItem value="at_factory">At Factory</SelectItem>
+                <SelectItem value="empty_returned">Empty Returned</SelectItem>
+              </SelectContent>
+            </Select>
+            {(search || directionFilter !== "all" || milestoneFilter !== "all") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearch("");
+                  setDirectionFilter("all");
+                  setMilestoneFilter("all");
+                }}
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Reset
+              </Button>
+            )}
           </div>
         </div>
 

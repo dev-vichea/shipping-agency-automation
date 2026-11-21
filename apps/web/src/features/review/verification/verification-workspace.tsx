@@ -14,6 +14,7 @@ import { useVerificationReview } from "@/features/review/verification/use-verifi
 import { reviewKey } from "@/features/review/staff-review";
 import type {
   CaseDetail,
+  Evidence,
   ExtractedField,
   Extraction,
   FindingDecision,
@@ -23,8 +24,8 @@ import type {
   ReviewWorkflow,
   StaffReview,
 } from "@/lib/contracts";
-import { documentFieldLabel, location, timestamp } from "@/lib/format";
-import { decimalTotal, replaceVerificationField, splitPartyAndAddress } from "@/features/review/verification/verification-review";
+import { documentFieldLabel, invoiceReference, location, timestamp } from "@/lib/format";
+import { calculateAmount, decimalTotal, replaceVerificationField, splitPartyAndAddress } from "@/features/review/verification/verification-review";
 
 const totals = ["packages", "quantity", "net_weight", "gross_weight", "measurement", "amount"];
 const headerOrder = [
@@ -190,7 +191,20 @@ export function VerificationWorkspace({
   onSaved: (review: StaffReview) => void;
   onPending: (pending: boolean) => void;
 }) {
-  const [role, setRole] = useState<"invoice" | "packing_list">("invoice");
+  const [role, setRoleState] = useState<"invoice" | "packing_list">(() => {
+    if (typeof window !== "undefined") {
+      const savedRole = window.sessionStorage.getItem(`harborway:verification:role:${item.id}`);
+      if (savedRole === "invoice" || savedRole === "packing_list") return savedRole;
+    }
+    return "invoice";
+  });
+
+  const setRole = useCallback((nextRole: "invoice" | "packing_list") => {
+    setRoleState(nextRole);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem(`harborway:verification:role:${item.id}`, nextRole);
+    }
+  }, [item.id]);
   const [template, setTemplate] = useState<PermitTemplate>("cdc_classic");
   const [chosenDocument, setChosenDocument] = useState<string>();
   const [activeField, setActiveField] = useState<ReviewField>();
@@ -278,9 +292,89 @@ export function VerificationWorkspace({
         .sort((a, b) => (headerOrder.indexOf(a) < 0 ? 100 : headerOrder.indexOf(a)) - (headerOrder.indexOf(b) < 0 ? 100 : headerOrder.indexOf(b)))
     : [];
 
+  function findExtractionFallback(fieldName: string): { value: string; evidence: Evidence[]; role: string; docName: string } | null {
+    for (const doc of analysis.extractions) {
+      let targetVal: string | null | undefined;
+      let targetEvidence: Evidence[] = [];
+
+      if (fieldName === "supplier") {
+        targetVal = doc.fields.supplier?.value || doc.fields.shipper?.value;
+        targetEvidence = doc.fields.supplier?.evidence || doc.fields.shipper?.evidence || [];
+        if (targetVal && targetVal.includes("\n")) {
+          targetVal = splitPartyAndAddress(targetVal).name;
+        }
+      } else if (fieldName === "supplier_address") {
+        targetVal = doc.fields.supplier_address?.value || doc.fields.shipper_address?.value;
+        targetEvidence = doc.fields.supplier_address?.evidence || doc.fields.shipper_address?.evidence || [];
+        if (!targetVal) {
+          const rawP = doc.fields.supplier?.value || doc.fields.shipper?.value;
+          if (rawP && rawP.includes("\n")) {
+            targetVal = splitPartyAndAddress(rawP).address;
+            targetEvidence = doc.fields.supplier?.evidence || doc.fields.shipper?.evidence || [];
+          }
+        }
+      } else if (fieldName === "consignee") {
+        targetVal = doc.fields.consignee?.value;
+        targetEvidence = doc.fields.consignee?.evidence || [];
+        if (targetVal && targetVal.includes("\n")) {
+          targetVal = splitPartyAndAddress(targetVal).name;
+        }
+        if (!targetVal && analysis.analyzed_master?.company) {
+          targetVal = analysis.analyzed_master.company;
+        }
+        if (!targetVal && item.company) {
+          targetVal = item.company;
+        }
+      } else if (fieldName === "consignee_address") {
+        targetVal = doc.fields.consignee_address?.value;
+        targetEvidence = doc.fields.consignee_address?.evidence || [];
+        if (!targetVal) {
+          const rawP = doc.fields.consignee?.value;
+          if (rawP && rawP.includes("\n")) {
+            targetVal = splitPartyAndAddress(rawP).address;
+            targetEvidence = doc.fields.consignee?.evidence || [];
+          }
+        }
+      } else if (fieldName === "invoice_date") {
+        targetVal = doc.fields.invoice_date?.value || doc.fields.issue_date?.value;
+        targetEvidence = doc.fields.invoice_date?.evidence || doc.fields.issue_date?.evidence || [];
+      } else if (fieldName === "shipping_mode") {
+        targetVal = doc.fields.shipping_mode?.value || doc.fields.transport_mode?.value;
+        targetEvidence = doc.fields.shipping_mode?.evidence || doc.fields.transport_mode?.evidence || [];
+      } else if (fieldName === "invoice_no") {
+        targetVal = doc.fields.invoice_no?.value || (item.detected_reference ? invoiceReference(item.detected_reference) : undefined);
+        targetEvidence = doc.fields.invoice_no?.evidence || [];
+      } else {
+        targetVal = doc.fields[fieldName]?.value;
+        targetEvidence = doc.fields[fieldName]?.evidence || [];
+      }
+
+      if (targetVal && targetVal.trim()) {
+        const docObj = item.documents.find((d) => d.id === doc.document_id);
+        return {
+          value: targetVal.trim(),
+          evidence: targetEvidence,
+          role: doc.role,
+          docName: docObj?.original_filename || doc.role.replaceAll("_", " "),
+        };
+      }
+    }
+    return null;
+  }
+
   function displayed(ref: ReviewField, fallback: ExtractedField) {
-    const val = changed.get(reviewKey(ref)) ?? fallback;
+    const explicit = changed.get(reviewKey(ref));
+    if (explicit?.value && explicit.value.trim()) return explicit;
+
+    const val = explicit ?? fallback;
     if (ref.row === null) {
+      if ((!val.value || !val.value.trim())) {
+        const fb = findExtractionFallback(ref.name);
+        if (fb) {
+          return { status: "present" as const, value: fb.value, evidence: fb.evidence, unit: null, currency: null };
+        }
+      }
+
       if (ref.name === "consignee" && val.value && val.value.includes("\n")) {
         const { name } = splitPartyAndAddress(val.value);
         return { ...val, value: name };
@@ -290,21 +384,17 @@ export function VerificationWorkspace({
         return { ...val, value: name };
       }
       if (ref.name === "consignee_address") {
-        const explicit = changed.get(reviewKey(ref));
-        if (explicit?.value && explicit.value.trim()) return explicit;
         const cVal = changed.get(reviewKey({ ...ref, name: "consignee" }))?.value ?? normalizedDoc?.fields.consignee?.value ?? "";
-        if (cVal && cVal.includes("\n") && (!fallback.value || !fallback.value.trim())) {
+        if (cVal && cVal.includes("\n") && (!val.value || !val.value.trim())) {
           const { address } = splitPartyAndAddress(cVal);
-          if (address) return { ...fallback, status: "present" as const, value: address };
+          if (address) return { ...val, status: "present" as const, value: address };
         }
       }
       if (ref.name === "supplier_address") {
-        const explicit = changed.get(reviewKey(ref));
-        if (explicit?.value && explicit.value.trim()) return explicit;
         const sVal = changed.get(reviewKey({ ...ref, name: "supplier" }))?.value ?? normalizedDoc?.fields.supplier?.value ?? "";
-        if (sVal && sVal.includes("\n") && (!fallback.value || !fallback.value.trim())) {
+        if (sVal && sVal.includes("\n") && (!val.value || !val.value.trim())) {
           const { address } = splitPartyAndAddress(sVal);
-          if (address) return { ...fallback, status: "present" as const, value: address };
+          if (address) return { ...val, status: "present" as const, value: address };
         }
       }
     }
@@ -326,7 +416,13 @@ export function VerificationWorkspace({
   }
 
   function fieldEditor(ref: ReviewField, raw?: ExtractedField, compact = false) {
-    const rawVal: ExtractedField = raw ?? { status: "missing", value: "", evidence: [], unit: null, currency: null };
+    let rawVal: ExtractedField = raw ?? { status: "missing", value: "", evidence: [], unit: null, currency: null };
+    if (ref.row === null && (!rawVal.value || !rawVal.value.trim())) {
+      const fb = findExtractionFallback(ref.name);
+      if (fb) {
+        rawVal = { status: "present", value: fb.value, evidence: fb.evidence, unit: null, currency: null };
+      }
+    }
     const value = displayed(ref, rawVal);
     const proposed = workflow.issues?.find((issue) => issue.target && reviewKey(issue.target) === reviewKey(ref))?.suggestion;
     const suggestion = suggestions && proposed?.value && proposed.evidence.length ? { value: proposed.value, evidence: proposed.evidence } : undefined;
@@ -354,25 +450,78 @@ export function VerificationWorkspace({
         ]
       : [];
 
-    // Document choices from other extractions in the same shipment
+    // Document choices from all extractions in the shipment (with semantic aliases)
     const validRoles = new Set<ReviewField["role"]>(["invoice", "packing_list", "draft_bl", "final_bl"]);
     const extraDocChoices: VerificationSourceChoice[] = [];
+
     for (const doc of analysis.extractions) {
-      if ((doc.document_id === ref.document_id && doc.role === ref.role) || !validRoles.has(doc.role as ReviewField["role"])) continue;
-      const otherField = doc.fields[ref.name];
-      if (otherField?.value && otherField.value.trim() && otherField.value !== rawVal.value) {
-        const docObj = item.documents.find((d) => d.id === doc.document_id);
-        const docLabel = docObj?.original_filename || doc.role.replaceAll("_", " ");
-        const loc = otherField.evidence?.[0] ? ` · ${location(otherField.evidence[0])}` : "";
+      if (!validRoles.has(doc.role as ReviewField["role"])) continue;
+      const docObj = item.documents.find((d) => d.id === doc.document_id);
+      const docLabel = docObj?.original_filename || doc.role.replaceAll("_", " ");
+
+      const checkAndPush = (valField: ExtractedField | undefined, effectiveName: string) => {
+        if (!valField?.value || !valField.value.trim()) return;
+        const loc = valField.evidence?.[0] ? ` · ${location(valField.evidence[0])}` : "";
         extraDocChoices.push({
-          source: { document_id: doc.document_id, role: doc.role as ReviewField["role"], row: null, name: ref.name },
-          field: otherField,
+          source: { document_id: doc.document_id, role: doc.role as ReviewField["role"], row: null, name: effectiveName },
+          field: valField,
           label: `${docLabel}${loc}`,
         });
+      };
+
+      if (ref.name === "supplier") {
+        const sField = doc.fields.supplier;
+        const shField = doc.fields.shipper;
+        if (sField?.value) {
+          const { name } = splitPartyAndAddress(sField.value);
+          checkAndPush({ ...sField, value: name }, "supplier");
+        }
+        if (shField?.value) {
+          const { name } = splitPartyAndAddress(shField.value);
+          checkAndPush({ ...shField, value: name }, "shipper");
+        }
+      } else if (ref.name === "supplier_address") {
+        const saField = doc.fields.supplier_address;
+        const shaField = doc.fields.shipper_address;
+        if (saField?.value) checkAndPush(saField, "supplier_address");
+        if (shaField?.value) checkAndPush(shaField, "shipper_address");
+        const sVal = doc.fields.supplier?.value || doc.fields.shipper?.value;
+        const sEv = doc.fields.supplier?.evidence || doc.fields.shipper?.evidence || [];
+        if (sVal && sVal.includes("\n")) {
+          const { address } = splitPartyAndAddress(sVal);
+          if (address) {
+            checkAndPush({ status: "present", value: address, evidence: sEv, unit: null, currency: null }, "supplier_address");
+          }
+        }
+      } else if (ref.name === "consignee") {
+        const cField = doc.fields.consignee;
+        if (cField?.value) {
+          const { name } = splitPartyAndAddress(cField.value);
+          checkAndPush({ ...cField, value: name }, "consignee");
+        }
+      } else if (ref.name === "consignee_address") {
+        const caField = doc.fields.consignee_address;
+        if (caField?.value) checkAndPush(caField, "consignee_address");
+        const cVal = doc.fields.consignee?.value;
+        if (cVal && cVal.includes("\n")) {
+          const { address } = splitPartyAndAddress(cVal);
+          if (address) {
+            checkAndPush({ status: "present", value: address, evidence: doc.fields.consignee?.evidence ?? [], unit: null, currency: null }, "consignee_address");
+          }
+        }
+      } else if (ref.name === "invoice_date") {
+        if (doc.fields.invoice_date?.value) checkAndPush(doc.fields.invoice_date, "invoice_date");
+        if (doc.fields.issue_date?.value) checkAndPush(doc.fields.issue_date, "issue_date");
+      } else if (ref.name === "shipping_mode") {
+        if (doc.fields.shipping_mode?.value) checkAndPush(doc.fields.shipping_mode, "shipping_mode");
+        if (doc.fields.transport_mode?.value) checkAndPush(doc.fields.transport_mode, "transport_mode");
+      } else {
+        const directField = doc.fields[ref.name];
+        if (directField?.value) checkAndPush(directField, ref.name);
       }
     }
 
-    if (ref.name === "consignee" && analysis.analyzed_master?.company && analysis.analyzed_master.company !== rawVal.value) {
+    if (ref.name === "consignee" && analysis.analyzed_master?.company) {
       extraDocChoices.push({
         source: { document_id: "master", role: "invoice", row: null, name: "consignee" },
         field: {
@@ -386,7 +535,7 @@ export function VerificationWorkspace({
       });
     }
 
-    if (ref.name === "consignee" && item.company && item.company !== rawVal.value && !extraDocChoices.some((c) => c.field.value === item.company)) {
+    if (ref.name === "consignee" && item.company && !extraDocChoices.some((c) => c.field.value === item.company)) {
       extraDocChoices.push({
         source: { document_id: "intake", role: "invoice", row: null, name: "consignee" },
         field: {
@@ -427,8 +576,8 @@ export function VerificationWorkspace({
         onDirtyChange={markDirty}
         onUndo={() => handleUndo(ref)}
         onSave={async (edit: VerificationFieldSave) => {
-          await save((draft) =>
-            replaceVerificationField(
+          await save((draft) => {
+            let next = replaceVerificationField(
               draft,
               {
                 ...ref,
@@ -441,8 +590,41 @@ export function VerificationWorkspace({
                 suggestion_source: edit.suggestion_source,
               },
               workflow
-            )
-          );
+            );
+
+            // Auto-calculate amount when quantity or unit_price changes on a line item
+            if (ref.row !== null && (ref.name === "quantity" || ref.name === "unit_price") && document) {
+              const line = document.items.find((item) => item.row === ref.row);
+              const qtyVal = ref.name === "quantity"
+                ? edit.value
+                : displayed({ document_id: document.document_id, role: ref.role, row: ref.row, name: "quantity" }, line?.fields.quantity ?? { status: "missing", value: "", evidence: [], unit: null, currency: null }).value;
+              const priceVal = ref.name === "unit_price"
+                ? edit.value
+                : displayed({ document_id: document.document_id, role: ref.role, row: ref.row, name: "unit_price" }, line?.fields.unit_price ?? { status: "missing", value: "", evidence: [], unit: null, currency: null }).value;
+
+              if (qtyVal && priceVal) {
+                const autoAmount = calculateAmount(qtyVal, priceVal);
+                if (autoAmount !== null) {
+                  const amountRef: ReviewField = {
+                    document_id: document.document_id,
+                    role: ref.role,
+                    row: ref.row,
+                    name: "amount",
+                  };
+                  next = replaceVerificationField(next, {
+                    ...amountRef,
+                    value: autoAmount,
+                    unit: null,
+                    currency: edit.currency ?? line?.fields.amount?.currency ?? "USD",
+                    note: "Auto-calculated from quantity and unit price",
+                    confirmed: edit.confirmed,
+                  }, workflow);
+                }
+              }
+            }
+
+            return next;
+          });
         }}
       />
     );
@@ -592,14 +774,68 @@ export function VerificationWorkspace({
       };
       // Invalidate edits and mappings based on the previous description before
       // writing the mapping the reviewer just selected for the new description.
-      const next = replaceVerificationField(draft, {
+      let next = replaceVerificationField(draft, {
         ...descRef,
         value: candidate.description,
         unit: null,
         currency: null,
         note: `Matched CDC material ${candidate.master_row}`,
-        confirmed: true,
+        confirmed: false,
       }, workflow);
+
+      // Link unit from CDC candidate if present
+      if (candidate.unit) {
+        next = replaceVerificationField(next, {
+          document_id: document.document_id,
+          role: "invoice",
+          row,
+          name: "unit",
+          value: candidate.unit,
+          unit: null,
+          currency: null,
+          note: "Matched CDC material unit",
+          confirmed: false,
+        }, workflow);
+      }
+
+      // Link unit_price from CDC candidate if present
+      if (candidate.unit_price) {
+        next = replaceVerificationField(next, {
+          document_id: document.document_id,
+          role: "invoice",
+          row,
+          name: "unit_price",
+          value: String(candidate.unit_price),
+          unit: null,
+          currency: candidate.currency ?? "USD",
+          note: "Matched CDC material unit price",
+          confirmed: false,
+        }, workflow);
+
+        // Auto-calculate amount if quantity is available
+        const line = document.items.find((item) => item.row === row);
+        const qtyVal = displayed(
+          { document_id: document.document_id, role: "invoice", row, name: "quantity" },
+          line?.fields.quantity ?? { status: "missing", value: "", evidence: [], unit: null, currency: null }
+        ).value;
+        if (qtyVal) {
+          const autoAmount = calculateAmount(qtyVal, String(candidate.unit_price));
+          if (autoAmount !== null) {
+            next = replaceVerificationField(next, {
+              document_id: document.document_id,
+              role: "invoice",
+              row,
+              name: "amount",
+              value: autoAmount,
+              unit: null,
+              currency: candidate.currency ?? "USD",
+              note: `Calculated from CDC unit price (${candidate.unit_price}) and quantity (${qtyVal})`,
+              confirmed: false,
+            }, workflow);
+          }
+        }
+      }
+
       const mappingDecision: FindingDecision = {
         key: `cdc.row.${row}.mapping`,
         action: "approved",
@@ -608,9 +844,12 @@ export function VerificationWorkspace({
       };
       return {
         ...next,
-        mappings: [...next.mappings, { invoice_row: row, master_row: candidate.master_row }],
+        mappings: [...next.mappings.filter((m) => m.invoice_row !== row), { invoice_row: row, master_row: candidate.master_row }],
         verify_cdc_mappings: true,
-        finding_decisions: [...(next.finding_decisions ?? []), mappingDecision],
+        finding_decisions: [
+          ...(next.finding_decisions ?? []).filter((d) => d.key !== mappingDecision.key),
+          mappingDecision,
+        ],
       };
     });
   };

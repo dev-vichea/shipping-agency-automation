@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { FileTypeIcon } from "@/components/ui/file-icon";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/features/review/document-canvas-surface";
 import type { FieldEditor } from "@/features/review/field-editor-types";
@@ -211,8 +211,12 @@ export function DocumentCanvas({
   }, [documentId, isExcel, excelKey, sheet, excelOffset]);
 
   function handleZoom(next: number) {
-    setZoom(Math.max(40, Math.min(250, next)));
+    setZoom(Math.max(40, Math.min(250, Math.round(next * 10) / 10)));
   }
+
+  const handleZoomDelta = useCallback((delta: number) => {
+    setZoom((prev) => Math.max(40, Math.min(250, Math.round((prev + delta) * 10) / 10)));
+  }, []);
 
   const pdfImageUrl = file && isPdf ? `/api/v1/documents/${file.id}/pages/${page}/image?rotation=${rotation}` : null;
   const hasPdfError = pdfError || (pdfImageUrl ? brokenPdfImage === pdfImageUrl : false);
@@ -340,11 +344,23 @@ export function DocumentCanvas({
         PDF highlight unavailable for this field. Its source text is in Raw Excerpt.
       </p>}
 
-      <DocumentCanvasSurface viewportRef={canvasRef} connectorViewport controls={
-        <DocumentCanvasControls zoom={zoom} expanded={isExpanded} onExpand={() => setIsExpanded(!isExpanded)}
-          onZoomIn={() => handleZoom(zoom + 15)} onZoomOut={() => handleZoom(zoom - 15)}
-          zoomInDisabled={zoom >= 220} zoomOutDisabled={zoom <= 40} onRotate={() => setRotation((value) => (value + 90) % 360)} />
-      } overlay={<>
+      <DocumentCanvasSurface
+        viewportRef={canvasRef}
+        connectorViewport
+        onWheelZoom={handleZoomDelta}
+        controls={
+          <DocumentCanvasControls
+            zoom={zoom}
+            expanded={isExpanded}
+            onExpand={() => setIsExpanded(!isExpanded)}
+            onZoomIn={() => handleZoom(zoom + 15)}
+            onZoomOut={() => handleZoom(zoom - 15)}
+            zoomInDisabled={zoom >= 220}
+            zoomOutDisabled={zoom <= 40}
+            onRotate={() => setRotation((value) => (value + 90) % 360)}
+            onReset={() => handleZoom(100)}
+          />
+        } overlay={<>
         {/* Floating Top Page Indicator & Navigation (PDF) */}
         {isPdf && totalPages > 1 && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 rounded-lg border border-slate-200/90 bg-white/95 px-2.5 py-1 shadow-md backdrop-blur-md dark:border-slate-700 dark:bg-slate-900/95">

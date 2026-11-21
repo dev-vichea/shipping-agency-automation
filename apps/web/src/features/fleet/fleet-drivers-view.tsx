@@ -8,14 +8,19 @@ import {
   CheckCircle2,
   Clock,
   Moon,
-  Search,
   Trash2,
   Truck,
   PlusCircle,
   ChevronDown,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
-import { NativeSelect } from "@/components/ui/native-select";
+import { SearchInput } from "@/components/ui/search-input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { PageHeading, Section } from "@/components/ui/page-layout";
 import {
@@ -422,29 +427,29 @@ export function FleetDriversView() {
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Available (On Call)</span>
             <CheckCircle2 size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-emerald-600 dark:text-emerald-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.available}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-sky-600 dark:text-sky-400">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Active on Trip</span>
             <Clock size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-sky-600 dark:text-sky-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.onTrip}
           </div>
         </div>
         <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500">
+          <div className="flex items-center justify-between text-muted-foreground">
             <span className="text-xs font-medium">Off Duty / Rest</span>
             <Moon size={16} />
           </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-slate-600 dark:text-slate-400">
+          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
             {stats.offDuty}
           </div>
         </div>
@@ -455,28 +460,37 @@ export function FleetDriversView() {
         {/* Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
           <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-md">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search
-                size={14}
-                className="absolute left-2.5 top-1/2 -translate-1/2 text-muted-foreground"
-              />
-              <Input
-                placeholder="Search driver name, phone, license, vehicle…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-8 h-8 text-xs bg-background"
-              />
-            </div>
-            <NativeSelect
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-8 text-xs w-36 bg-background"
-            >
-              <option value="all">All statuses</option>
-              <option value="available">Available</option>
-              <option value="on_trip">On Trip</option>
-              <option value="off_duty">Off Duty</option>
-            </NativeSelect>
+            <SearchInput
+              placeholder="Search driver name, phone, license, vehicle…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              containerClassName="flex-1 min-w-[200px]"
+              className="h-8 text-xs bg-background"
+            />
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-8 text-xs w-36 bg-background">
+                <SelectValue placeholder="All statuses" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="available">Available</SelectItem>
+                <SelectItem value="on_trip">On Trip</SelectItem>
+                <SelectItem value="off_duty">Off Duty</SelectItem>
+              </SelectContent>
+            </Select>
+            {(search || statusFilter !== "all") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setSearch("");
+                  setStatusFilter("all");
+                }}
+                className="h-8 text-xs text-muted-foreground hover:text-foreground"
+              >
+                Reset
+              </Button>
+            )}
           </div>
         </div>
 

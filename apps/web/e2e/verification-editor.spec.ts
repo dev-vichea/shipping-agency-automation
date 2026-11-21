@@ -66,13 +66,13 @@ test("verification edits real document cells, synchronizes print previews, confi
   await expect(separator).toHaveAttribute("aria-valuenow", "54");
   expect((await left.boundingBox())!.width).toBeGreaterThan(before);
 
-  await left.getByRole("button", { name: "Suggestions for Invoice row 10 Quantity", exact: true }).click();
-  const choices = left.getByLabel("Source suggestions for Invoice row 10 Quantity", { exact: true });
-  const packingChoice = await choices.locator("option").evaluateAll((options) => options.find((option) => option.textContent?.includes("packing list"))?.getAttribute("value"));
-  expect(packingChoice).toBeTruthy();
-  await choices.selectOption(packingChoice!);
+  const qtyField = left.getByLabel("Invoice row 10 Quantity", { exact: true });
+  await qtyField.click();
+  const packingOption = page.getByRole("option", { name: /packing list/i });
+  await expect(packingOption).toBeVisible();
+  await packingOption.click();
   await expect.poll(async () => (await workflow()).review?.corrections.find((entry) => entry.name === "quantity")?.confirmed).toBe(false);
-  await left.getByRole("button", { name: "Confirm Invoice row 10 Quantity", exact: true }).click();
+  await qtyField.press("Enter");
   await expect.poll(async () => (await workflow()).review?.corrections.find((entry) => entry.name === "quantity")?.confirmed).toBe(true);
   const copied = (await workflow()).review?.changes.find((entry) => entry.edit.name === "quantity");
   expect(copied?.after.value).toBe("10");

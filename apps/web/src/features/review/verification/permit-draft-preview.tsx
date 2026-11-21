@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Check, Printer, Maximize2, Minimize2 } from "lucide-react";
 import { PdfFileIcon } from "@/components/ui/file-icon";
@@ -258,6 +258,11 @@ export function PermitDraftPreview({
     setZoom(Math.max(40, Math.min(250, Math.round(next))));
   }
 
+  const handleZoomDelta = useCallback((delta: number) => {
+    userZoomed.current = true;
+    setZoom((prev) => Math.max(40, Math.min(250, Math.round((prev + delta) * 10) / 10)));
+  }, []);
+
   function handleResetZoom() {
     userZoomed.current = false;
     setZoom(embedded ? fitZoom.current : 100);
@@ -288,23 +293,6 @@ export function PermitDraftPreview({
     return () => observer.disconnect();
   }, [embedded, isExpanded]);
 
-  useEffect(() => {
-    const element = viewport.current;
-    if (!element) return;
-    const onWheel = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey) {
-        e.preventDefault();
-        const delta = -e.deltaY;
-        const step = delta > 0 ? 15 : -15;
-        setZoom((prev) => {
-          userZoomed.current = true;
-          return Math.max(40, Math.min(250, prev + step));
-        });
-      }
-    };
-    element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
-  }, []);
 
   useEffect(() => {
     if (!isExpanded) return;
@@ -634,18 +622,33 @@ export function PermitDraftPreview({
           <div className="flex min-w-0 items-center gap-2">
             <PdfFileIcon size="sm" />
             <span className="truncate text-xs font-semibold">{sheetTab === "inv" ? "Invoice" : "Packing List"} · {invoiceNo}</span>
-            <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">PDF</span>
             <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">{isApproved ? "Approved" : "Draft"}</span>
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onSheetTabChange && (
               <div role="group" aria-label="Print document" className="flex gap-1">
-                <Button type="button" size="xs" variant={sheetTab === "inv" ? "default" : "outline"}
-                  aria-label="INV (Invoice)" aria-pressed={sheetTab === "inv"}
-                  disabled={switchingDisabled} onClick={() => onSheetTabChange("inv")}>INV</Button>
-                <Button type="button" size="xs" variant={sheetTab === "pl" ? "default" : "outline"}
-                  aria-label="PL (Packing List)" aria-pressed={sheetTab === "pl"}
-                  disabled={switchingDisabled} onClick={() => onSheetTabChange("pl")}>PL</Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={sheetTab === "inv" ? "default" : "outline"}
+                  aria-label="INV (Invoice)"
+                  aria-pressed={sheetTab === "inv"}
+                  disabled={switchingDisabled}
+                  onClick={() => onSheetTabChange("inv")}
+                >
+                  INV
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={sheetTab === "pl" ? "default" : "outline"}
+                  aria-label="PL (Packing List)"
+                  aria-pressed={sheetTab === "pl"}
+                  disabled={switchingDisabled}
+                  onClick={() => onSheetTabChange("pl")}
+                >
+                  PL
+                </Button>
               </div>
             )}
             <Button type="button" variant="outline" size="xs" onClick={() => window.print()} title="Print or export as PDF" aria-label="Print Preview" className="h-7 gap-1.5 text-xs"><Printer className="size-3.5" /><span className="hidden sm:inline">Print Preview</span></Button>
@@ -657,6 +660,7 @@ export function PermitDraftPreview({
         viewportRef={viewport}
         viewportLabel="Print preview canvas"
         viewportClassName="p-3 pt-6 sm:p-4 sm:pt-6 md:p-6 md:pt-8"
+        onWheelZoom={handleZoomDelta}
         controls={
           <>
             {/* Hover-to-expand vertical card with rotated label "TEMPLATE" */}

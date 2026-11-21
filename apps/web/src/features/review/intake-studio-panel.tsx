@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
-import { Anchor, Box, Check, DollarSign, FileText, Minus, Package, RotateCcw, ShieldCheck, X } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useCallback, useId, useState } from "react";
+import { Anchor, Box, Check, Copy, DollarSign, FileText, Minus, Package, ShieldCheck, X } from "lucide-react";
 import { Pagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { sourceKey } from "@/features/review/review-findings";
@@ -107,310 +106,7 @@ function renderFieldValue(field: ExtractedField | undefined, fallbackValue: stri
   );
 }
 
-function InlineReviewDrawer({
-  editor,
-  name,
-  status,
-  isUncertain,
-  currentValue,
-  onDismiss,
-}: {
-  editor: FieldEditor;
-  name: string;
-  status?: keyof typeof statuses;
-  isUncertain?: boolean;
-  currentValue?: string;
-  onDismiss?: () => void;
-}) {
-  const [text, setText] = useState(editor.value ?? "");
-  const [dimension, setDimension] = useState(
-    editor.dimension ? (editor[editor.dimension] as string | undefined) ?? "" : ""
-  );
-  const [error, setError] = useState("");
-  const [autoSave, setAutoSave] = useState(() => {
-    if (typeof window !== "undefined") {
-      const stored = localStorage.getItem("harborway-autosave");
-      return stored !== "false";
-    }
-    return true;
-  });
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-
-  const dirty =
-    text.trim() !== (editor.value ?? "").trim() ||
-    (!!editor.dimension && dimension.trim() !== ((editor[editor.dimension] as string | undefined) ?? "").trim());
-
-  const handleToggleAutoSave = () => {
-    setAutoSave((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("harborway-autosave", String(next));
-      } catch {}
-      toast.info(next ? "Auto-save enabled" : "Auto-save disabled");
-      return next;
-    });
-  };
-
-  const handleBlur = () => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    if (!autoSave || !dirty || !text.trim() || editor.busy) return;
-    const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
-    const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
-    setSaveStatus("saving");
-    void editor.onSave({ value: text.trim(), unit, currency }).then(() => {
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
-    }).catch((err) => {
-      setSaveStatus("idle");
-      setError(err instanceof Error ? err.message : "Failed to save field");
-    });
-  };
-
-  useEffect(() => {
-    if (!autoSave || !dirty || !text.trim() || editor.busy) return;
-
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-
-    saveTimeoutRef.current = setTimeout(async () => {
-      setSaveStatus("saving");
-      try {
-        const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
-        const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
-        await editor.onSave({ value: text.trim(), unit, currency });
-        setSaveStatus("saved");
-        setTimeout(() => setSaveStatus("idle"), 2000);
-      } catch (err) {
-        setSaveStatus("idle");
-        setError(err instanceof Error ? err.message : "Failed to auto-save");
-      }
-    }, 600);
-
-    return () => {
-      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    };
-  }, [text, dimension, autoSave, dirty, editor]);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    if (editor.busy || !text.trim() || (editor.reviewed && !dirty)) return;
-    setError("");
-    setSaveStatus("saving");
-    try {
-      const unit = editor.dimension === "unit" ? dimension.trim() || null : editor.unit;
-      const currency = editor.dimension === "currency" ? dimension.trim() || null : editor.currency;
-      await editor.onSave({ value: text.trim(), unit, currency });
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
-    } catch (err) {
-      setSaveStatus("idle");
-      setError(err instanceof Error ? err.message : "Failed to save field");
-    }
-  }
-
-  const ValueInput = editor.multiline ? "textarea" : "input";
-
-  return (
-    <div
-      className="border-t border-border/40 bg-muted/20 px-3 py-2 space-y-2 text-xs"
-      onClick={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (e.key === "Escape") {
-          e.stopPropagation();
-          onDismiss?.();
-        }
-      }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 flex-wrap">
-          {status === "problem" && (
-            <span className="text-[10px] font-medium text-rose-600 dark:text-rose-400">
-              Source values conflict
-            </span>
-          )}
-          {status === "review" && (
-            <span className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
-              Needs confirmation
-            </span>
-          )}
-          {isUncertain && !editor.reviewed && currentValue && (
-            <button
-              type="button"
-              disabled={editor.busy}
-              onClick={() => void editor.onSave({
-                value: editor.value || currentValue,
-                unit: editor.unit,
-                currency: editor.currency,
-              })}
-              className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400 hover:underline cursor-pointer"
-            >
-              <Check size={11} /> Confirm extracted
-            </button>
-          )}
-          {saveStatus === "saving" && (
-            <span className="text-[10px] text-muted-foreground animate-pulse font-mono">
-              Auto-saving…
-            </span>
-          )}
-          {saveStatus === "saved" && (
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium inline-flex items-center gap-0.5">
-              <Check size={10} /> Saved
-            </span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-2.5 text-[11px] text-muted-foreground ml-auto shrink-0">
-          {editor.reviewed && (
-            <button
-              type="button"
-              disabled={editor.busy}
-              onClick={() => void editor.onUndo()}
-              className="inline-flex items-center gap-1 hover:text-foreground transition-colors cursor-pointer mr-1"
-              title="Reset to original value"
-            >
-              <RotateCcw size={10} /> Reset
-            </button>
-          )}
-
-          {/* Auto-save Switcher (replaces close toggle) */}
-          <div className="flex items-center gap-1.5 select-none" title="Toggle automatic saving on edits">
-            <span className="text-[10px] font-medium text-muted-foreground">Auto save</span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={autoSave}
-              aria-label="Toggle auto save"
-              onClick={handleToggleAutoSave}
-              className={cn(
-                "relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full border border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
-                autoSave ? "bg-primary" : "bg-muted-foreground/30 dark:bg-muted-foreground/20"
-              )}
-            >
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "pointer-events-none inline-block size-3 rounded-full bg-white shadow-xs ring-0 transition duration-200 ease-in-out transform mt-0.5",
-                  autoSave ? "translate-x-3.5" : "translate-x-0.5"
-                )}
-              />
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {editor.choices.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground mr-0.5">
-            Sources:
-          </span>
-          {editor.choices.map((choice) => {
-            const isCurrent = choice.value.trim() === (editor.value ?? "").trim();
-            const sourceRole = choice.label.split("·")[0].trim().replace(" / ", "/");
-            return (
-              <button
-                key={choice.id}
-                type="button"
-                disabled={editor.busy}
-                onClick={() => {
-                  if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-                  setText(choice.value);
-                  if (editor.dimension) setDimension(choice[editor.dimension] ?? "");
-                  editor.onPreview(choice);
-                  void editor.onSave({
-                    value: choice.value,
-                    unit: choice.unit ?? editor.unit,
-                    currency: choice.currency ?? editor.currency,
-                    choice,
-                  });
-                }}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] transition-colors border cursor-pointer",
-                  isCurrent
-                    ? "border-primary/40 bg-primary/10 text-primary font-medium"
-                    : "border-border/60 bg-background text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                )}
-                title={`Select ${choice.value} from ${sourceRole}`}
-              >
-                {isCurrent && <Check size={10} className="shrink-0 text-primary" />}
-                <span className="text-[10px] uppercase font-semibold opacity-70">{sourceRole}:</span>
-                <span className="truncate max-w-[200px]">{choice.value}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <form onSubmit={handleSubmit} className="space-y-1">
-        <div className="flex items-center gap-1.5">
-          {editor.dimension ? (
-            <div className="flex-1 min-w-0 flex items-center rounded border border-border/70 bg-transparent overflow-hidden focus-within:border-primary focus-within:ring-1 focus-within:ring-primary shadow-2xs transition-colors">
-              <input
-                type="text"
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onBlur={handleBlur}
-                disabled={editor.busy}
-                className="flex-1 min-w-0 bg-transparent px-2.5 py-1 text-xs font-mono text-foreground outline-none border-none placeholder:text-muted-foreground/50"
-                placeholder={name.toLowerCase().includes("weight") ? "1000" : `Enter ${name.toLowerCase()}…`}
-              />
-              <span className="px-2 text-muted-foreground/40 font-mono text-xs select-none" aria-hidden="true">
-                |
-              </span>
-              <input
-                type="text"
-                value={dimension}
-                onChange={(e) => setDimension(e.target.value)}
-                onBlur={handleBlur}
-                disabled={editor.busy}
-                maxLength={editor.dimension === "unit" ? 24 : 5}
-                placeholder={editor.dimension === "unit" ? "KG" : "USD"}
-                className="w-16 bg-transparent px-2 py-1 text-xs font-mono uppercase font-semibold text-foreground text-center outline-none border-none placeholder:text-muted-foreground/50"
-                title={editor.dimension === "unit" ? "Unit of measure (e.g. KG, CBM, PKG)" : "Currency (e.g. USD)"}
-              />
-            </div>
-          ) : (
-            <ValueInput
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onBlur={handleBlur}
-              disabled={editor.busy}
-              rows={editor.multiline ? 1 : undefined}
-              className="flex-1 min-w-0 resize-none rounded border border-border/70 bg-background px-2 py-1 text-xs font-mono text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-              placeholder={`Enter ${name.toLowerCase()}…`}
-            />
-          )}
-
-          {!autoSave && dirty && (
-            <>
-              <button
-                type="button"
-                onClick={() => {
-                  setText(editor.value ?? "");
-                  setDimension(editor.dimension ? (editor[editor.dimension] as string | undefined) ?? "" : "");
-                }}
-                className="px-1.5 py-1 text-[11px] text-muted-foreground hover:text-foreground cursor-pointer"
-              >
-                Cancel
-              </button>
-              <Button
-                type="submit"
-                size="xs"
-                disabled={editor.busy || !text.trim()}
-                className="h-6 text-[11px] font-semibold px-2 shrink-0 cursor-pointer"
-              >
-                Save
-              </Button>
-            </>
-          )}
-        </div>
-        {error && <p className="text-[11px] text-destructive">{error}</p>}
-      </form>
-    </div>
-  );
-}
-
-function GoodsItems({ document, active, inspect, names, candidates, editable, viewedField, isReviewed, editor, activeField, onDismissField, searchQuery }: {
+function GoodsItems({ document, active, inspect, names, candidates, editable, viewedField, isReviewed, searchQuery }: {
   names: CdcItemName[];
   candidates: ReviewAnalysis["candidates"];
   document: Extraction;
@@ -419,9 +115,6 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
   editable: boolean;
   viewedField: (target: ReviewField, field: ExtractedField) => ExtractedField;
   isReviewed: (target: ReviewField) => boolean;
-  editor?: FieldEditor;
-  activeField?: InspectedField;
-  onDismissField?: () => void;
   searchQuery?: string;
 }) {
   const [requestedOffset, setOffset] = useState(0);
@@ -453,7 +146,6 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
     const label = name ? "Verified CDC description" : suggestion ? "Suggested CDC description"
       : text.label ?? documentFieldLabel(key);
     const detail = `${label} · ${reviewed ? "Reviewed" : statuses[status].label}`;
-    const isItemEditorOpen = selected && editor && activeField?.target?.name === key && activeField?.target?.row === row;
     const formattedContent = key === "description" ? highlightMatch(value, searchQuery) : renderFieldValue(visibleField, value, searchQuery);
     const content = <>
       {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
@@ -464,11 +156,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
       data-connector-source={selected ? "true" : undefined}
       aria-pressed={selected} aria-describedby={`${descriptionId}-${id}`} title={evidence ? `${detail} · ${location(evidence)}` : detail}
       onClick={() => {
-        if (isItemEditorOpen && onDismissField) {
-          onDismissField();
-        } else {
-          inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" });
-        }
+        inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" });
       }}
       className={cn("data-link flex items-start gap-2 rounded-sm text-left tabular-nums", selected && "bg-primary/10")}>{content}</button>
       : <span className="inline-flex items-start gap-2">{content}</span>;
@@ -494,23 +182,13 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
     <Pagination label="Goods items" offset={offset} count={displayed.length} total={items.length}
       previous={offset > 0 ? () => setOffset(offset - pageSize) : undefined}
       next={offset + pageSize < items.length ? () => setOffset(offset + pageSize) : undefined} />
-    {activeField?.target?.row && editor && (
-      <InlineReviewDrawer
-        key={`${activeField.name}:${editor.value}`}
-        editor={editor}
-        name={`Row ${activeField.target.row}: ${activeField.name}`}
-        isUncertain={activeField.uncertain}
-        currentValue={activeField.value}
-        onDismiss={onDismissField}
-      />
-    )}
   </section>;
 }
 
 export function IntakeStudioPanel({
   item, analysis, document, activeEvidence, activeField, activeRole, onInspect,
   cdcNames, cdcControls, intakeReference, editable, hasConsigneeOptions, viewedField, isReviewed,
-  editor, onDismissField, searchQuery,
+  searchQuery, onMarkCorrect, onOpenVerification,
 }: {
   item: CaseDetail;
   intakeReference: string | null;
@@ -529,8 +207,26 @@ export function IntakeStudioPanel({
   editor?: FieldEditor;
   onDismissField?: () => void;
   searchQuery?: string;
+  onMarkCorrect?: (target: ReviewField, value: string) => Promise<void> | void;
+  onOpenVerification?: (target?: ReviewField) => void;
 }) {
   const descriptionId = useId();
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = useCallback((key: string, value: string, name: string) => {
+    if (!value || value === "Needs verification") return;
+    try {
+      void navigator.clipboard.writeText(value);
+      setCopiedKey(key);
+      toast.info(`Copied ${name}`);
+      setTimeout(() => {
+        setCopiedKey((curr) => (curr === key ? null : curr));
+      }, 1500);
+    } catch {
+      toast.warning("Failed to copy to clipboard");
+    }
+  }, []);
+
   const candidates = analysis.candidates.filter((candidate) => candidate.invoice_document_id === document?.document_id);
   const cdcIssue = analysis.findings.find((finding) =>
     ["cdc.company", "cdc.version"].includes(finding.key) && finding.outcome !== "PASS");
@@ -659,41 +355,35 @@ export function IntakeStudioPanel({
       <div className="px-3.5 py-2.5 space-y-4 flex-1">
         {!currentGroups.length && !document?.items.length &&
           <p className="py-2 text-xs text-muted-foreground">{document ? "No fields were extracted from this document." : "No extracted document for this tab."}</p>}
-        {currentGroups.map(({ title, icon: Icon, keys }) => <section key={title} aria-label={title} className="space-y-1">
-          <h3 className="flex items-center gap-1.5 px-0.5 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            <Icon size={12} className="text-primary shrink-0" aria-hidden /> {title}
-          </h3>
-          <div className="space-y-0.5">
-            {keys.map((key) => {
-              const field = fields[key];
-              const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as ReviewField["role"], row: null, name: key };
-              const reviewed = isReviewed(target);
-              const visibleField = viewedField(target, field);
-              const text = intakeField(visibleField);
-              const evidence = text.evidence;
-              const id = `field:${key}`;
-              const selected = active(id, evidence);
-              const name = documentFieldLabel(key);
-              const value = key === "invoice_no" && !invoiceReference(visibleField.value) ? "Needs verification" : text.value;
-              const citations = [...field.evidence, ...(field.english?.evidence ?? [])];
-              const findings = analysis.findings.filter((finding) => finding.field === key && finding.evidence.some((entry) =>
-                citations.some((citation) => sourceKey(entry) === sourceKey(citation))));
-              const mismatch = findings.find((finding) => finding.outcome === "MISMATCH");
-              const warning = findings.find((finding) => finding.outcome === "WARNING" || finding.outcome === "NEEDS_REVIEW");
-              const status = reviewed ? "present" : mismatch ? "problem" : intakeStatus(field, !!warning || (key === "invoice_no" && !invoiceReference(field.value)));
-              const reason = reviewed ? "Reviewed" : mismatch?.explanation ?? warning?.explanation ?? field.english?.reason ?? statuses[status].label;
-              const interactive = !!evidence || editable;
-              const isFieldEditorOpen = selected && editor && activeField?.target?.name === key && !activeField?.target?.row;
+        {currentGroups.map(({ title, icon: Icon, keys }) => (
+          <section key={title} aria-label={title} className="space-y-1">
+            <h3 className="flex items-center gap-1.5 px-0.5 pt-1.5 pb-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Icon size={12} className="text-primary shrink-0" aria-hidden /> {title}
+            </h3>
+            <div className="divide-y divide-border/50 border-y border-border/50">
+              {keys.map((key) => {
+                const field = fields[key];
+                const target: ReviewField = { document_id: document!.document_id, role: (document?.role === "final_bl" ? "final_bl" : activeRole) as ReviewField["role"], row: null, name: key };
+                const reviewed = isReviewed(target);
+                const visibleField = viewedField(target, field);
+                const text = intakeField(visibleField);
+                const evidence = text.evidence;
+                const id = `field:${key}`;
+                const selected = active(id, evidence);
+                const name = documentFieldLabel(key);
+                const value = key === "invoice_no" && !invoiceReference(visibleField.value) ? "Needs verification" : text.value;
+                const citations = [...field.evidence, ...(field.english?.evidence ?? [])];
+                const findings = analysis.findings.filter((finding) => finding.field === key && finding.evidence.some((entry) =>
+                  citations.some((citation) => sourceKey(entry) === sourceKey(citation))));
+                const mismatch = findings.find((finding) => finding.outcome === "MISMATCH");
+                const warning = findings.find((finding) => finding.outcome === "WARNING" || finding.outcome === "NEEDS_REVIEW");
+                const status = reviewed ? "present" : mismatch ? "problem" : intakeStatus(field, !!warning || (key === "invoice_no" && !invoiceReference(field.value)));
+                const reason = reviewed ? "Reviewed" : mismatch?.explanation ?? warning?.explanation ?? field.english?.reason ?? statuses[status].label;
+                const interactive = !!evidence || editable;
 
-              return (
-                <div
-                  key={key}
-                  className={cn(
-                    "transition-colors rounded-md",
-                    selected && "bg-primary/8 dark:bg-primary/15"
-                  )}
-                >
+                return (
                   <div
+                    key={key}
                     role={interactive ? "button" : undefined}
                     data-field-key={key}
                     data-connector-source={selected ? "true" : undefined}
@@ -702,57 +392,100 @@ export function IntakeStudioPanel({
                     aria-describedby={`${descriptionId}-${id}`}
                     title={evidence ? `${reason} · ${location(evidence)}` : reason}
                     onClick={interactive ? () => {
-                      if (isFieldEditorOpen && onDismissField) {
-                        onDismissField();
-                      } else {
-                        onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
-                      }
+                      onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
                     } : undefined}
                     onKeyDown={interactive ? (e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
-                        if (isFieldEditorOpen && onDismissField) {
-                          onDismissField();
-                        } else {
-                          onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
-                        }
+                        onInspect(evidence, { id, name, value, target, uncertain: status === "review" || status === "problem" });
                       }
                     } : undefined}
                     className={cn(
-                      "grid w-full grid-cols-[minmax(7.5rem,1.2fr)_minmax(0,2fr)] items-center gap-3 px-2 py-1.5 text-left text-xs transition-colors outline-none rounded-md",
-                      interactive && "cursor-pointer hover:bg-muted/40"
+                      "group/field relative grid w-full grid-cols-[minmax(7.5rem,1.2fr)_minmax(0,2fr)] items-center gap-3 px-2 py-2 text-left text-xs transition-colors outline-none",
+                      interactive && "cursor-pointer hover:bg-muted/40",
+                      selected && "bg-primary/8 dark:bg-primary/15"
                     )}
                   >
-                    <span className="flex items-center gap-2 font-medium">
+                    <span className="flex items-center gap-2 font-medium min-w-0">
                       <IntakeStatusDot status={status} />
-                      <span>{highlightMatch(name, searchQuery)}</span>
+                      <span className="truncate">{highlightMatch(name, searchQuery)}</span>
                     </span>
-                    <span className={cn("min-w-0 break-words whitespace-normal text-right font-mono text-[11px]", selected && "font-bold text-primary")}>
-                      {renderFieldValue(visibleField, value, searchQuery)}
-                    </span>
+
+                    <div className="relative flex items-center justify-end min-w-0">
+                      <span className={cn(
+                        "inline-block min-w-0 break-words whitespace-normal text-right font-mono text-[11px] transition-transform duration-200 ease-out will-change-transform",
+                        selected && "font-bold text-primary",
+                        "group-hover/field:-translate-x-20"
+                      )}>
+                        {renderFieldValue(visibleField, value, searchQuery)}
+                      </span>
+
+                      <div
+                        className="absolute right-0 top-1/2 -translate-y-1/2 flex items-center gap-1 opacity-0 translate-x-1.5 group-hover/field:opacity-100 group-hover/field:translate-x-0 focus-within:opacity-100 focus-within:translate-x-0 transition-all duration-200 ease-out z-10 pointer-events-none group-hover/field:pointer-events-auto"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onMarkCorrect?.(target, value);
+                          }}
+                          className={cn(
+                            "p-1 rounded-sm hover:bg-emerald-500/15 text-muted-foreground hover:text-emerald-600 dark:hover:text-emerald-400 transition-colors cursor-pointer",
+                            reviewed && "text-emerald-600 dark:text-emerald-400 font-semibold"
+                          )}
+                          title={reviewed ? "Marked as correct (click to undo)" : "Mark as correct"}
+                          aria-label={`Mark ${name} as correct`}
+                        >
+                          <Check size={13} className={cn("stroke-[2.5]", reviewed && "stroke-[3]")} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onOpenVerification?.(target);
+                          }}
+                          className="p-1 rounded-sm hover:bg-rose-500/15 text-muted-foreground hover:text-rose-600 dark:hover:text-rose-400 transition-colors cursor-pointer"
+                          title="Mark as issue & open verification"
+                          aria-label={`Mark ${name} as issue and open verification`}
+                        >
+                          <X size={13} className="stroke-[2.5]" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopy(key, value, name);
+                          }}
+                          className={cn(
+                            "p-1 rounded-sm hover:bg-muted text-muted-foreground hover:text-foreground transition-colors cursor-pointer",
+                            copiedKey === key && "text-emerald-600 dark:text-emerald-400"
+                          )}
+                          title={copiedKey === key ? "Copied!" : "Copy value"}
+                          aria-label={`Copy ${name}`}
+                        >
+                          {copiedKey === key ? (
+                            <Check size={13} className="stroke-[2.5]" />
+                          ) : (
+                            <Copy size={13} />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+
                     <span hidden id={`${descriptionId}-${id}`}>{reason}</span>
                   </div>
-
-                  {isFieldEditorOpen && (
-                    <InlineReviewDrawer
-                      key={`${name}:${editor.value}`}
-                      editor={editor}
-                      name={name}
-                      status={status}
-                      isUncertain={field.status === "uncertain"}
-                      currentValue={value}
-                      onDismiss={onDismissField}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </section>)}
+                );
+              })}
+            </div>
+          </section>
+        ))}
         {document && document.items.length > 0 && <GoodsItems key={`${document.document_id}:${document.role}:${document.sheet}`}
           document={document} active={active} inspect={onInspect} names={cdcNames} candidates={candidates}
           editable={editable} viewedField={viewedField} isReviewed={isReviewed}
-          editor={editor} activeField={activeField} onDismissField={onDismissField} searchQuery={searchQuery} />}
+          searchQuery={searchQuery} />}
 
         {/* CDC Quota Summary Section (on Invoice tab) */}
         {activeRole === "invoice" && (

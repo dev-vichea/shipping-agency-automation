@@ -35,20 +35,17 @@ export function VerificationCdcCleanOptions({
   children,
 }: VerificationCdcCleanOptionsProps) {
   const [saving, setSaving] = useState(false);
-  const [selectedCandidate, setSelectedCandidate] = useState<ReviewAnalysis["candidates"][number] | null>(null);
 
   const mapping = review?.mappings.find((entry) => entry.invoice_row === row);
-  const selectedMasterRow = selectedCandidate?.master_row ?? mapping?.master_row;
+  const selectedMasterRow = mapping?.master_row;
 
   async function handleSelect(entry: ReviewAnalysis["candidates"][number] | null) {
     if (disabled || saving) return;
     setSaving(true);
     try {
       if (entry) {
-        setSelectedCandidate(entry);
         await onSelectCandidate(entry);
       } else if (onClearMapping) {
-        setSelectedCandidate(null);
         await onClearMapping();
       }
       onOpenChange(false);
