@@ -90,6 +90,9 @@ class CaseSummary(ORM):
     issue_count: int = 0
     bill_of_lading: str | None = None
     cargo_summary: str | None = None
+    shipper: str | None = None
+    consignee: str | None = None
+    invoice_number: str | None = None
 
 
 class CaseDetail(CaseSummary):

@@ -18,6 +18,9 @@ export type CaseSummary = {
   issue_count?: number;
   bill_of_lading?: string | null;
   cargo_summary?: string | null;
+  shipper?: string | null;
+  consignee?: string | null;
+  invoice_number?: string | null;
   created_at: string;
   updated_at: string;
   attachment_count: number;

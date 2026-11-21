@@ -113,6 +113,7 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
           companyId={companyId}
           inbox={inbox}
           draftView={draftView}
+          mode={mode}
         />
       ) : (
         <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>
