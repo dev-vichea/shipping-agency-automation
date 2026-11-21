@@ -250,7 +250,10 @@ def apply_corrections(docs, corrections):
             selected = source_field(printed_sources, edit.suggestion_source)
             if (
                 selected is None or not selected.evidence
-                or edit.suggestion_source.name not in {edit.name, "supplier" if edit.name == "shipper" else edit.name}
+                or edit.suggestion_source.name not in {
+                    edit.name,
+                    "supplier" if edit.name == "shipper" else "shipper" if edit.name == "supplier" else edit.name,
+                }
                 or (edit.value, edit.unit, edit.currency) != (selected.value, selected.unit, selected.currency)
                 or edit.alternative_index is not None or edit.consignee_source is not None
             ):

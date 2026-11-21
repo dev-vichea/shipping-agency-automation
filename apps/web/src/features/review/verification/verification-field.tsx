@@ -6,7 +6,6 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Combobox, type ComboboxOption } from "@/components/ui/combobox";
 import { DatePicker } from "@/components/ui/date-picker";
-import { Input } from "@/components/ui/input";
 import {
   COMMON_COUNTRIES,
   COMMON_DESTINATIONS,
@@ -70,12 +69,9 @@ export function VerificationField({
   const safeField = field ?? rawField ?? { status: "missing" as const, value: "", confidence: 1, evidence: [] };
   const [text, setText] = useState(safeField.value ?? "");
   const [previous, setPrevious] = useState(safeField.value);
-  const [editingVerified, setEditingVerified] = useState(false);
-  const [note, setNote] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [alternative, setAlternative] = useState<number>();
-  const [suggestionSource, setSuggestionSource] = useState<ReviewField>();
   const [emptyDescAlert, setEmptyDescAlert] = useState(false);
 
   const money = ["unit_price", "amount"].includes(target.name);
@@ -83,7 +79,6 @@ export function VerificationField({
   const dimension = money ? safeField.currency ?? "" : safeField.unit ?? "";
 
   const inFlight = useRef(false);
-  const confirmAfterSave = useRef(false);
   const lastSubmitted = useRef<string | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -99,9 +94,8 @@ export function VerificationField({
     setText(safeField.value ?? "");
   }
 
-  const verified = !compact && !!correction && correction.confirmed !== false;
-  const locked = verified && !editingVerified;
-  const canAutosave = autosave && (compact || !verified);
+  const verified = !compact && !!correction;
+  const canAutosave = autosave;
   const isChanged =
     Boolean(correction) ||
     (Boolean(rawField) &&
@@ -111,14 +105,10 @@ export function VerificationField({
   const handleUndo = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    setText(verified ? safeField.value ?? "" : rawField?.value ?? "");
+    setText(rawField?.value ?? "");
     setAlternative(undefined);
-    setSuggestionSource(undefined);
     setError("");
-    if (verified) {
-      setEditingVerified(false);
-      setNote("");
-    } else if (onUndo) {
+    if (onUndo) {
       await onUndo();
     }
   };
@@ -156,45 +146,27 @@ export function VerificationField({
     ? "Uncertain"
     : "AI-filled";
 
-  async function persist(confirmed: boolean, overrideValue?: string, overrideSource?: ReviewField) {
+  async function persist(overrideValue?: string) {
     const val = overrideValue !== undefined ? overrideValue : text;
-    const src = overrideValue === undefined ? suggestionSource : overrideSource;
     if (!val.trim() || disabled) return;
-    if (!compact && (locked || (verified && (!confirmed || !note.trim())))) return;
-    if (confirmed && inFlight.current) {
-      confirmAfterSave.current = true;
-      return;
-    }
     if (inFlight.current) return;
-    const fingerprint = JSON.stringify([val.trim(), dimension, confirmed, alternative, src]);
-    if (!confirmed && lastSubmitted.current === fingerprint) return;
+    const fingerprint = JSON.stringify([val.trim(), dimension, alternative]);
+    if (lastSubmitted.current === fingerprint) return;
     inFlight.current = true;
     lastSubmitted.current = fingerprint;
     setSaving(true);
     setError("");
     try {
-      const chosenSource = sourceChoices.find(
-        (entry) =>
-          entry.source.document_id === src?.document_id &&
-          entry.source.role === src?.role &&
-          entry.source.row === src?.row &&
-          entry.source.name === src?.name
-      )?.field;
+      const chosenSource = sourceChoices.find((entry) => entry.field?.value === val.trim())?.field;
       await onSave({
         value: val.trim(),
         unit: chosenSource ? chosenSource.unit : hasUnit ? dimension || null : field.unit,
         currency: money ? dimension || null : chosenSource ? chosenSource.currency : field.currency,
-        confirmed,
-        note: note.trim() || (confirmed ? "Confirmed individually." : "Autosaved edit."),
+        confirmed: true,
+        note: "Staff edit.",
         alternative_index: alternative,
-        suggestion_source: src,
       });
-      if (confirmed) {
-        setEditingVerified(false);
-        setNote("");
-      }
     } catch (cause) {
-      confirmAfterSave.current = false;
       lastSubmitted.current = undefined;
       setError(cause instanceof Error ? cause.message : "Could not save this value.");
     } finally {
@@ -203,16 +175,11 @@ export function VerificationField({
     }
   }
 
-  const persistLatest = useEffectEvent((confirmed: boolean) => persist(confirmed));
+  const persistLatest = useEffectEvent(() => persist());
   useEffect(() => {
     if (saving) return;
-    if (confirmAfterSave.current) {
-      confirmAfterSave.current = false;
-      void persistLatest(true);
-      return;
-    }
     if (!canAutosave || !dirty || disabled || !text.trim()) return;
-    const timer = setTimeout(() => void persistLatest(false), 650);
+    const timer = setTimeout(() => void persistLatest(), 650);
     return () => clearTimeout(timer);
   }, [canAutosave, dirty, disabled, text, dimension, saving]);
 
@@ -261,39 +228,12 @@ export function VerificationField({
     return list;
   }, [sourceChoices, suggestion, target.name, target.row]);
 
-  function selectSource(value: string, source?: ReviewField) {
+  function selectSource(value: string) {
     setText(value);
     setError("");
     setAlternative(undefined);
-    setSuggestionSource(source);
-    if (canAutosave) void persist(false, value, source);
+    if (canAutosave) void persist(value);
   }
-
-  const reviewControls = !disabled && (locked ? (
-    <Button type="button" size="xs" variant="outline"
-      aria-label={`Edit verified ${label}`} onClick={() => setEditingVerified(true)}>
-      Edit verified
-    </Button>
-  ) : (dirty || correction) && (
-    <div className="flex flex-wrap items-center gap-1">
-      {verified && editingVerified && (
-        <Input aria-label={`Reason for ${label}`} placeholder="Reason for change"
-          className="h-6 min-w-0 text-xs" maxLength={1000} value={note}
-          onChange={(event) => setNote(event.target.value)} />
-      )}
-      {!autosave && !verified && dirty && (
-        <Button type="button" size="xs" variant="outline" disabled={saving || !text.trim()}
-          aria-label={`Save edit for ${label}`} onClick={() => void persist(false)}>
-          Save edit
-        </Button>
-      )}
-      <Button type="button" size="xs" variant="outline"
-        disabled={saving || !text.trim() || (verified && (!dirty || !note.trim()))}
-        aria-label={`Confirm ${label}`} onClick={() => void persist(true)}>
-        Confirm
-      </Button>
-    </div>
-  ));
 
   // Compact mode for table cells (simple, clean input, no icons, no overflow, flexible text)
   if (compact) {
@@ -311,7 +251,7 @@ export function VerificationField({
               id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
               aria-label={label}
               value={text}
-              readOnly={disabled || (!compact && locked)}
+              readOnly={disabled}
               disabled={disabled}
               rows={1}
               placeholder={text ? undefined : "—"}
@@ -330,14 +270,13 @@ export function VerificationField({
                 setText(event.target.value);
                 if (error) setError("");
                 setAlternative(undefined);
-                setSuggestionSource(undefined);
               }}
               onBlur={() => {
                 if (target.name === "description" && !text.trim()) {
                   setEmptyDescAlert(true);
                   return;
                 }
-                if (canAutosave && dirty) void persist(false);
+                if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
@@ -346,11 +285,11 @@ export function VerificationField({
                     setEmptyDescAlert(true);
                     return;
                   }
-                  void persist(true);
+                  void persist();
                 }
               }}
             />
-            {isChanged && !verified && onUndo && (
+            {isChanged && onUndo && (
               <button
                 type="button"
                 title="Undo change (revert to original)"
@@ -369,7 +308,7 @@ export function VerificationField({
               ariaLabel={label}
               value={text}
               disabled={disabled}
-              readOnly={disabled || (!compact && locked)}
+              readOnly={disabled}
               compact
               numeric={false}
               popoverWidth="w-[280px]"
@@ -379,22 +318,21 @@ export function VerificationField({
                 setText(val);
                 if (error) setError("");
                 setAlternative(undefined);
-                setSuggestionSource(undefined);
               }}
               onSelectOption={(opt) => selectSource(opt.value)}
               onFocus={onInspect}
               onBlur={() => {
-                if (canAutosave && dirty) void persist(false);
+                if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  void persist(true);
+                  void persist();
                 }
               }}
               error={error}
             />
-            {isChanged && !verified && onUndo && (
+            {isChanged && onUndo && (
               <button
                 type="button"
                 title="Undo change (revert to original)"
@@ -412,7 +350,7 @@ export function VerificationField({
               id={`verify-${target.role}-${target.row ?? "header"}-${target.name}`}
               aria-label={label}
               value={text}
-              readOnly={disabled || (!compact && locked)}
+              readOnly={disabled}
               disabled={disabled}
               type="text"
               inputMode="decimal"
@@ -427,15 +365,14 @@ export function VerificationField({
                 setText(event.target.value);
                 if (error) setError("");
                 setAlternative(undefined);
-                setSuggestionSource(undefined);
               }}
               onBlur={() => {
-                if (canAutosave && dirty) void persist(false);
+                if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  void persist(true);
+                  void persist();
                 }
               }}
             />
@@ -444,7 +381,7 @@ export function VerificationField({
                 {unitSuffix}
               </span>
             )}
-            {isChanged && !verified && onUndo && (
+            {isChanged && onUndo && (
               <button
                 type="button"
                 title="Undo change (revert to original)"
@@ -463,7 +400,7 @@ export function VerificationField({
               ariaLabel={label}
               value={text}
               disabled={disabled}
-              readOnly={disabled || (!compact && locked)}
+              readOnly={disabled}
               compact
               numeric={numeric}
               type={numeric ? "text" : type}
@@ -480,20 +417,18 @@ export function VerificationField({
                 setText(val);
                 if (error) setError("");
                 setAlternative(undefined);
-                setSuggestionSource(undefined);
               }}
               onSelectOption={(opt) => {
-                const choice = opt.data as VerificationSourceChoice | undefined;
-                selectSource(opt.value, choice?.source);
+                selectSource(opt.value);
               }}
               onFocus={onInspect}
               onBlur={() => {
-                if (canAutosave && dirty) void persist(false);
+                if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
-                  void persist(true);
+                  void persist();
                 }
               }}
               error={error}
@@ -503,7 +438,7 @@ export function VerificationField({
                 {unitSuffix}
               </span>
             )}
-            {isChanged && !verified && onUndo && (
+            {isChanged && onUndo && (
               <button
                 type="button"
                 title="Undo change (revert to original)"
@@ -533,18 +468,6 @@ export function VerificationField({
         >
           {documentFieldLabel(target.name)}
         </label>
-        {isChanged && !verified && onUndo && (
-          <button
-            type="button"
-            title="Undo change (revert to original)"
-            aria-label={`Undo change for ${documentFieldLabel(target.name)}`}
-            onClick={handleUndo}
-            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-primary transition-colors cursor-pointer"
-          >
-            <RotateCcw className="size-2.5" />
-            <span>Undo</span>
-          </button>
-        )}
       </div>
 
       {dateFields.has(target.name) ? (
@@ -553,7 +476,7 @@ export function VerificationField({
           ariaLabel={label}
           value={text}
           disabled={disabled}
-          readOnly={disabled || locked}
+          readOnly={disabled}
           placeholder="DD/MM/YYYY"
           sourceOptions={sourceChoices.map((sc) => ({
             value: sc.field?.value ?? "",
@@ -564,17 +487,16 @@ export function VerificationField({
             setText(val);
             if (error) setError("");
             setAlternative(undefined);
-            setSuggestionSource(undefined);
-            if (canAutosave) void persist(false, val);
+            if (canAutosave) void persist(val);
           }}
           onFocus={onInspect}
           onBlur={() => {
-            if (canAutosave && dirty) void persist(false);
+            if (canAutosave && dirty) void persist();
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               event.preventDefault();
-              void persist(true);
+              void persist();
             }
           }}
           error={error}
@@ -585,7 +507,7 @@ export function VerificationField({
           ariaLabel={label}
           value={text}
           disabled={disabled}
-          readOnly={disabled || locked}
+          readOnly={disabled}
           multiline={isAddress || ["cargo_summary", "description", "remark"].includes(target.name)}
           numeric={numeric}
           type={type}
@@ -604,29 +526,43 @@ export function VerificationField({
             setText(val);
             if (error) setError("");
             setAlternative(undefined);
-            setSuggestionSource(undefined);
           }}
           onSelectOption={(opt) => {
-            setText(opt.value);
-            if (error) setError("");
-            const source = (opt.data as VerificationSourceChoice | undefined)?.source;
-            selectSource(opt.value, source);
+            selectSource(opt.value);
           }}
           onFocus={onInspect}
           onBlur={() => {
-            if (canAutosave && dirty) void persist(false);
+            if (canAutosave && dirty) void persist();
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void persist(true);
+              void persist();
             }
           }}
           error={error}
         />
       )}
-      {reviewControls}
-      {error && <p role="alert" className="text-[10px] text-destructive">{error}</p>}
+
+      {(error || (isChanged && onUndo)) && (
+        <div className="flex items-center justify-between text-[10px] min-h-[16px] px-0.5">
+          {error ? (
+            <p role="alert" className="text-destructive leading-tight">{error}</p>
+          ) : <span />}
+          {isChanged && onUndo && (
+            <button
+              type="button"
+              title="Undo change (revert to original)"
+              aria-label={`Undo change for ${documentFieldLabel(target.name)}`}
+              onClick={handleUndo}
+              className="inline-flex items-center gap-1 text-muted-foreground hover:text-primary transition-colors cursor-pointer ml-auto"
+            >
+              <RotateCcw className="size-2.5" />
+              <span>Undo</span>
+            </button>
+          )}
+        </div>
+      )}
 
       <Dialog open={emptyDescAlert} onOpenChange={setEmptyDescAlert}>
         <DialogContent className="max-w-md p-6">

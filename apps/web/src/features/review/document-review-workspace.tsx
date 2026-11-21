@@ -1142,17 +1142,36 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     )}
 
       <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
-        <DialogContent className="max-w-3xl sm:max-w-3xl" aria-describedby={undefined}>
-          <div className="flex items-center justify-between gap-3 border-b p-4">
-            <DialogTitle className="text-sm font-semibold">Review Warnings</DialogTitle>
+        <DialogContent className="max-w-5xl sm:max-w-5xl lg:max-w-6xl max-h-[90vh] overflow-hidden flex flex-col p-0" aria-describedby={undefined}>
+          <div className="flex items-center justify-between gap-3 border-b px-5 py-3.5 bg-muted/20 shrink-0">
+            <div>
+              <DialogTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
+                Review Warnings
+                {groupedIssues.length > 0 && (
+                  <Badge variant="warning" className="text-[10px]">{groupedIssues.length} pending</Badge>
+                )}
+              </DialogTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Cross-check extracted document values and map CDC candidates across your shipment files.
+              </p>
+            </div>
             <DialogCloseButton label="Close review dialog" />
           </div>
-          <div className="space-y-4 p-4">
-            <label className="flex gap-2 text-xs font-medium">
-              <input type="checkbox" checked={cdcAutoRuleEnabled} onChange={(event) => setCdcAutoRuleEnabled(event.target.checked)} />
-              AI Auto-Suggestion with CDC Rules
-            </label>
-            <p className="text-xs text-muted-foreground">Compare cited document values and CDC candidates. Each approval requires your review and reason.</p>
+          <div className="space-y-4 p-5 overflow-y-auto">
+            <div className="rounded-lg border bg-card p-3 flex items-center justify-between gap-3 shadow-xs">
+              <label className="flex items-center gap-2.5 text-xs font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={cdcAutoRuleEnabled}
+                  onChange={(event) => setCdcAutoRuleEnabled(event.target.checked)}
+                  className="rounded border-input text-primary focus:ring-primary size-4"
+                />
+                <span className="font-semibold text-foreground">AI Auto-Suggestion with CDC Rules</span>
+              </label>
+              <Badge variant={cdcAutoRuleEnabled ? "default" : "secondary"} className="text-[10px]">
+                {cdcAutoRuleEnabled ? "Suggestions Active" : "Manual Only"}
+              </Badge>
+            </div>
             <AutoSuggestionReview analysis={analysis} workflow={workflow} saved={saved} busy={busy}
               enabled={cdcAutoRuleEnabled} onSave={saveReview}
               onInspect={(cite) => { setReviewDialogOpen(false); inspect(cite); }} />

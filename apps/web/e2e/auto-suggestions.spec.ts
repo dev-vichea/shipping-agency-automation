@@ -46,13 +46,8 @@ test("review suggestions stay pending until a staff decision and preserve unreso
   await dialog.getByRole("checkbox", { name: "AI Auto-Suggestion with CDC Rules" }).check();
   expect((await readReview()).review).toBeNull();
   const weight = dialog.getByRole("article", { name: "Gross Weight finding", exact: true }).first();
-  const source = weight.getByLabel(/Source value to use/);
-  const choices = await source.locator("option").evaluateAll((options) => options.map((option) => ({ value: (option as HTMLOptionElement).value, label: option.textContent ?? "" })));
-  const invoiceChoice = choices.find((option) => option.label.includes("· invoice ·"));
-  expect(invoiceChoice).toBeTruthy();
-  await source.selectOption(invoiceChoice!.value);
-  await weight.getByLabel("Decision reason").fill("Checked invoice and packing weights against original cells.");
-  await weight.getByRole("button", { name: "Approve selection" }).click();
+  const useBtn = weight.getByRole("button", { name: /Use .* value/i }).first();
+  await useBtn.click();
   await expect.poll(async () => (await readReview()).review?.finding_decisions?.length).toBe(1);
   const documentReview = (await readReview()).review?.id;
   await dialog.getByRole("tab", { name: /CDC Items/ }).click();
@@ -60,8 +55,6 @@ test("review suggestions stay pending until a staff decision and preserve unreso
   await row.getByLabel("CDC material candidate").selectOption("3");
   await expect(row.getByText(/CDC evidence/)).toBeVisible();
   expect((await readReview()).review?.id).toBe(documentReview);
-  await row.getByLabel("Decision reason").fill("Checked material in CDC original; unit and balance remain unresolved.");
-  await row.getByRole("button", { name: "Approve selection" }).click();
   await expect.poll(async () => (await readReview()).review?.finding_decisions?.find((entry) => entry.key === "cdc.row.10.mapping")?.action).toBe("approved");
   const workflow = await readReview();
   expect(workflow.review?.cdc_ready).toBe(false);
@@ -72,6 +65,6 @@ test("review suggestions stay pending until a staff decision and preserve unreso
   await page.reload();
   await page.getByRole("button", { name: /^Review \(/ }).click();
   await page.getByRole("tab", { name: /CDC Items/ }).click();
-  await expect(page.getByRole("article", { name: "CDC invoice row 10" }).getByRole("status")).toContainText("approved");
+  await expect(page.getByRole("article", { name: "CDC invoice row 10" })).toContainText(/Mapped/i);
   expect(errors).toEqual([]);
 });

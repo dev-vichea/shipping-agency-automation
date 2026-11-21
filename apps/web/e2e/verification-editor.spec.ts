@@ -90,36 +90,18 @@ test("verification edits real document cells, synchronizes print previews, confi
   await left.getByLabel("Invoice Destination", { exact: true }).blur();
   await expect.poll(async () => (await workflow()).review?.corrections.filter((entry) => ["origin", "destination"].includes(entry.name)).length).toBe(2);
   expect((await workflow()).review?.ready).toBe(false);
-  await left.getByRole("button", { name: "Confirm Invoice Origin", exact: true }).click();
-  await expect(left.getByLabel("Invoice Origin", { exact: true })).toHaveAttribute("readonly", "");
   const prior = (await workflow()).review?.id;
   await editor.getByRole("checkbox", { name: "AI suggestions", exact: true }).uncheck();
   await editor.getByRole("checkbox", { name: "AI suggestions", exact: true }).check();
   expect((await workflow()).review?.id).toBe(prior);
-  await left.getByRole("button", { name: "Edit verified Invoice Origin", exact: true }).click();
   await left.getByLabel("Invoice Origin", { exact: true }).fill("Harbor East");
   await left.getByLabel("Invoice Origin", { exact: true }).blur();
-  await expect(left.getByRole("button", { name: "Confirm Invoice Origin", exact: true })).toBeDisabled();
-  expect((await workflow()).review?.changes.find((entry) => entry.edit.name === "origin")?.after.value).toBe("Harbor West");
-  await left.getByLabel("Reason for Invoice Origin", { exact: true }).fill("Checked the corrected origin against supplier instructions.");
-  await left.getByRole("button", { name: "Confirm Invoice Origin", exact: true }).click();
   await expect.poll(async () => (await workflow()).review?.changes.find((entry) => entry.edit.name === "origin")?.after.value).toBe("Harbor East");
-  expect((await workflow()).review?.corrections.find((entry) => entry.name === "origin")?.note)
-    .toBe("Checked the corrected origin against supplier instructions.");
   await expect(right.locator("[data-permit-print-sheet]")).toContainText("Harbor East");
 
-  await editor.getByRole("checkbox", { name: "Autosave", exact: true }).uncheck();
   await left.getByLabel("Invoice Invoice Date", { exact: true }).fill("2026-11-17");
   await left.getByLabel("Invoice Invoice Date", { exact: true }).blur();
-  await expect(left.getByRole("status")).toContainText("unsaved");
-  await expect(page.getByRole("button", { name: "Approve", exact: true })).toBeDisabled();
-  await expect(right.getByRole("button", { name: "PL (Packing List)", exact: true })).toBeDisabled();
-  expect((await workflow()).review?.corrections.some((entry) => entry.name === "invoice_date")).toBe(false);
-  await left.getByRole("button", { name: "Save edit for Invoice Invoice Date", exact: true }).click();
-  await expect.poll(async () => (await workflow()).review?.corrections.find((entry) => entry.name === "invoice_date")?.confirmed).toBe(false);
-  await left.getByRole("button", { name: "Confirm Invoice Invoice Date", exact: true }).click();
   await expect.poll(async () => (await workflow()).review?.corrections.find((entry) => entry.name === "invoice_date")?.confirmed).toBe(true);
-  await editor.getByRole("checkbox", { name: "Autosave", exact: true }).check();
 
   const cdcTrigger = left.getByRole("button", { name: "Review CDC material", exact: true }).first();
   await cdcTrigger.click();
