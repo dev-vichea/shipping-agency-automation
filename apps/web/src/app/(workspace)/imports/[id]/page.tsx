@@ -8,6 +8,7 @@ import { ListPagination } from "@/components/ui/pagination";
 import { Empty, PageHeading, Section, Status } from "@/components/ui/page-layout";
 import { Originals } from "@/features/imports/originals";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ImportShipmentTracker } from "@/features/imports/import-shipment-tracker";
 import type { ImportDetail, PermitDraft, ReviewWorkflow } from "@/lib/contracts";
 import { label, timestamp } from "@/lib/format";
 import { lastPageOffset, pageSize, parseOffset } from "@/lib/pagination";
@@ -49,6 +50,14 @@ export default async function ImportPage({ params, searchParams }: {
       </Section>
       <Section title="Original attachments"><Originals documents={record.documents} /></Section>
     </div>
+    <ImportShipmentTracker
+      invoiceNo={record.invoice_no}
+      company={record.company}
+      supplier={record.supplier}
+      consignee={record.consignee}
+      eta={record.eta}
+      isApproved={record.state === "approved"}
+    />
     {record.state === "approved" && <Section title="Permit drafts">
       {permitPending && <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-fill p-3 text-body-sm text-warning">
         <Status value="pending" /><p>{permitPending}</p>

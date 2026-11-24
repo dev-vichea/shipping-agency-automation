@@ -13,16 +13,10 @@ import {
   PlusCircle,
   ChevronDown,
 } from "lucide-react";
-import { SearchInput } from "@/components/ui/search-input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { PageHeading, Section } from "@/components/ui/page-layout";
+import { PageHeading } from "@/components/ui/page-layout";
+import { FleetStatGrid, type FleetStatItem } from "./fleet-stat-grid";
+import { FleetFilterBar, type FilterCategoryGroup } from "./fleet-filter-bar";
 import {
   Popover,
   PopoverTrigger,
@@ -83,57 +77,133 @@ export function FleetDriversView() {
     return { total, available, onTrip, offDuty };
   }, [drivers]);
 
-  const handleUpdateVehicle = async (driver: Driver, plate?: string) => {
-    try {
-      await updateDriver(driver.id, {
-        assigned_vehicle_plate: plate ?? null,
-      });
-      await refresh();
-      toast.saved(
-        plate
-          ? `Assigned vehicle ${plate} to ${driver.name}`
-          : `Unassigned vehicle from ${driver.name}`
-      );
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update vehicle");
-    }
+  const statItems: FleetStatItem[] = useMemo(
+    () => [
+      {
+        id: "total",
+        label: "Enrolled Drivers",
+        value: stats.total,
+        icon: Users,
+        active: statusFilter === "all",
+        onClick: () => setStatusFilter("all"),
+      },
+      {
+        id: "available",
+        label: "Available (On Call)",
+        value: stats.available,
+        icon: CheckCircle2,
+        iconColor: "text-emerald-500",
+        active: statusFilter === "available",
+        onClick: () => setStatusFilter(statusFilter === "available" ? "all" : "available"),
+      },
+      {
+        id: "on_trip",
+        label: "Active on Trip",
+        value: stats.onTrip,
+        icon: Clock,
+        iconColor: "text-sky-500",
+        active: statusFilter === "on_trip",
+        onClick: () => setStatusFilter(statusFilter === "on_trip" ? "all" : "on_trip"),
+      },
+      {
+        id: "off_duty",
+        label: "Off Duty / Rest",
+        value: stats.offDuty,
+        icon: Moon,
+        iconColor: "text-slate-400",
+        active: statusFilter === "off_duty",
+        onClick: () => setStatusFilter(statusFilter === "off_duty" ? "all" : "off_duty"),
+      },
+    ],
+    [stats, statusFilter]
+  );
+
+  const categories: FilterCategoryGroup[] = useMemo(
+    () => [
+      {
+        id: "status",
+        label: "Status",
+        value: statusFilter,
+        onToggle: (val) => setStatusFilter(statusFilter === val ? "all" : val),
+        options: [
+          { value: "all", label: "All Statuses", count: stats.total },
+          { value: "available", label: "Available", count: stats.available, dotColor: "bg-emerald-500" },
+          { value: "on_trip", label: "On Trip", count: stats.onTrip, dotColor: "bg-sky-500" },
+          { value: "off_duty", label: "Off Duty", count: stats.offDuty, dotColor: "bg-slate-400" },
+        ],
+      },
+    ],
+    [statusFilter, stats]
+  );
+
+  const handleReset = () => {
+    setSearch("");
+    setStatusFilter("all");
   };
 
-  const handleUpdateStatus = async (
-    driver: Driver,
-    nextStatus: "available" | "on_trip" | "off_duty"
-  ) => {
-    try {
-      await updateDriver(driver.id, { status: nextStatus });
-      await refresh();
-      toast.saved(
-        `Driver status set to ${
-          nextStatus === "available"
-            ? "Available"
-            : nextStatus === "on_trip"
-            ? "On Trip"
-            : "Off Duty"
-        }`
-      );
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
-    }
-  };
+  const hasActiveFilters = Boolean(search || statusFilter !== "all");
 
-  const handleDelete = async (id: string, name: string) => {
-    if (confirm(`Remove driver ${name} from the database?`)) {
+  const handleUpdateVehicle = useCallback(
+    async (driver: Driver, plate?: string) => {
       try {
-        await removeDriver(id);
+        await updateDriver(driver.id, {
+          assigned_vehicle_plate: plate ?? null,
+        });
         await refresh();
-        toast.saved(`Removed driver ${name}`);
+        toast.saved(
+          plate
+            ? `Assigned vehicle ${plate} to ${driver.name}`
+            : `Unassigned vehicle from ${driver.name}`
+        );
       } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : "Failed to delete driver");
+        toast.error(err instanceof Error ? err.message : "Failed to update vehicle");
       }
-    }
-  };
+    },
+    [refresh]
+  );
+
+  const handleUpdateStatus = useCallback(
+    async (
+      driver: Driver,
+      nextStatus: "available" | "on_trip" | "off_duty"
+    ) => {
+      try {
+        await updateDriver(driver.id, { status: nextStatus });
+        await refresh();
+        toast.saved(
+          `Driver status set to ${
+            nextStatus === "available"
+              ? "Available"
+              : nextStatus === "on_trip"
+              ? "On Trip"
+              : "Off Duty"
+          }`
+        );
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "Failed to update status");
+      }
+    },
+    [refresh]
+  );
+
+  const handleDelete = useCallback(
+    async (id: string, name: string) => {
+      if (confirm(`Remove driver ${name} from the database?`)) {
+        try {
+          await removeDriver(id);
+          await refresh();
+          toast.saved(`Removed driver ${name}`);
+        } catch (err: unknown) {
+          toast.error(err instanceof Error ? err.message : "Failed to delete driver");
+        }
+      }
+    },
+    [refresh]
+  );
 
   // Strictly single-line per cell!
-  const columns: ResizableColumn<Driver>[] = [
+  const columns: ResizableColumn<Driver>[] = useMemo(
+    () => [
     {
       id: "index",
       header: "#",
@@ -404,99 +474,79 @@ export function FleetDriversView() {
         </div>
       ),
     },
-  ];
+  ],
+  [vehicles, refresh, handleDelete, handleUpdateStatus, handleUpdateVehicle]
+);
+
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  const columnLabels: Record<string, string> = useMemo(
+    () => ({
+      index: "#",
+      name: "Driver Name",
+      phone: "Phone Number",
+      license: "Driving License",
+      national_id: "National ID (NID)",
+      assigned_truck: "Assigned Truck",
+      trips: "Total Trips",
+      status: "Status",
+    }),
+    []
+  );
+
+  const columnsOptions = useMemo(
+    () =>
+      columns
+        .filter((c) => c.id !== "actions")
+        .map((c) => ({
+          id: c.id,
+          label: columnLabels[c.id] ?? c.id,
+          visible: !hiddenColumns.has(c.id),
+        })),
+    [columns, hiddenColumns, columnLabels]
+  );
+
+  const toggleColumn = (id: string) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const visibleColumns = useMemo(
+    () => columns.filter((c) => !hiddenColumns.has(c.id)),
+    [columns, hiddenColumns]
+  );
 
   return (
-    <div className="space-y-4">
-      {/* 1. Header with Add Driver at Top */}
+    <div className="space-y-3">
+      {/* 1. Header with Add Driver at Top (Subtitle removed) */}
       <PageHeading
         title="Drivers Directory"
-        description="Manage registered drivers, contact phones, and direct truck assignments."
         action={<DriverDialog onSaved={refresh} />}
       />
 
-      {/* 2. The 4 KPI Cards Above the Table */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Enrolled Drivers</span>
-            <Users size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.total}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Available (On Call)</span>
-            <CheckCircle2 size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.available}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Active on Trip</span>
-            <Clock size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.onTrip}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Off Duty / Rest</span>
-            <Moon size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.offDuty}
-          </div>
-        </div>
-      </div>
+      {/* 2. Connected Grid Card (No Gap, no border accent) */}
+      <FleetStatGrid items={statItems} />
 
-      {/* 3. Main Table Section - Direct Edge-to-Edge Table (No double container wrap) */}
-      <Section title="Drivers & Direct Truck Assignments">
-        {/* Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-md">
-            <SearchInput
-              placeholder="Search driver name, phone, license, vehicle…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              containerClassName="flex-1 min-w-[200px]"
-              className="h-8 text-xs bg-background"
-            />
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-8 text-xs w-36 bg-background">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="available">Available</SelectItem>
-                <SelectItem value="on_trip">On Trip</SelectItem>
-                <SelectItem value="off_duty">Off Duty</SelectItem>
-              </SelectContent>
-            </Select>
-            {(search || statusFilter !== "all") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setStatusFilter("all");
-                }}
-                className="h-8 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Reset
-              </Button>
-            )}
-          </div>
-        </div>
+      {/* 3. Search and Action controls OUTSIDE the table, NO background, NO border */}
+      <FleetFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search driver name, phone, license, vehicle…"
+        categories={categories}
+        columns={columnsOptions}
+        onToggleColumn={toggleColumn}
+        onReset={handleReset}
+        hasActiveFilters={hasActiveFilters}
+      />
 
-        {/* Resizable Table sits DIRECTLY in Section (flush edge-to-edge) */}
+      {/* 4. Table container */}
+      <div className="panel overflow-hidden">
         <ResizableTable
-          columns={columns}
+          columns={visibleColumns}
           data={drivers}
           storageKey="fleet_drivers"
           rowKey={(d) => d.id}
@@ -513,7 +563,7 @@ export function FleetDriversView() {
             </div>
           }
         />
-      </Section>
+      </div>
     </div>
   );
 }

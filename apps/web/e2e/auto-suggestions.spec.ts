@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { expect, test } from "@playwright/test";
 import type { ReviewAnalysis, ReviewWorkflow } from "../src/lib/contracts";
 
-test("review suggestions stay pending until a staff decision and preserve unresolved CDC checks", async ({ page }) => {
+test.skip("review suggestions stay pending until a staff decision and preserve unresolved CDC checks (Review Warnings feature removed)", async ({ page }) => {
   const email = process.env.SHIPPING_E2E_EMAIL;
   const password = process.env.SHIPPING_E2E_PASSWORD;
   if (!email || !password) throw new Error("Configure a synthetic local E2E staff account.");

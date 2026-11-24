@@ -14,16 +14,10 @@ import {
   Send,
   ChevronDown,
 } from "lucide-react";
-import { SearchInput } from "@/components/ui/search-input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { PageHeading, Section } from "@/components/ui/page-layout";
+import { PageHeading } from "@/components/ui/page-layout";
+import { FleetStatGrid, type FleetStatItem } from "./fleet-stat-grid";
+import { FleetFilterBar, type FilterCategoryGroup } from "./fleet-filter-bar";
 import {
   Popover,
   PopoverTrigger,
@@ -99,74 +93,171 @@ export function FleetVehiclesView() {
     return { total, available, onTrip, maintenance };
   }, [vehicles]);
 
-  const handleUpdateDriver = async (
-    vehicle: Vehicle,
-    driverId?: string,
-    driverName?: string,
-    driverPhone?: string
-  ) => {
-    try {
-      await updateVehicle(vehicle.id, {
-        assigned_driver_id: driverId ?? null,
-        assigned_driver_name: driverName ?? null,
-        driver_phone: driverPhone ?? null,
-      });
-      await refresh();
-      toast.saved(
-        driverName
-          ? `Assigned ${driverName} to ${vehicle.plate_number}`
-          : `Unassigned driver from ${vehicle.plate_number}`
-      );
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to assign driver");
-    }
+  const haulierStats = useMemo(() => {
+    const inHouse = vehicles.filter((v) => v.haulier_type === "in_house").length;
+    const subcontractor = vehicles.filter((v) => v.haulier_type === "subcontractor").length;
+    return { inHouse, subcontractor };
+  }, [vehicles]);
+
+  const statItems: FleetStatItem[] = useMemo(
+    () => [
+      {
+        id: "total",
+        label: "Total Fleet",
+        value: stats.total,
+        icon: Truck,
+        active: statusFilter === "all",
+        onClick: () => setStatusFilter("all"),
+      },
+      {
+        id: "available",
+        label: "Available in Yard",
+        value: stats.available,
+        icon: CheckCircle2,
+        iconColor: "text-emerald-500",
+        active: statusFilter === "available",
+        onClick: () => setStatusFilter(statusFilter === "available" ? "all" : "available"),
+      },
+      {
+        id: "on_trip",
+        label: "On Trip (In Transit)",
+        value: stats.onTrip,
+        icon: Clock,
+        iconColor: "text-sky-500",
+        active: statusFilter === "on_trip",
+        onClick: () => setStatusFilter(statusFilter === "on_trip" ? "all" : "on_trip"),
+      },
+      {
+        id: "maintenance",
+        label: "Maintenance",
+        value: stats.maintenance,
+        icon: Wrench,
+        iconColor: "text-rose-500",
+        active: statusFilter === "maintenance",
+        onClick: () => setStatusFilter(statusFilter === "maintenance" ? "all" : "maintenance"),
+      },
+    ],
+    [stats, statusFilter]
+  );
+
+  const categories: FilterCategoryGroup[] = useMemo(
+    () => [
+      {
+        id: "status",
+        label: "Status",
+        value: statusFilter,
+        onToggle: (val) => setStatusFilter(statusFilter === val ? "all" : val),
+        options: [
+          { value: "all", label: "All Statuses", count: stats.total },
+          { value: "available", label: "Available", count: stats.available, dotColor: "bg-emerald-500" },
+          { value: "on_trip", label: "On Trip", count: stats.onTrip, dotColor: "bg-sky-500" },
+          { value: "maintenance", label: "Maintenance", count: stats.maintenance, dotColor: "bg-rose-500" },
+        ],
+      },
+      {
+        id: "haulier",
+        label: "Fleet",
+        value: haulierFilter,
+        onToggle: (val) => setHaulierFilter(haulierFilter === val ? "all" : val),
+        options: [
+          { value: "all", label: "All Fleets", count: stats.total },
+          { value: "in_house", label: "In-House Fleet", count: haulierStats.inHouse },
+          { value: "subcontractor", label: "3PL Subcontractor", count: haulierStats.subcontractor },
+        ],
+      },
+    ],
+    [statusFilter, haulierFilter, stats, haulierStats]
+  );
+
+  const handleReset = () => {
+    setSearch("");
+    setStatusFilter("all");
+    setHaulierFilter("all");
   };
 
-  const handleUpdateTrailer = async (vehicle: Vehicle, trailerPlate: string) => {
-    try {
-      await updateVehicle(vehicle.id, {
-        trailer_plate: trailerPlate || null,
-      });
-      await refresh();
-      toast.saved(
-        trailerPlate
-          ? `Assigned trailer ${trailerPlate}`
-          : `Cleared trailer assignment`
-      );
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update trailer");
-    }
-  };
+  const hasActiveFilters = Boolean(search || statusFilter !== "all" || haulierFilter !== "all");
 
-  const handleUpdateStatus = async (
-    vehicle: Vehicle,
-    nextStatus: "available" | "on_trip" | "maintenance"
-  ) => {
-    try {
-      await updateVehicle(vehicle.id, { status: nextStatus });
-      await refresh();
-      toast.saved(
-        `Status set to ${nextStatus === "available" ? "Available" : nextStatus === "on_trip" ? "On Trip" : "Maintenance"}`
-      );
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update status");
-    }
-  };
-
-  const handleDelete = async (id: string, plate: string) => {
-    if (confirm(`Remove vehicle ${plate} from the database?`)) {
+  const handleUpdateDriver = useCallback(
+    async (
+      vehicle: Vehicle,
+      driverId?: string,
+      driverName?: string,
+      driverPhone?: string
+    ) => {
       try {
-        await removeVehicle(id);
+        await updateVehicle(vehicle.id, {
+          assigned_driver_id: driverId ?? null,
+          assigned_driver_name: driverName ?? null,
+          driver_phone: driverPhone ?? null,
+        });
         await refresh();
-        toast.saved(`Removed vehicle ${plate}`);
+        toast.saved(
+          driverName
+            ? `Assigned ${driverName} to ${vehicle.plate_number}`
+            : `Unassigned driver from ${vehicle.plate_number}`
+        );
       } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : "Failed to delete vehicle");
+        toast.error(err instanceof Error ? err.message : "Failed to assign driver");
       }
-    }
-  };
+    },
+    [refresh]
+  );
+
+  const handleUpdateTrailer = useCallback(
+    async (vehicle: Vehicle, trailerPlate: string) => {
+      try {
+        await updateVehicle(vehicle.id, {
+          trailer_plate: trailerPlate || null,
+        });
+        await refresh();
+        toast.saved(
+          trailerPlate
+            ? `Assigned trailer ${trailerPlate}`
+            : `Cleared trailer assignment`
+        );
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "Failed to update trailer");
+      }
+    },
+    [refresh]
+  );
+
+  const handleUpdateStatus = useCallback(
+    async (
+      vehicle: Vehicle,
+      nextStatus: "available" | "on_trip" | "maintenance"
+    ) => {
+      try {
+        await updateVehicle(vehicle.id, { status: nextStatus });
+        await refresh();
+        toast.saved(
+          `Status set to ${nextStatus === "available" ? "Available" : nextStatus === "on_trip" ? "On Trip" : "Maintenance"}`
+        );
+      } catch (err: unknown) {
+        toast.error(err instanceof Error ? err.message : "Failed to update status");
+      }
+    },
+    [refresh]
+  );
+
+  const handleDelete = useCallback(
+    async (id: string, plate: string) => {
+      if (confirm(`Remove vehicle ${plate} from the database?`)) {
+        try {
+          await removeVehicle(id);
+          await refresh();
+          toast.saved(`Removed vehicle ${plate}`);
+        } catch (err: unknown) {
+          toast.error(err instanceof Error ? err.message : "Failed to delete vehicle");
+        }
+      }
+    },
+    [refresh]
+  );
 
   // Every column is strictly single-line!
-  const columns: ResizableColumn<Vehicle>[] = [
+  const columns: ResizableColumn<Vehicle>[] = useMemo(
+    () => [
     {
       id: "index",
       header: "#",
@@ -626,110 +717,92 @@ export function FleetVehiclesView() {
         </div>
       ),
     },
-  ];
+  ],
+  [
+    drivers,
+    dispatches,
+    vehicles,
+    refresh,
+    handleDelete,
+    handleUpdateDriver,
+    handleUpdateStatus,
+    handleUpdateTrailer,
+  ]
+);
+
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  const columnLabels: Record<string, string> = useMemo(
+    () => ({
+      index: "#",
+      plate: "Truck Head Plate",
+      type: "Equipment Type",
+      haulier: "Haulier",
+      fleet_type: "Fleet Type",
+      trailer: "Trailer",
+      driver_name: "Assigned Driver",
+      driver_phone: "Driver Phone",
+      active_trip: "Active Trip",
+      shipment_ref: "Shipment Ref",
+      capacity: "Payload",
+      status: "Status",
+    }),
+    []
+  );
+
+  const columnsOptions = useMemo(
+    () =>
+      columns
+        .filter((c) => c.id !== "actions")
+        .map((c) => ({
+          id: c.id,
+          label: columnLabels[c.id] ?? c.id,
+          visible: !hiddenColumns.has(c.id),
+        })),
+    [columns, hiddenColumns, columnLabels]
+  );
+
+  const toggleColumn = (id: string) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const visibleColumns = useMemo(
+    () => columns.filter((c) => !hiddenColumns.has(c.id)),
+    [columns, hiddenColumns]
+  );
 
   return (
-    <div className="space-y-4">
-      {/* 1. Header with Add Vehicle at Top */}
+    <div className="space-y-3">
+      {/* 1. Header with Add Vehicle at Top (Subtitle removed) */}
       <PageHeading
         title="Vehicles & Equipment"
-        description="Monitor trucks, trailers, carrier fleets, and direct driver assignments."
         action={<VehicleDialog onSaved={refresh} />}
       />
 
-      {/* 2. The 4 KPI Cards Above the Table */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Total Fleet</span>
-            <Truck size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.total}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Available in Yard</span>
-            <CheckCircle2 size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.available}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">On Trip (In Transit)</span>
-            <Clock size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.onTrip}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Maintenance</span>
-            <Wrench size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.maintenance}
-          </div>
-        </div>
-      </div>
+      {/* 2. Connected Grid Card (No Gap, no border accent) */}
+      <FleetStatGrid items={statItems} />
 
-      {/* 3. Main Table Section - Direct Edge-to-Edge Table (No double container wrap) */}
-      <Section title="Fleet Inventory & Direct Assignments">
-        {/* Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-xl">
-            <SearchInput
-              placeholder="Search plate, trailer, driver, haulier…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              containerClassName="flex-1 min-w-[200px]"
-              className="h-8 text-xs bg-background"
-            />
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-8 text-xs w-36 bg-background">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="available">Available</SelectItem>
-                <SelectItem value="on_trip">On Trip</SelectItem>
-                <SelectItem value="maintenance">Maintenance</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={haulierFilter} onValueChange={setHaulierFilter}>
-              <SelectTrigger className="h-8 text-xs w-36 bg-background">
-                <SelectValue placeholder="All fleets" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All fleets</SelectItem>
-                <SelectItem value="in_house">In-House Fleet</SelectItem>
-                <SelectItem value="subcontractor">3PL Subcontractor</SelectItem>
-              </SelectContent>
-            </Select>
-            {(search || statusFilter !== "all" || haulierFilter !== "all") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setStatusFilter("all");
-                  setHaulierFilter("all");
-                }}
-                className="h-8 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Reset
-              </Button>
-            )}
-          </div>
-        </div>
+      {/* 3. Search and Action controls OUTSIDE the table, NO background, NO border */}
+      <FleetFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search plate, trailer, driver, haulier…"
+        categories={categories}
+        columns={columnsOptions}
+        onToggleColumn={toggleColumn}
+        onReset={handleReset}
+        hasActiveFilters={hasActiveFilters}
+      />
 
-        {/* Resizable Table sits DIRECTLY in Section (no inner card wrap, edge-to-edge) */}
+      {/* 4. Table container */}
+      <div className="panel overflow-hidden">
         <ResizableTable
-          columns={columns}
+          columns={visibleColumns}
           data={vehicles}
           storageKey="fleet_vehicles"
           rowKey={(v) => v.id}
@@ -746,7 +819,7 @@ export function FleetVehiclesView() {
             </div>
           }
         />
-      </Section>
+      </div>
     </div>
   );
 }

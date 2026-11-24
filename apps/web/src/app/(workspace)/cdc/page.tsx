@@ -1,11 +1,10 @@
-import { NativeSelect } from "@/components/ui/native-select";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ArrowDownToLine, Search, Upload } from "lucide-react";
+import { ArrowDownToLine, Upload } from "lucide-react";
 import { ExcelFileIcon } from "@/components/ui/file-icon";
 import { RegisterMasterDialog } from "@/features/cdc/register-master-dialog";
+import { CdcToolbar } from "@/features/cdc/cdc-toolbar";
 import { Button } from "@/components/ui/button";
-import { SearchInput } from "@/components/ui/search-input";
 import { Empty, Section } from "@/components/ui/page-layout";
 import { ListPagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -67,11 +66,10 @@ export default async function CDCMasterPage({ searchParams }: {
   const categories = result?.categories ?? [];
   const categoryCounts = result?.category_counts ?? {};
 
-  return <div className="space-y-gutter">
-    <header className="flex flex-wrap items-start justify-between gap-3">
+  return <div className="space-y-3">
+    <header className="flex flex-wrap items-center justify-between gap-3 pb-1">
       <div className="min-w-0">
         <h1 className="text-headline-xl">CDC Master Lists</h1>
-        <p className="mt-0.5 text-body-sm text-muted-foreground">{version ? `${version.company} · ${version.approval_ref} · ${version.year}` : "Browse registered workbooks and recorded limits."}</p>
       </div>
       <div className="flex flex-wrap gap-2">
         {admin && companies.length > 0 && <RegisterMasterDialog companyId={company || undefined} companies={companies} openVersion trigger={<><Upload aria-hidden /> Register workbook</>} />}
@@ -79,34 +77,32 @@ export default async function CDCMasterPage({ searchParams }: {
       </div>
     </header>
     {version && result ? <>
-      <form action="/cdc" className="panel flex flex-wrap items-end gap-2 p-2.5">
-        {company && <input type="hidden" name="company_id" value={company} />}
-        {category && <input type="hidden" name="category" value={category} />}
-        <label className="grid min-w-0 gap-1 text-label-md">Workbook
-          <NativeSelect name="version" defaultValue={version.id} className="control w-full max-w-80">
-            {versions.map((entry) => <option key={entry.id} value={entry.id}>{entry.company} · {entry.year} · {entry.approval_ref} · {entry.original_filename}</option>)}
-          </NativeSelect>
-        </label>
-        <label className="grid min-w-0 gap-1 text-label-md">Find workbook rows
-          <SearchInput name="q" defaultValue={q} placeholder="Description or row number" maxLength={160} containerClassName="sm:w-48" />
-        </label>
-        <Button type="submit" size="sm" variant="outline"><Search aria-hidden /> Apply</Button>
-      </form>
+      {/* Search and Action controls OUTSIDE the table container, NO background, modern dropdown */}
+      <CdcToolbar
+        company={company}
+        category={category}
+        q={q}
+        versionId={version.id}
+        versions={versions}
+      />
       <div className="grid min-w-0 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(290px,32%)]">
         <div className="min-w-0 space-y-3">
-          <dl className="grid grid-cols-2 gap-2 sm:grid-cols-3" aria-label="Selected Master List">
+          <dl className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-border rounded-lg border bg-card shadow-xs gap-0 overflow-hidden" aria-label="Selected Master List">
             {[
               ["Approval reference", version.approval_ref],
               ["Balance date", version.balance_as_of ?? "Unknown"],
-              [category ? `${category} rows` : q ? "Matching rows" : "Workbook rows", result.total],
+              [category ? `${category} rows` : q ? "Matching rows" : "Workbook rows", String(result.total)],
             ].map(([title, value]) =>
-              <div className="panel border-l-2 border-l-primary p-2.5" key={title}><dt className="panel-label">{title}</dt><dd className="mt-1 break-words font-mono text-code-tabular">{value}</dd></div>)}
+              <div className="p-3.5 transition-colors hover:bg-muted/40" key={title}>
+                <dt className="text-xs font-medium text-muted-foreground">{title}</dt>
+                <dd className="mt-1 break-words font-mono text-code-tabular font-medium text-foreground">{value}</dd>
+              </div>)}
           </dl>
 
-          <Section title="Master List rows">
-            {/* Simple Flat Category Tabs */}
+          <div className="panel overflow-hidden">
+            {/* Simple Flat Category Tabs KEPT inside table container */}
             {categories.length > 0 && (
-              <nav className="flex border-b bg-background px-2" aria-label="CDC category tabs">
+              <nav className="flex border-b border-border bg-card/60 px-2 overflow-x-auto no-scrollbar" aria-label="CDC category tabs">
                 {[
                   { name: "All", label: "All Items", count: categoryCounts.All ?? result.total },
                   ...categories.map((cat) => ({
@@ -128,7 +124,7 @@ export default async function CDCMasterPage({ searchParams }: {
                       key={tab.name}
                       href={tabHref}
                       className={cn(
-                        "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5",
+                        "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5 whitespace-nowrap",
                         active
                           ? "border-primary text-primary font-bold"
                           : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
@@ -214,7 +210,7 @@ export default async function CDCMasterPage({ searchParams }: {
               <Empty>{offset ? "No workbook rows on this page." : "No workbook rows match."}</Empty>
             )}
             <ListPagination path={path} offset={offset} count={result.items.length} total={result.total} />
-          </Section>
+          </div>
         </div>
 
         <Section title="Workbook details" action={<ExcelFileIcon size="sm" />}>

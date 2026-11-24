@@ -20,12 +20,21 @@ import type {
   FindingDecision,
   MasterVersion,
   ReviewAnalysis,
+  ReviewCorrection,
   ReviewField,
   ReviewWorkflow,
   StaffReview,
 } from "@/lib/contracts";
 import { documentFieldLabel, invoiceReference, location, timestamp } from "@/lib/format";
-import { calculateAmount, decimalTotal, replaceVerificationField, splitPartyAndAddress } from "@/features/review/verification/verification-review";
+import {
+  calculateAmount,
+  decimalTotal,
+  findMatchingInvoiceRow,
+  removeSyncedPackingListField,
+  replaceVerificationField,
+  splitPartyAndAddress,
+  syncInvoiceEditToPackingList,
+} from "@/features/review/verification/verification-review";
 
 const totals = ["packages", "quantity", "net_weight", "gross_weight", "measurement", "amount"];
 const headerOrder = [
@@ -247,6 +256,8 @@ export function VerificationWorkspace({
 
   const documents = analysis.extractions.filter((entry) => entry.role === role);
   const document = documents.find((entry) => `${entry.document_id}:${entry.sheet ?? ""}` === chosenDocument) ?? documents[0];
+  const invoice = role === "invoice" ? document : analysis.extractions.find((entry) => entry.role === "invoice");
+  const packing = role === "packing_list" ? document : analysis.extractions.find((entry) => entry.role === "packing_list");
   const original = item.documents.find((entry) => entry.id === document?.document_id);
   const master = analysis.analyzed_master;
   const disabled =
@@ -365,6 +376,38 @@ export function VerificationWorkspace({
   function displayed(ref: ReviewField, fallback: ExtractedField) {
     const explicit = changed.get(reviewKey(ref));
     if (explicit?.value && explicit.value.trim()) return explicit;
+
+    const corr = corrections.get(reviewKey(ref));
+    if (corr?.value && corr.value.trim()) {
+      return {
+        status: "present" as const,
+        value: corr.value,
+        evidence: fallback.evidence,
+        unit: corr.unit ?? fallback.unit,
+        currency: corr.currency ?? fallback.currency,
+      };
+    }
+
+    // When viewing packing list line item, check if synced from commercial invoice
+    if (ref.role === "packing_list" && ref.row !== null && ["description", "english_description", "unit"].includes(ref.name)) {
+      const targetName = ref.name === "english_description" ? "description" : ref.name;
+      const matchingInvRow = findMatchingInvoiceRow(ref.row, packing, invoice, analysis.line_items, findings);
+      if (matchingInvRow !== null && invoice) {
+        const invRef: ReviewField = { document_id: invoice.document_id, role: "invoice", row: matchingInvRow, name: targetName };
+        const invCorr = corrections.get(reviewKey(invRef));
+        const invChange = changed.get(reviewKey(invRef));
+        const invVal = invChange?.value ?? invCorr?.value;
+        if (invVal && invVal.trim()) {
+          return {
+            status: "present" as const,
+            value: invVal,
+            evidence: fallback.evidence,
+            unit: targetName === "unit" ? invVal : (invCorr?.unit ?? fallback.unit),
+            currency: invCorr?.currency ?? fallback.currency,
+          };
+        }
+      }
+    }
 
     const val = explicit ?? fallback;
     if (ref.row === null) {
@@ -577,20 +620,34 @@ export function VerificationWorkspace({
         onUndo={() => handleUndo(ref)}
         onSave={async (edit: VerificationFieldSave) => {
           await save((draft) => {
+            const invoiceCorrection: ReviewCorrection = {
+              ...ref,
+              value: edit.value,
+              unit: edit.unit,
+              currency: edit.currency,
+              note: edit.note,
+              confirmed: edit.confirmed,
+              alternative_index: edit.alternative_index,
+              suggestion_source: edit.suggestion_source,
+            };
+
             let next = replaceVerificationField(
               draft,
-              {
-                ...ref,
-                value: edit.value,
-                unit: edit.unit,
-                currency: edit.currency,
-                note: edit.note,
-                confirmed: edit.confirmed,
-                alternative_index: edit.alternative_index,
-                suggestion_source: edit.suggestion_source,
-              },
+              invoiceCorrection,
               workflow
             );
+
+            // Sync description and unit to Packing List (PKL) when updated in Commercial Invoice
+            if (ref.role === "invoice" && ref.row !== null && ["description", "english_description", "unit"].includes(ref.name)) {
+              next = syncInvoiceEditToPackingList(
+                next,
+                invoiceCorrection,
+                workflow,
+                analysis.extractions,
+                analysis.line_items,
+                findings
+              );
+            }
 
             // Auto-calculate amount when quantity or unit_price changes on a line item
             if (ref.row !== null && (ref.name === "quantity" || ref.name === "unit_price") && document) {
@@ -634,15 +691,25 @@ export function VerificationWorkspace({
     await save((draft) => {
       const key = reviewKey(ref);
       const isCdcRow = ref.role === "invoice" && ref.row !== null;
-      const nextCorrections = draft.corrections.filter((c) => reviewKey(c) !== key);
+      let nextDraft = draft;
+      if (ref.role === "invoice" && ref.row !== null && ["description", "english_description", "unit"].includes(ref.name)) {
+        nextDraft = removeSyncedPackingListField(
+          nextDraft,
+          ref,
+          analysis.extractions,
+          analysis.line_items,
+          findings
+        );
+      }
+      const nextCorrections = nextDraft.corrections.filter((c) => reviewKey(c) !== key);
       const nextMappings = isCdcRow
-        ? draft.mappings.filter((m) => m.invoice_row !== ref.row)
-        : draft.mappings;
-      const nextDecisions = (draft.finding_decisions ?? []).filter((d) =>
+        ? nextDraft.mappings.filter((m) => m.invoice_row !== ref.row)
+        : nextDraft.mappings;
+      const nextDecisions = (nextDraft.finding_decisions ?? []).filter((d) =>
         isCdcRow ? d.key !== `cdc.row.${ref.row}.mapping` : d.key !== key
       );
       return {
-        ...draft,
+        ...nextDraft,
         corrections: nextCorrections,
         mappings: nextMappings,
         verify_cdc_mappings: nextMappings.length > 0,
@@ -720,9 +787,6 @@ export function VerificationWorkspace({
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, [dirtyFields.size, hasIncompleteDesc]);
 
-  const invoice = role === "invoice" ? document : analysis.extractions.find((entry) => entry.role === "invoice");
-  const packing = role === "packing_list" ? document : analysis.extractions.find((entry) => entry.role === "packing_list");
-
   const quotaChecks = findings.filter(
     (check) =>
       check.group === "cdc" &&
@@ -766,26 +830,32 @@ export function VerificationWorkspace({
   ) => {
     if (!document) return;
     await save((draft) => {
-      const descRef: ReviewField = {
+      const descCorrection: ReviewCorrection = {
         document_id: document.document_id,
         role: "invoice",
         row,
         name: "description",
-      };
-      // Invalidate edits and mappings based on the previous description before
-      // writing the mapping the reviewer just selected for the new description.
-      let next = replaceVerificationField(draft, {
-        ...descRef,
         value: candidate.description,
         unit: null,
         currency: null,
         note: `Matched CDC material ${candidate.master_row}`,
         confirmed: false,
-      }, workflow);
+      };
+      // Invalidate edits and mappings based on the previous description before
+      // writing the mapping the reviewer just selected for the new description.
+      let next = replaceVerificationField(draft, descCorrection, workflow);
+      next = syncInvoiceEditToPackingList(
+        next,
+        descCorrection,
+        workflow,
+        analysis.extractions,
+        analysis.line_items,
+        findings
+      );
 
       // Link unit from CDC candidate if present
       if (candidate.unit) {
-        next = replaceVerificationField(next, {
+        const unitCorrection: ReviewCorrection = {
           document_id: document.document_id,
           role: "invoice",
           row,
@@ -795,7 +865,16 @@ export function VerificationWorkspace({
           currency: null,
           note: "Matched CDC material unit",
           confirmed: false,
-        }, workflow);
+        };
+        next = replaceVerificationField(next, unitCorrection, workflow);
+        next = syncInvoiceEditToPackingList(
+          next,
+          unitCorrection,
+          workflow,
+          analysis.extractions,
+          analysis.line_items,
+          findings
+        );
       }
 
       // Link unit_price from CDC candidate if present
@@ -1034,6 +1113,8 @@ export function VerificationWorkspace({
                 companyName={item.company}
                 reference={invoice?.fields.invoice_no?.value}
                 state={item.state}
+                lineItems={analysis.line_items}
+                findings={findings}
               />
             </div>
           </div>

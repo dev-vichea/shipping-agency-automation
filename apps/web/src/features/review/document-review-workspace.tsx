@@ -5,7 +5,6 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, useTransition, type ReactNode } from "react";
 import { AlertCircle, Check, CheckCircle2, FilePlus, FileText, ScanSearch, Search, Sparkles, X } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { AutoSuggestionReview } from "@/features/review/auto-suggestion-review";
 import { AssignCompanyForm } from "@/features/companies/company-forms";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { DocumentCanvas, type DocumentSourceOption } from "@/features/review/document-canvas";
@@ -22,11 +21,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { FileTypeIcon } from "@/components/ui/file-icon";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "@/components/ui/breadcrumb";
-import { Dialog, DialogCloseButton, DialogContent, DialogTitle } from "@/components/ui/dialog";
+import { DialogCloseButton } from "@/components/ui/dialog";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { toast } from "@/lib/toast";
 import { write } from "@/lib/client-api";
-import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewField, ReviewWorkflow, StaffReview } from "@/lib/contracts";
+import { removeSyncedPackingListField, syncInvoiceEditToPackingList } from "@/features/review/verification/verification-review";
+import type { CaseActivity, CaseDetail, Company, ConsigneeSourceRef, Evidence, ExtractedField, Finding, MasterVersion, ReviewAnalysis, ReviewCorrection, ReviewField, ReviewWorkflow, StaffReview } from "@/lib/contracts";
 import { documentFieldLabel, intakeField, invoiceReference, label, location, sourceValue, timestamp } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -85,8 +85,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const [activeFieldInfo, setActiveFieldInfo] = useState<InspectedField>();
   const [auditView, setAuditView] = useState<typeof auditViews[number]>("All");
   const [auditOpen, setAuditOpen] = useState(false);
-  const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
-  const [cdcAutoRuleEnabled, setCdcAutoRuleEnabled] = useState(true);
   const [docSearchQuery, setDocSearchQuery] = useState("");
 
   const handleWorkspaceTabChange = useCallback((nextTab: "documents" | "verification") => {
@@ -298,9 +296,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const auditCounts = { All: analysis.findings.length, Blockers: tally.MISMATCH, Warnings: tally.WARNING + tally.NEEDS_REVIEW, Passed: tally.PASS };
   const stale = analysis.analysis_revision !== null && analysis.analysis_revision !== analysis.revision;
   const editable = !stale && analysis.state === "available" && ["needs_review", "ready_for_approval", "awaiting_updated_document"].includes(item.state);
-  const knownIssueKeys = saved?.reviewed_issue_keys && new Set(saved.reviewed_issue_keys);
-  const pendingIssues = stale ? [] : (workflow.issues ?? []).map((issue, index) => ({ issue, index })).filter(({ issue }) =>
-    !saved?.open_issues || issue.key in saved.open_issues || (knownIssueKeys && !knownIssueKeys.has(issue.key)));
   const candidates = Array.from(new Map(
     [...(saved?.candidates ?? []), ...(analysis.candidates ?? [])]
       .map((entry) => [`${entry.invoice_document_id}:${entry.invoice_row}:${entry.master_row}`, entry]),
@@ -466,8 +461,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
     return review;
   }
 
-  const groupedIssues = pendingIssues;
-
   async function handleVerifyAll(): Promise<StaffReview> {
     return saveReview(reviewDraft(saved));
   }
@@ -535,11 +528,11 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       : ["quantity", "packages", "gross_weight", "net_weight", "measurement"].includes(currentRef.name) ? "unit" : undefined;
 
     async function onSave(edit: FieldEdit) {
-      const next = clearField(reviewDraft(saved), [currentRef]);
+      let next = clearField(reviewDraft(saved), [currentRef]);
       if (edit.choice?.issueKey) {
         next.issue_actions.push({ key: edit.choice.issueKey, action: "accept_ai" });
       } else {
-        next.corrections.push({
+        const invoiceCorrection: ReviewCorrection = {
           ...currentRef, value: edit.value, unit: edit.unit, currency: edit.currency,
           note: edit.choice?.consigneeSource ? "Selected a printed consignee from this shipment." :
             edit.choice?.alternativeIndex !== undefined ? "Selected a value from the original document evidence." :
@@ -547,7 +540,19 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
               ? "Confirmed against original document evidence." : "Edited in the document review card.",
           alternative_index: edit.choice?.alternativeIndex,
           consignee_source: edit.choice?.consigneeSource,
-        });
+        };
+        next.corrections.push(invoiceCorrection);
+
+        if (currentRef.role === "invoice" && currentRef.row !== null && ["description", "english_description", "unit"].includes(currentRef.name)) {
+          next = syncInvoiceEditToPackingList(
+            next,
+            invoiceCorrection,
+            workflow,
+            analysis.extractions,
+            analysis.line_items,
+            analysis.findings
+          );
+        }
       }
       await saveReview(next);
       toast.saved("Saved!");
@@ -563,7 +568,17 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
         if (choice && !choice.consigneeSource) setSelection({ ...choice.evidence });
       },
       onUndo: async () => {
-        await saveReview(clearField(reviewDraft(saved), englishItem ? [target, englishRef] : [target]));
+        let draft = reviewDraft(saved);
+        if (target.role === "invoice" && target.row !== null && ["description", "english_description", "unit"].includes(target.name)) {
+          draft = removeSyncedPackingListField(
+            draft,
+            target,
+            analysis.extractions,
+            analysis.line_items,
+            analysis.findings
+          );
+        }
+        await saveReview(clearField(draft, englishItem ? [target, englishRef] : [target]));
         toast.updated("Field reset");
       },
     };
@@ -572,22 +587,43 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
   const handleMarkCorrect = useCallback(async (target: ReviewField, value: string) => {
     const isAlreadyReviewed = isReviewed(target);
     if (isAlreadyReviewed) {
-      await saveReview(clearField(reviewDraft(saved), [target]));
+      let draft = reviewDraft(saved);
+      if (target.role === "invoice" && target.row !== null && ["description", "english_description", "unit"].includes(target.name)) {
+        draft = removeSyncedPackingListField(
+          draft,
+          target,
+          analysis.extractions,
+          analysis.line_items,
+          analysis.findings
+        );
+      }
+      await saveReview(clearField(draft, [target]));
       toast.updated(`Reset ${documentFieldLabel(target.name)}`);
     } else {
-      const next = clearField(reviewDraft(saved), [target]);
-      next.corrections.push({
+      let next = clearField(reviewDraft(saved), [target]);
+      const invoiceCorrection: ReviewCorrection = {
         ...target,
         value,
         unit: null,
         currency: null,
         note: "Confirmed as correct by staff.",
-      });
+      };
+      next.corrections.push(invoiceCorrection);
+      if (target.role === "invoice" && target.row !== null && ["description", "english_description", "unit"].includes(target.name)) {
+        next = syncInvoiceEditToPackingList(
+          next,
+          invoiceCorrection,
+          workflow,
+          analysis.extractions,
+          analysis.line_items,
+          analysis.findings
+        );
+      }
       await saveReview(next);
       toast.saved(`Marked ${documentFieldLabel(target.name)} as correct`);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isReviewed, saved]);
+  }, [isReviewed, saved, analysis, workflow]);
 
   const handleOpenVerification = useCallback((target?: ReviewField) => {
     if (target) {
@@ -731,21 +767,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
           {share}
           {editable && (
             <>
-              {(groupedIssues.length > 0 || analysis.extractions.some((doc) => doc.items.length > 0)) && (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={busy}
-                  onClick={() => {
-                    setReviewDialogOpen(true);
-                  }}
-                  className="border-amber-600/30 text-amber-700 hover:bg-amber-50 dark:border-amber-500/30 dark:text-amber-400 dark:hover:bg-amber-950/40 text-xs font-medium"
-                  title="Review warnings and suggestions"
-                >
-                  Review ({groupedIssues.length})
-                </Button>
-              )}
               {workspaceTab === "documents" ? (
                 <Button
                   type="button"
@@ -1140,44 +1161,6 @@ export function DocumentReviewWorkspace({ item, analysis, workflow, companies, a
       }
     />
     )}
-
-      <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
-        <DialogContent className="max-w-5xl sm:max-w-5xl lg:max-w-6xl max-h-[90vh] overflow-hidden flex flex-col p-0" aria-describedby={undefined}>
-          <div className="flex items-center justify-between gap-3 border-b px-5 py-3.5 bg-muted/20 shrink-0">
-            <div>
-              <DialogTitle className="text-sm font-semibold text-foreground flex items-center gap-2">
-                Review Warnings
-                {groupedIssues.length > 0 && (
-                  <Badge variant="warning" className="text-[10px]">{groupedIssues.length} pending</Badge>
-                )}
-              </DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Cross-check extracted document values and map CDC candidates across your shipment files.
-              </p>
-            </div>
-            <DialogCloseButton label="Close review dialog" />
-          </div>
-          <div className="space-y-4 p-5 overflow-y-auto">
-            <div className="rounded-lg border bg-card p-3 flex items-center justify-between gap-3 shadow-xs">
-              <label className="flex items-center gap-2.5 text-xs font-medium cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={cdcAutoRuleEnabled}
-                  onChange={(event) => setCdcAutoRuleEnabled(event.target.checked)}
-                  className="rounded border-input text-primary focus:ring-primary size-4"
-                />
-                <span className="font-semibold text-foreground">AI Auto-Suggestion with CDC Rules</span>
-              </label>
-              <Badge variant={cdcAutoRuleEnabled ? "default" : "secondary"} className="text-[10px]">
-                {cdcAutoRuleEnabled ? "Suggestions Active" : "Manual Only"}
-              </Badge>
-            </div>
-            <AutoSuggestionReview analysis={analysis} workflow={workflow} saved={saved} busy={busy}
-              enabled={cdcAutoRuleEnabled} onSave={saveReview}
-              onInspect={(cite) => { setReviewDialogOpen(false); inspect(cite); }} />
-          </div>
-        </DialogContent>
-      </Dialog>
 
     </div>
 

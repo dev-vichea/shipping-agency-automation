@@ -12,20 +12,25 @@ import {
   Box,
   Trash2,
   Lock,
+  ChevronDown,
+  Check,
+  Map,
+  LayoutList,
+  Columns2,
 } from "lucide-react";
-import { SearchInput } from "@/components/ui/search-input";
-import { NativeSelect } from "@/components/ui/native-select";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { PageHeading, Section } from "@/components/ui/page-layout";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from "@/components/ui/dropdown-menu";
+import { PageHeading } from "@/components/ui/page-layout";
+import { FleetStatGrid, type FleetStatItem } from "./fleet-stat-grid";
+import { FleetFilterBar, type FilterCategoryGroup } from "./fleet-filter-bar";
 import { ResizableTable, type ResizableColumn } from "@/components/ui/resizable-table";
 import { DispatchDialog } from "./dispatch-dialog";
+import { RouteTrackerMap } from "./route-tracker-map";
 import type { DispatchTrip, Vehicle, Driver } from "@/lib/contracts";
 import {
   fetchDispatches,
@@ -53,6 +58,8 @@ export function FleetDispatchesView() {
   const [directionFilter, setDirectionFilter] = useState<string>("all");
   const [milestoneFilter, setMilestoneFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
+  const [viewMode, setViewMode] = useState<"table" | "map" | "split">("table");
+  const [selectedTrip, setSelectedTrip] = useState<DispatchTrip | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -68,6 +75,10 @@ export function FleetDispatchesView() {
       setTrips(tList);
       setVehicles(vList);
       setDrivers(dList);
+      setSelectedTrip((prev) => {
+        if (!prev) return tList.length > 0 ? tList[0] : null;
+        return tList.find((t) => t.id === prev.id) || (tList.length > 0 ? tList[0] : null);
+      });
     } catch (err) {
       console.error("Failed to load dispatches from API:", err);
     } finally {
@@ -88,33 +99,132 @@ export function FleetDispatchesView() {
     return { total, inTransit, atFactory, completed };
   }, [trips]);
 
-  const handleMilestoneChange = async (
-    tripId: string,
-    nextMilestone: DispatchTrip["milestone"]
-  ) => {
-    try {
-      await updateDispatch(tripId, { milestone: nextMilestone });
-      await refresh();
-      toast.saved(`Trip status updated to ${nextMilestone.replace("_", " ")}`);
-    } catch (err: unknown) {
-      toast.error(err instanceof Error ? err.message : "Failed to update milestone");
-    }
+  const directionStats = useMemo(() => {
+    const inbound = trips.filter((t) => t.direction === "inbound").length;
+    const outbound = trips.filter((t) => t.direction === "outbound").length;
+    return { inbound, outbound };
+  }, [trips]);
+
+  const milestoneCounts = useMemo(() => {
+    const dispatched = trips.filter((t) => t.milestone === "dispatched").length;
+    const gateOut = trips.filter((t) => t.milestone === "gate_out").length;
+    return { dispatched, gateOut };
+  }, [trips]);
+
+  const statItems: FleetStatItem[] = useMemo(
+    () => [
+      {
+        id: "total",
+        label: "Active Trips",
+        value: stats.total,
+        icon: Navigation,
+        active: milestoneFilter === "all",
+        onClick: () => setMilestoneFilter("all"),
+      },
+      {
+        id: "in_transit",
+        label: "In Transit (Highway)",
+        value: stats.inTransit,
+        icon: Clock,
+        iconColor: "text-sky-500",
+        active: milestoneFilter === "in_transit",
+        onClick: () => setMilestoneFilter(milestoneFilter === "in_transit" ? "all" : "in_transit"),
+      },
+      {
+        id: "at_factory",
+        label: "At Factory",
+        value: stats.atFactory,
+        icon: Box,
+        iconColor: "text-amber-500",
+        active: milestoneFilter === "at_factory",
+        onClick: () => setMilestoneFilter(milestoneFilter === "at_factory" ? "all" : "at_factory"),
+      },
+      {
+        id: "empty_returned",
+        label: "Empty Returned (Done)",
+        value: stats.completed,
+        icon: CheckCircle2,
+        iconColor: "text-emerald-500",
+        active: milestoneFilter === "empty_returned",
+        onClick: () => setMilestoneFilter(milestoneFilter === "empty_returned" ? "all" : "empty_returned"),
+      },
+    ],
+    [stats, milestoneFilter]
+  );
+
+  const categories: FilterCategoryGroup[] = useMemo(
+    () => [
+      {
+        id: "direction",
+        label: "Direction",
+        value: directionFilter,
+        onToggle: (val) => setDirectionFilter(directionFilter === val ? "all" : val),
+        options: [
+          { value: "all", label: "All Directions", count: stats.total },
+          { value: "inbound", label: "Inbound", count: directionStats.inbound, icon: ArrowDownLeft },
+          { value: "outbound", label: "Outbound", count: directionStats.outbound, icon: ArrowUpRight },
+        ],
+      },
+      {
+        id: "milestone",
+        label: "Milestone",
+        value: milestoneFilter,
+        onToggle: (val) => setMilestoneFilter(milestoneFilter === val ? "all" : val),
+        options: [
+          { value: "all", label: "All Milestones", count: stats.total },
+          { value: "dispatched", label: "Dispatched", count: milestoneCounts.dispatched },
+          { value: "gate_out", label: "Port Gate-Out", count: milestoneCounts.gateOut },
+          { value: "in_transit", label: "In Transit", count: stats.inTransit, dotColor: "bg-sky-500" },
+          { value: "at_factory", label: "At Factory", count: stats.atFactory, dotColor: "bg-amber-500" },
+          { value: "empty_returned", label: "Empty Returned", count: stats.completed, dotColor: "bg-emerald-500" },
+        ],
+      },
+    ],
+    [directionFilter, milestoneFilter, stats, directionStats, milestoneCounts]
+  );
+
+  const handleReset = () => {
+    setSearch("");
+    setDirectionFilter("all");
+    setMilestoneFilter("all");
   };
 
-  const handleDelete = async (id: string, tripNo: string) => {
-    if (confirm(`Remove trip ${tripNo} from the records?`)) {
+  const hasActiveFilters = Boolean(search || directionFilter !== "all" || milestoneFilter !== "all");
+
+  const handleMilestoneChange = useCallback(
+    async (
+      tripId: string,
+      nextMilestone: DispatchTrip["milestone"]
+    ) => {
       try {
-        await removeDispatch(id);
+        await updateDispatch(tripId, { milestone: nextMilestone });
         await refresh();
-        toast.saved(`Removed trip ${tripNo}`);
+        toast.saved(`Trip status updated to ${nextMilestone.replace("_", " ")}`);
       } catch (err: unknown) {
-        toast.error(err instanceof Error ? err.message : "Failed to delete trip");
+        toast.error(err instanceof Error ? err.message : "Failed to update milestone");
       }
-    }
-  };
+    },
+    [refresh]
+  );
+
+  const handleDelete = useCallback(
+    async (id: string, tripNo: string) => {
+      if (confirm(`Remove trip ${tripNo} from the records?`)) {
+        try {
+          await removeDispatch(id);
+          await refresh();
+          toast.saved(`Removed trip ${tripNo}`);
+        } catch (err: unknown) {
+          toast.error(err instanceof Error ? err.message : "Failed to delete trip");
+        }
+      }
+    },
+    [refresh]
+  );
 
   // Strictly single-line per cell!
-  const columns: ResizableColumn<DispatchTrip>[] = [
+  const columns: ResizableColumn<DispatchTrip>[] = useMemo(
+    () => [
     {
       id: "index",
       header: "#",
@@ -273,30 +383,54 @@ export function FleetDispatchesView() {
         </span>
       ),
     },
-    // Milestone status (inline selector)
+    // Milestone status (inline modern selector)
     {
       id: "milestone",
       header: "Milestone",
       defaultWidth: 150,
       minWidth: 120,
       cell: (t) => {
+        const currentMilestone = MILESTONES.find((m) => m.id === t.milestone);
         return (
-          <NativeSelect
-            value={t.milestone}
-            onChange={(e) =>
-              void handleMilestoneChange(
-                t.id,
-                e.target.value as DispatchTrip["milestone"]
-              )
-            }
-            className="h-7 text-[11px] font-medium bg-background"
-          >
-            {MILESTONES.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </NativeSelect>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-[11px] font-medium border bg-background hover:bg-muted/60 transition-colors cursor-pointer"
+              >
+                <span>{currentMilestone?.label ?? t.milestone}</span>
+                <ChevronDown size={11} className="opacity-60 shrink-0" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="min-w-36 p-1">
+              {MILESTONES.map((m) => {
+                const isSelected = m.id === t.milestone;
+                return (
+                  <DropdownMenuItem
+                    key={m.id}
+                    onClick={() =>
+                      void handleMilestoneChange(
+                        t.id,
+                        m.id as DispatchTrip["milestone"]
+                      )
+                    }
+                    className={cn(
+                      "flex items-center justify-between text-xs px-2.5 py-1.5 cursor-pointer rounded-md transition-colors",
+                      isSelected
+                        ? "bg-accent/60 font-semibold text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <span>{m.label}</span>
+                    {isSelected && (
+                      <Check size={12} className="text-primary shrink-0 stroke-[2.5]" />
+                    )}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
         );
       },
     },
@@ -314,11 +448,24 @@ export function FleetDispatchesView() {
     {
       id: "actions",
       header: "Actions",
-      defaultWidth: 80,
-      minWidth: 70,
+      defaultWidth: 105,
+      minWidth: 95,
       align: "right",
       cell: (t) => (
         <div className="flex items-center justify-end gap-1">
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            title="Track on Live Map"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedTrip(t);
+              setViewMode("map");
+            }}
+            className="text-muted-foreground hover:text-sky-600"
+          >
+            <Map size={13} aria-hidden />
+          </Button>
           <DispatchDialog
             trip={t}
             vehicles={vehicles}
@@ -340,135 +487,225 @@ export function FleetDispatchesView() {
         </div>
       ),
     },
-  ];
+  ],
+  [vehicles, drivers, refresh, handleDelete, handleMilestoneChange]
+);
+
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+
+  const columnLabels: Record<string, string> = useMemo(
+    () => ({
+      index: "#",
+      trip_no: "Trip #",
+      shipment: "Shipment Ref",
+      company: "Customer",
+      direction: "Direction",
+      container: "Container No",
+      seal_no: "Seal No",
+      truck: "Truck Plate",
+      trailer: "Trailer",
+      driver: "Driver",
+      origin: "Origin",
+      destination: "Destination",
+      milestone: "Milestone",
+      eta: "ETA / Arrival",
+    }),
+    []
+  );
+
+  const columnsOptions = useMemo(
+    () =>
+      columns
+        .filter((c) => c.id !== "actions")
+        .map((c) => ({
+          id: c.id,
+          label: columnLabels[c.id] ?? c.id,
+          visible: !hiddenColumns.has(c.id),
+        })),
+    [columns, hiddenColumns, columnLabels]
+  );
+
+  const toggleColumn = (id: string) => {
+    setHiddenColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const visibleColumns = useMemo(
+    () => columns.filter((c) => !hiddenColumns.has(c.id)),
+    [columns, hiddenColumns]
+  );
 
   return (
-    <div className="space-y-4">
-      {/* 1. Header with New Dispatch at Top */}
+    <div className="space-y-3">
+      {/* 1. Header with View Toggle and New Dispatch */}
       <PageHeading
         title="Active Dispatch Trips"
-        description="Monitor live cargo movements, gate checkpoints, and empty container returns."
         action={
-          <DispatchDialog
-            vehicles={vehicles}
-            drivers={drivers}
-            onSaved={refresh}
-          />
+          <div className="flex items-center gap-2">
+            <div className="flex items-center rounded-lg border border-border bg-muted/40 p-0.5">
+              <Button
+                size="xs"
+                variant={viewMode === "table" ? "secondary" : "ghost"}
+                onClick={() => setViewMode("table")}
+                className="gap-1.5 h-7 px-2.5 text-xs font-medium"
+              >
+                <LayoutList className="h-3.5 w-3.5" /> Table
+              </Button>
+              <Button
+                size="xs"
+                variant={viewMode === "map" ? "secondary" : "ghost"}
+                onClick={() => {
+                  setViewMode("map");
+                  if (!selectedTrip && trips.length > 0) setSelectedTrip(trips[0]);
+                }}
+                className="gap-1.5 h-7 px-2.5 text-xs font-medium"
+              >
+                <Map className="h-3.5 w-3.5" /> Live Map
+              </Button>
+              <Button
+                size="xs"
+                variant={viewMode === "split" ? "secondary" : "ghost"}
+                onClick={() => {
+                  setViewMode("split");
+                  if (!selectedTrip && trips.length > 0) setSelectedTrip(trips[0]);
+                }}
+                className="gap-1.5 h-7 px-2.5 text-xs font-medium hidden md:flex"
+              >
+                <Columns2 className="h-3.5 w-3.5" /> Split
+              </Button>
+            </div>
+            <DispatchDialog
+              vehicles={vehicles}
+              drivers={drivers}
+              onSaved={refresh}
+            />
+          </div>
         }
       />
 
-      {/* 2. The 4 KPI Cards Above the Table */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Active Trips</span>
-            <Navigation size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.total}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">In Transit (Highway)</span>
-            <Clock size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.inTransit}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">At Factory</span>
-            <Box size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.atFactory}
-          </div>
-        </div>
-        <div className="rounded-lg border bg-card p-3.5 shadow-xs">
-          <div className="flex items-center justify-between text-muted-foreground">
-            <span className="text-xs font-medium">Empty Returned (Done)</span>
-            <CheckCircle2 size={16} />
-          </div>
-          <div className="mt-2 text-2xl font-bold font-mono tracking-tight text-foreground">
-            {stats.completed}
-          </div>
-        </div>
-      </div>
+      {/* 2. Connected Grid Card (No Gap, no border accent) */}
+      <FleetStatGrid items={statItems} />
 
-      {/* 3. Main Table Section - Direct Edge-to-Edge Table (No double container wrap) */}
-      <Section title="Live Dispatch Movements">
-        {/* Toolbar */}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
-          <div className="flex flex-wrap items-center gap-2 flex-1 sm:max-w-xl">
-            <SearchInput
-              placeholder="Search trip #, shipment, container, seal, driver…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              containerClassName="flex-1 min-w-[200px]"
-              className="h-8 text-xs bg-background"
-            />
-            <Select value={directionFilter} onValueChange={setDirectionFilter}>
-              <SelectTrigger className="h-8 text-xs w-32 bg-background">
-                <SelectValue placeholder="All directions" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All directions</SelectItem>
-                <SelectItem value="inbound">Inbound</SelectItem>
-                <SelectItem value="outbound">Outbound</SelectItem>
-              </SelectContent>
-            </Select>
-            <Select value={milestoneFilter} onValueChange={setMilestoneFilter}>
-              <SelectTrigger className="h-8 text-xs w-36 bg-background">
-                <SelectValue placeholder="All milestones" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All milestones</SelectItem>
-                <SelectItem value="dispatched">Dispatched</SelectItem>
-                <SelectItem value="gate_out">Port Gate-Out</SelectItem>
-                <SelectItem value="in_transit">In Transit</SelectItem>
-                <SelectItem value="at_factory">At Factory</SelectItem>
-                <SelectItem value="empty_returned">Empty Returned</SelectItem>
-              </SelectContent>
-            </Select>
-            {(search || directionFilter !== "all" || milestoneFilter !== "all") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setSearch("");
-                  setDirectionFilter("all");
-                  setMilestoneFilter("all");
-                }}
-                className="h-8 text-xs text-muted-foreground hover:text-foreground"
-              >
-                Reset
-              </Button>
+      {/* 3. Search and Action controls OUTSIDE the table, NO background, NO border */}
+      <FleetFilterBar
+        search={search}
+        onSearchChange={setSearch}
+        searchPlaceholder="Search trip #, shipment, container, seal, driver…"
+        categories={categories}
+        columns={columnsOptions}
+        onToggleColumn={toggleColumn}
+        onReset={handleReset}
+        hasActiveFilters={hasActiveFilters}
+      />
+
+      {/* 4. Display based on View Mode */}
+      {viewMode === "map" && (
+        <div className="grid grid-cols-1 lg:grid-cols-[340px_1fr] gap-3">
+          <div className="panel max-h-[580px] overflow-y-auto p-2 space-y-2">
+            <div className="flex items-center justify-between px-2 py-1 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+              <span>Dispatches ({trips.length})</span>
+              <span className="text-[11px] font-normal lowercase text-muted-foreground">click to focus</span>
+            </div>
+            {trips.length === 0 ? (
+              <div className="p-6 text-center text-xs text-muted-foreground">
+                No active dispatches found.
+              </div>
+            ) : (
+              trips.map((t) => (
+                <div
+                  key={t.id}
+                  onClick={() => setSelectedTrip(t)}
+                  className={cn(
+                    "cursor-pointer rounded-lg border p-3 text-xs transition-colors space-y-1.5",
+                    selectedTrip?.id === t.id
+                      ? "border-primary bg-primary/5 shadow-xs"
+                      : "border-border hover:bg-muted/50"
+                  )}
+                >
+                  <div className="flex items-center justify-between font-mono font-medium">
+                    <span className="text-foreground">{t.trip_number}</span>
+                    <span className="text-sky-600 dark:text-sky-400">{t.truck_plate}</span>
+                  </div>
+                  <div className="text-foreground font-medium truncate">{t.company_name}</div>
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground pt-1 border-t border-border/60">
+                    <span className="truncate max-w-[180px]">{t.destination}</span>
+                    <span className="font-semibold text-primary capitalize">
+                      {t.milestone.replace("_", " ")}
+                    </span>
+                  </div>
+                </div>
+              ))
             )}
           </div>
+          <div>
+            <RouteTrackerMap
+              trip={selectedTrip || (trips.length > 0 ? trips[0] : null)}
+              trips={trips}
+              selectedTripId={selectedTrip?.id}
+              onSelectTrip={setSelectedTrip}
+              onUpdateMilestone={handleMilestoneChange}
+              height="580px"
+            />
+          </div>
         </div>
+      )}
 
-        {/* Resizable Table sits DIRECTLY in Section (flush edge-to-edge) */}
-        <ResizableTable
-          columns={columns}
-          data={trips}
-          storageKey="fleet_dispatches"
-          rowKey={(t) => t.id}
-          className="min-w-[1400px]"
-          emptyState={
-            <div className="py-8 text-center">
-              <Navigation size={28} className="mx-auto text-muted-foreground/50 mb-2" />
-              <p className="text-sm font-medium text-foreground">
-                {loading ? "Loading dispatches from database…" : "No dispatch trips found"}
-              </p>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Click &quot;New Dispatch&quot; at the top to create a trip.
-              </p>
-            </div>
-          }
-        />
-      </Section>
+      {viewMode === "split" && (
+        <div className="space-y-3">
+          <RouteTrackerMap
+            trip={selectedTrip || (trips.length > 0 ? trips[0] : null)}
+            trips={trips}
+            selectedTripId={selectedTrip?.id}
+            onSelectTrip={setSelectedTrip}
+            onUpdateMilestone={handleMilestoneChange}
+            height="420px"
+          />
+          <div className="panel overflow-hidden">
+            <ResizableTable
+              columns={visibleColumns}
+              data={trips}
+              storageKey="fleet_dispatches"
+              rowKey={(t) => t.id}
+              className="min-w-[1400px]"
+              emptyState={
+                <div className="py-8 text-center">
+                  <Navigation size={28} className="mx-auto text-muted-foreground/50 mb-2" />
+                  <p className="text-sm font-medium text-foreground">
+                    {loading ? "Loading dispatches from database…" : "No dispatch trips found"}
+                  </p>
+                </div>
+              }
+            />
+          </div>
+        </div>
+      )}
+
+      {viewMode === "table" && (
+        <div className="panel overflow-hidden">
+          <ResizableTable
+            columns={visibleColumns}
+            data={trips}
+            storageKey="fleet_dispatches"
+            rowKey={(t) => t.id}
+            className="min-w-[1400px]"
+            emptyState={
+              <div className="py-8 text-center">
+                <Navigation size={28} className="mx-auto text-muted-foreground/50 mb-2" />
+                <p className="text-sm font-medium text-foreground">
+                  {loading ? "Loading dispatches from database…" : "No dispatch trips found"}
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Click &quot;New Dispatch&quot; at the top to create a trip.
+                </p>
+              </div>
+            }
+          />
+        </div>
+      )}
     </div>
   );
 }

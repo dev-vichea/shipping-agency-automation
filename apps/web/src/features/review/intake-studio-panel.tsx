@@ -88,20 +88,37 @@ export function intakeStatus(field?: ExtractedField, needsReview = false) {
   return field?.value ? "present" : "missing";
 }
 
+function formatNumberValue(val?: string | null): string {
+  if (!val) return "";
+  const trimmed = val.trim();
+  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
+    const num = Number(trimmed);
+    if (!isNaN(num)) {
+      if (trimmed.includes(".") && (trimmed.includes("00000") || trimmed.includes("99999") || trimmed.split(".")[1].length > 4)) {
+        return num.toFixed(2);
+      }
+      return trimmed;
+    }
+  }
+  return val;
+}
+
 function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string, searchQuery?: string) {
   if (!field?.value) return highlightMatch(fallbackValue, searchQuery);
   const unitOrCurrency = field.unit || field.currency;
-  if (!unitOrCurrency) return highlightMatch(fallbackValue, searchQuery);
 
-  const displayVal = field.english?.value && ["source", "staff_verified", "verified_company_alias", "proposed"].includes(field.english.status)
+  const rawDisplayVal = field.english?.value && ["source", "staff_verified", "verified_company_alias", "proposed"].includes(field.english.status)
     ? field.english.value
     : field.value;
 
+  const displayVal = formatNumberValue(rawDisplayVal);
+
+  if (!unitOrCurrency) return highlightMatch(displayVal, searchQuery);
+
   return (
-    <span className="inline-flex items-center justify-end gap-1.5 font-mono">
+    <span className="inline-flex items-baseline justify-end gap-1.5 font-mono">
       <span>{highlightMatch(displayVal, searchQuery)}</span>
-      <span className="text-muted-foreground/40 font-normal select-none" aria-hidden="true">|</span>
-      <span className="text-muted-foreground font-semibold uppercase">{highlightMatch(unitOrCurrency, searchQuery)}</span>
+      <span className="text-muted-foreground font-semibold text-[10px] uppercase select-none">{highlightMatch(unitOrCurrency, searchQuery)}</span>
     </span>
   );
 }
@@ -122,10 +139,57 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
   const { items } = document;
   const offset = Math.min(requestedOffset, lastPageOffset(items.length));
   const displayed = items.slice(offset, offset + pageSize);
-  const optionalColumns = document.role === "invoice" ? ["hs_code", "unit_price", "amount"] : ["hs_code", "gross_weight", "net_weight", "unit_price", "amount"];
-  const columns = ["description", "quantity", ...optionalColumns.filter((key) => items.some(({ fields }) => fields[key]?.value))];
 
-  function itemCell(field: ExtractedField | undefined, key: string, row: number) {
+  const hasUnit = items.some(({ fields }) => (fields.unit?.value && fields.unit.value.trim() !== "") || (fields.quantity?.unit && fields.quantity.unit.trim() !== ""));
+  const docCurrency = document.fields.currency?.value
+    || items.find((it) => it.fields.amount?.currency)?.fields.amount?.currency
+    || items.find((it) => it.fields.unit_price?.currency)?.fields.unit_price?.currency;
+
+  const primaryOrder = document.role === "invoice"
+    ? ["description", "hs_code", "quantity", "unit", "unit_price", "amount"]
+    : ["description", "hs_code", "packages", "quantity", "unit", "gross_weight", "net_weight", "measurement", "unit_price", "amount"];
+
+  const columns = primaryOrder.filter((key) => {
+    if (key === "description") return true;
+    if (key === "quantity") return items.some(({ fields }) => fields.quantity?.value != null && fields.quantity.value !== "");
+    if (key === "unit") return hasUnit;
+    return items.some(({ fields }) => fields[key]?.value != null && fields[key].value !== "");
+  });
+
+  function getColumnHeader(key: string): string {
+    switch (key) {
+      case "description":
+        return "Item";
+      case "quantity":
+        return "Quantity";
+      case "unit":
+        return "Unit";
+      case "unit_price":
+        return docCurrency ? `Unit Price (${docCurrency})` : "Unit Price";
+      case "amount":
+        return docCurrency ? `Amount (${docCurrency})` : "Amount";
+      case "hs_code":
+        return "HS Code";
+      case "packages":
+        return "Packages";
+      case "gross_weight":
+        return "Gross Wt";
+      case "net_weight":
+        return "Net Wt";
+      case "measurement":
+        return "CBM";
+      default:
+        return documentFieldLabel(key);
+    }
+  }
+
+  function getColumnAlign(key: string): "left" | "right" | "center" {
+    if (key === "description") return "left";
+    if (key === "unit" || key === "hs_code") return "center";
+    return "right";
+  }
+
+  function itemCell(field: ExtractedField | undefined, key: string, row: number, align: "left" | "right" | "center") {
     const id = `item:${row}:${key}`;
     const target: ReviewField = { document_id: document.document_id, role: document.role as ReviewField["role"], row, name: key };
     const reviewed = isReviewed(target);
@@ -140,49 +204,153 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
       (!matches[1] || matches[0].score - matches[1].score >= 8) ? matches[0] : undefined;
     const text = intakeField(visibleField);
     const evidence = editable ? text.evidence : name?.evidence[0] ?? suggestion?.evidence ?? text.evidence;
-    const value = name?.description ?? suggestion?.description ?? text.value;
+    const rawVal = name?.description ?? suggestion?.description ?? (visibleField?.value || text.value);
+    const value = formatNumberValue(rawVal);
     const selected = active(id, evidence);
     const status = name || reviewed ? "present" : intakeStatus(visibleField, !!suggestion);
     const label = name ? "Verified CDC description" : suggestion ? "Suggested CDC description"
-      : text.label ?? documentFieldLabel(key);
+      : text.label ?? (key === "unit" ? "Unit" : documentFieldLabel(key));
     const detail = `${label} · ${reviewed ? "Reviewed" : statuses[status].label}`;
-    const formattedContent = key === "description" ? highlightMatch(value, searchQuery) : renderFieldValue(visibleField, value, searchQuery);
-    const content = <>
-      {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
-      <span>{formattedContent}</span>
-      <span hidden id={`${descriptionId}-${id}`}>{detail}</span>
-    </>;
-    return evidence || (editable && field) ? <button type="button"
-      data-connector-source={selected ? "true" : undefined}
-      aria-pressed={selected} aria-describedby={`${descriptionId}-${id}`} title={evidence ? `${detail} · ${location(evidence)}` : detail}
-      onClick={() => {
-        inspect(evidence, { name: documentFieldLabel(key), value, id, target, uncertain: status === "review" });
-      }}
-      className={cn("data-link flex items-start gap-2 rounded-sm text-left tabular-nums", selected && "bg-primary/10")}>{content}</button>
-      : <span className="inline-flex items-start gap-2">{content}</span>;
+
+    let formattedContent: React.ReactNode;
+    if (key === "description") {
+      formattedContent = <span>{highlightMatch(value, searchQuery)}</span>;
+    } else if (key === "unit") {
+      formattedContent = (
+        <span className="font-mono text-[11px] font-semibold text-muted-foreground uppercase">
+          {highlightMatch(value, searchQuery)}
+        </span>
+      );
+    } else {
+      formattedContent = (
+        <span className="font-mono text-[11px]">
+          {highlightMatch(value, searchQuery)}
+        </span>
+      );
+    }
+
+    const content = (
+      <>
+        {(key === "description" || reviewed) && <IntakeStatusDot status={status} />}
+        {formattedContent}
+        <span hidden id={`${descriptionId}-${id}`}>{detail}</span>
+      </>
+    );
+
+    return evidence || (editable && field) ? (
+      <button
+        type="button"
+        data-connector-source={selected ? "true" : undefined}
+        aria-pressed={selected}
+        aria-describedby={`${descriptionId}-${id}`}
+        title={evidence ? `${detail} · ${location(evidence)}` : detail}
+        onClick={() => {
+          inspect(evidence, { name: key === "unit" ? "Unit" : documentFieldLabel(key), value, id, target, uncertain: status === "review" });
+        }}
+        className={cn(
+          "data-link inline-flex items-center gap-1.5 rounded-sm tabular-nums text-xs",
+          align === "right" && "justify-end w-full text-right",
+          align === "center" && "justify-center w-full text-center",
+          align === "left" && "justify-start text-left",
+          selected && "bg-primary/10"
+        )}
+      >
+        {content}
+      </button>
+    ) : (
+      <span
+        className={cn(
+          "inline-flex items-center gap-1.5 text-xs",
+          align === "right" && "justify-end w-full text-right",
+          align === "center" && "justify-center w-full text-center",
+          align === "left" && "justify-start text-left"
+        )}
+      >
+        {content}
+      </span>
+    );
   }
 
-  return <section aria-label="Goods items" className="space-y-1">
-    <div className="flex items-center justify-between gap-2 px-0.5 pt-1.5 pb-0.5">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        <Box size={12} className="text-primary" aria-hidden /> Goods items
-      </h3>
-      <span className="tabular-nums text-xs text-muted-foreground">{items.length} {items.length === 1 ? "item" : "items"}</span>
-    </div>
-    <Table className="border-y text-xs">
-      <TableHeader><TableRow>
-        {columns.map((key) => <TableHead key={key}>{key === "description" ? "Item" : documentFieldLabel(key)}</TableHead>)}
-      </TableRow></TableHeader>
-      <TableBody>{displayed.map(({ row, fields }) => <TableRow key={row}>
-        {columns.map((key) => <TableCell key={key} className={cn("align-top", key === "description" && "min-w-40 max-w-72 whitespace-normal break-words")}>
-          {itemCell(key === "description" && !fields.description?.english && fields.english_description?.status === "present" ? fields.english_description : fields[key], key, row)}
-        </TableCell>)}
-      </TableRow>)}</TableBody>
-    </Table>
-    <Pagination label="Goods items" offset={offset} count={displayed.length} total={items.length}
-      previous={offset > 0 ? () => setOffset(offset - pageSize) : undefined}
-      next={offset + pageSize < items.length ? () => setOffset(offset + pageSize) : undefined} />
-  </section>;
+  return (
+    <section aria-label="Goods items" className="space-y-1">
+      <div className="flex items-center justify-between gap-2 px-0.5 pt-1.5 pb-0.5">
+        <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <Box size={12} className="text-primary" aria-hidden /> Goods items
+        </h3>
+        <span className="tabular-nums text-xs text-muted-foreground">{items.length} {items.length === 1 ? "item" : "items"}</span>
+      </div>
+      <div className="overflow-x-auto rounded-sm border-y">
+        <Table className="text-xs">
+          <TableHeader className="bg-muted/40">
+            <TableRow>
+              {columns.map((key) => {
+                const align = getColumnAlign(key);
+                return (
+                  <TableHead
+                    key={key}
+                    className={cn(
+                      "h-8 text-[11px] font-semibold text-muted-foreground select-none px-2.5",
+                      align === "right" && "text-right",
+                      align === "center" && "text-center",
+                      align === "left" && "text-left"
+                    )}
+                  >
+                    {getColumnHeader(key)}
+                  </TableHead>
+                );
+              })}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {displayed.map(({ row, fields }) => (
+              <TableRow key={row} className="hover:bg-muted/30">
+                {columns.map((key) => {
+                  const align = getColumnAlign(key);
+                  let cellField = fields[key];
+                  if (key === "description") {
+                    cellField = !fields.description?.english && fields.english_description?.status === "present"
+                      ? fields.english_description
+                      : fields.description;
+                  } else if (key === "unit" && (!cellField?.value || cellField.value.trim() === "") && fields.quantity?.unit) {
+                    cellField = {
+                      value: fields.quantity.unit,
+                      status: "present",
+                      evidence: fields.quantity.evidence ?? [],
+                      unit: null,
+                      currency: null,
+                    };
+                  }
+
+                  return (
+                    <TableCell
+                      key={key}
+                      className={cn(
+                        "py-2 px-2.5 align-middle",
+                        key === "description" ? "min-w-40 max-w-72 whitespace-normal break-words" : "whitespace-nowrap",
+                        align === "right" && "text-right",
+                        align === "center" && "text-center",
+                        align === "left" && "text-left"
+                      )}
+                    >
+                      {itemCell(cellField, key, row, align)}
+                    </TableCell>
+                  );
+                })}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <Pagination
+        label="Goods items"
+        offset={offset}
+        count={displayed.length}
+        total={items.length}
+        previous={offset > 0 ? () => setOffset(offset - pageSize) : undefined}
+        next={offset + pageSize < items.length ? () => setOffset(offset + pageSize) : undefined}
+      />
+    </section>
+  );
 }
 
 export function IntakeStudioPanel({

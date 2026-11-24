@@ -8,9 +8,9 @@ import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } fr
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { highlightMatch } from "../highlight-match";
-import type { Extraction, ExtractedField, ReviewAnalysis, ReviewField } from "@/lib/contracts";
+import type { Extraction, ExtractedField, Finding, ReviewAnalysis, ReviewField } from "@/lib/contracts";
 import { reviewKey, type ReviewDraft } from "@/features/review/staff-review";
-import { splitPartyAndAddress } from "@/features/review/verification/verification-review";
+import { findMatchingInvoiceRow, splitPartyAndAddress } from "@/features/review/verification/verification-review";
 
 export type PermitTemplate = "cdc_classic" | "freight_agency" | "commercial_billing";
 
@@ -208,6 +208,8 @@ type PermitDraftPreviewProps = {
   embedded?: boolean;
   searchQuery?: string;
   onMatchCountChange?: (count: number) => void;
+  lineItems?: ReviewAnalysis["line_items"];
+  findings?: Finding[];
 };
 
 type PermitInvoiceItem = {
@@ -238,6 +240,8 @@ export function PermitDraftPreview({
   embedded = false,
   searchQuery,
   onMatchCountChange,
+  lineItems,
+  findings,
 }: PermitDraftPreviewProps) {
   const sheetTab = controlledSheetTab;
   const [internalTemplate, setInternalTemplate] = useState<PermitTemplate>("cdc_classic");
@@ -446,9 +450,26 @@ export function PermitDraftPreview({
   const extractedPlItems = (packingExt?.items || []).map((item, idx) => {
     const row = item.row;
     const docId = packingExt?.document_id;
+    const matchingInvRow = findMatchingInvoiceRow(row, packingExt, invoiceExt, lineItems, findings);
+    const invoiceDesc = matchingInvRow != null
+      ? getFieldValue("invoice", "description", matchingInvRow, invoiceExt?.document_id)
+      : "";
+    const invoiceUnit = matchingInvRow != null
+      ? getFieldValue("invoice", "unit", matchingInvRow, invoiceExt?.document_id)
+      : "";
+
+    const hasInvoiceDescReview = matchingInvRow != null && invoiceExt?.document_id
+      ? reviewedFields.has(reviewKey({ role: "invoice", name: "description", row: matchingInvRow, document_id: invoiceExt.document_id }))
+      : false;
+    const hasInvoiceUnitReview = matchingInvRow != null && invoiceExt?.document_id
+      ? reviewedFields.has(reviewKey({ role: "invoice", name: "unit", row: matchingInvRow, document_id: invoiceExt.document_id }))
+      : false;
+
     const description =
       getFieldValue("packing_list", "description", row, docId) ||
+      (hasInvoiceDescReview ? invoiceDesc : "") ||
       item.fields.description?.value ||
+      invoiceDesc ||
       `Item ${idx + 1}`;
     const packages = parseNumeric(
       getFieldValue("packing_list", "packages", row, docId) ||
@@ -467,7 +488,9 @@ export function PermitDraftPreview({
     );
     const unit =
       getFieldValue("packing_list", "unit", row, docId) ||
+      (hasInvoiceUnitReview ? invoiceUnit : "") ||
       item.fields.unit?.value ||
+      invoiceUnit ||
       "";
     const qty = parseNumeric(
       getFieldValue("packing_list", "quantity", row, docId) ||

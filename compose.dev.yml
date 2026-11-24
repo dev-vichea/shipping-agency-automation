@@ -8,7 +8,7 @@ x-api: &api
     SHIPPING_ENVIRONMENT: development
     SHIPPING_DATABASE_URL: postgresql+psycopg://shipping:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (random hex)}@postgres:5432/shipping
     SHIPPING_REDIS_URL: redis://redis:6379/0
-    SHIPPING_WEB_ORIGIN: ${SHIPPING_WEB_ORIGIN:-http://127.0.0.1:3000}
+    SHIPPING_WEB_ORIGIN: ${SHIPPING_WEB_ORIGIN:-http://localhost:3000}
     SHIPPING_SESSION_SECURE: "false"
     SHIPPING_STORAGE_DIR: /var/lib/shipping/documents
     SHIPPING_GMAIL_CLIENT_ID: ${SHIPPING_GMAIL_CLIENT_ID:-}

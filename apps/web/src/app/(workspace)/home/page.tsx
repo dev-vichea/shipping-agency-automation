@@ -22,7 +22,6 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
     workspaceList(),
   ]);
   const activeWorkspace = workspace.workspaces.find((entry) => entry.id === workspace.active_id);
-  const activeCompany = companies.find((company) => company.id === companyId);
   const companyRows = companyId ? companies.filter((company) => company.id === companyId) : companies;
   const number = (value: number) => value.toLocaleString("en-GB");
   const metrics = [
@@ -35,23 +34,20 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
 
   return <div className="space-y-5">
     <LiveRefresh active={!!activeWorkspace} interval={overview.processing || overview.cases.queued ? 5000 : 15000} />
-    <header className="flex flex-wrap items-end justify-between gap-3 pb-1">
-      <div>
-        <p className="mb-1 text-xs font-medium text-muted-foreground">{activeCompany?.name ?? activeWorkspace?.name ?? "Shipping operations"}</p>
-        <h1 className="text-[28px] leading-9 font-semibold tracking-[-0.035em]">Operations overview</h1>
-      </div>
+    <header className="flex flex-wrap items-center justify-between gap-3 pb-1">
+      <h1 className="text-[28px] leading-9 font-semibold tracking-[-0.035em]">Operations overview</h1>
       {activeWorkspace
         ? <Button asChild><Link href={scopedPath("/inbox?new=1", companyId)}><Upload aria-hidden /> Upload documents</Link></Button>
         : <Button asChild><Link href="/settings"><Plus aria-hidden /> Create workspace</Link></Button>}
     </header>
-    <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+    <div className="grid grid-cols-2 divide-y divide-border rounded-lg border bg-card shadow-xs xl:grid-cols-4 xl:divide-y-0 xl:divide-x divide-border gap-0 overflow-hidden">
       {metrics.map(({ title, value, href, icon: Icon }) => <Link key={title} href={scopedPath(href, companyId)}
-        className="panel group flex min-h-26 items-start justify-between gap-2 px-4 py-3.5 transition-colors hover:border-[#a2d8e9] sm:px-5 sm:py-4">
+        className="group flex min-h-24 items-start justify-between gap-2 p-4 transition-colors hover:bg-muted/40 sm:p-5">
         <div>
           <span className="text-[13px] font-medium text-muted-foreground">{title}</span>
           <div className="mt-1.5 text-[28px] leading-none font-semibold tracking-tight">{number(value)}</div>
         </div>
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent text-primary group-hover:bg-[#d9f1f9]"><Icon size={17} strokeWidth={1.8} aria-hidden /></span>
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted/60 text-muted-foreground group-hover:text-primary"><Icon size={17} strokeWidth={1.8} aria-hidden /></span>
       </Link>)}
     </div>
     {failed > 0 && <Link href={scopedPath("/automation?state=failed", companyId)}

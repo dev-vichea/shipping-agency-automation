@@ -1,17 +1,15 @@
-import { NativeSelect } from "@/components/ui/native-select";
 import Link from "next/link";
 import { Plug, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { SearchInput } from "@/components/ui/search-input";
-import { Empty, PageHeading, Section } from "@/components/ui/page-layout";
+import { Empty, PageHeading } from "@/components/ui/page-layout";
 import { ListPagination } from "@/components/ui/pagination";
 import { IntakeForm } from "@/features/intakes/intake-form";
 import { IntakeTableView } from "@/features/intakes/intake-table-view";
+import { IntakeQueueToolbar } from "@/features/intakes/intake-queue-toolbar";
 import { LiveRefresh } from "@/lib/live-refresh";
 import { FormSheet } from "@/components/ui/form-sheet";
 import { api, workspaceList } from "@/lib/server-api";
 import type { CaseSummary, Company } from "@/lib/contracts";
-import { label } from "@/lib/format";
 import { pageSize, pageWindow, parseOffset } from "@/lib/pagination";
 import { companyParam, scopedPath } from "@/lib/scope";
 import { cn } from "@/lib/utils";
@@ -57,68 +55,72 @@ export async function IntakeQueue({ mode, params }: { mode: keyof typeof names; 
   const { items, hasNext } = pageWindow(results);
   const admin = workspace.workspaces.some(({ id, role }) => id === workspace.active_id && role === "admin");
 
-  return <div className="space-y-4">
-    <LiveRefresh active={!!workspace.active_id} interval={items.some((item) => ["queued", "processing"].includes(item.state)) ? 4000 : 15000} />
-    <PageHeading title={names[mode]} action={inbox && workspace.active_id && <div className="flex flex-wrap items-center gap-2">
-      {admin && <Button asChild variant="outline"><Link href="/integrations"><Plug aria-hidden /> Manage intake sources</Link></Button>}
-      <FormSheet title="Upload documents" trigger={<><Upload aria-hidden /> Upload documents</>} openInitially={params.new === "1"}>
-        <IntakeForm companies={companies} defaultCompany={companyId} allowUnassigned={admin} />
-      </FormSheet>
-    </div>} />
-    <Section title={inbox ? "Incoming documents" : mode === "approvals" ? "Approval queue" : isImports ? "Import records" : draftView ? "Prepared drafts" : "All cases"}>
-      {/* Simple Flat Status Tabs */}
-      <nav className="flex border-b bg-background px-2 overflow-x-auto no-scrollbar" aria-label="Queue status filter tabs">
-        {(isImports
-          ? choices.map(([id, name]) => ({ id, name }))
-          : [{ id: "", name: "All" }, ...choices.map(([id, name]) => ({ id, name }))]
-        ).map((tab) => {
-          const active = isImports ? filter === tab.id : (!filter && tab.id === "") || (filter === tab.id);
-          const tabParams = new URLSearchParams(search);
-          if (tab.id) tabParams.set("filter", tab.id);
-          else tabParams.delete("filter");
-          tabParams.set("offset", "0");
-          const tabHref = scopedPath(`${path}?${tabParams.toString()}`, companyId);
-          return (
-            <Link
-              key={tab.id}
-              href={tabHref}
-              className={cn(
-                "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5 whitespace-nowrap",
-                active
-                  ? "border-primary text-primary font-bold"
-                  : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
-              )}
-            >
-              <span>{tab.name}</span>
-            </Link>
-          );
-        })}
-      </nav>
+  return (
+    <div className="space-y-3">
+      <LiveRefresh active={!!workspace.active_id} interval={items.some((item) => ["queued", "processing"].includes(item.state)) ? 4000 : 15000} />
+      <PageHeading title={names[mode]} action={inbox && workspace.active_id && <div className="flex flex-wrap items-center gap-2">
+        {admin && <Button asChild variant="outline"><Link href="/integrations"><Plug aria-hidden /> Manage intake sources</Link></Button>}
+        <FormSheet title="Upload documents" trigger={<><Upload aria-hidden /> Upload documents</>} openInitially={params.new === "1"}>
+          <IntakeForm companies={companies} defaultCompany={companyId} allowUnassigned={admin} />
+        </FormSheet>
+      </div>} />
 
-      <form action={path} className="flex flex-wrap items-center gap-2 border-b p-3 bg-background" role="search">
-        {companyId && <input type="hidden" name="company_id" value={companyId} />}
-        {filter && <input type="hidden" name="filter" value={filter} />}
-        <SearchInput name="q" maxLength={160} aria-label="Search intakes" placeholder="Invoice, B/L, company, sender…" defaultValue={q} containerClassName="flex-1 sm:max-w-70" />
-        {inbox && <NativeSelect aria-label="Intake source" name="source" defaultValue={source ?? ""}>
-          <option value="">All sources</option>{sources.map((id) => <option key={id} value={id}>{label(id)}</option>)}
-        </NativeSelect>}
-        <NativeSelect aria-label="Sort order" name="sort" defaultValue={oldest ? "oldest" : ""}>
-          <option value="">Newest first</option><option value="oldest">Oldest first</option>
-        </NativeSelect>
-        <Button size="sm" type="submit" variant="outline">Apply</Button>
-      </form>
-      {items.length ? (
-        <IntakeTableView
-          items={items}
-          companyId={companyId}
-          inbox={inbox}
-          draftView={draftView}
-          mode={mode}
-        />
-      ) : (
-        <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>
-      )}
-      <ListPagination path={search.size ? `${path}?${search}` : path} offset={offset} count={items.length} hasNext={hasNext} />
-    </Section>
-  </div>;
+      {/* Search and Action controls OUTSIDE the table container, NO background, modern dropdowns */}
+      <IntakeQueueToolbar
+        path={path}
+        q={q}
+        companyId={companyId}
+        filter={filter}
+        source={source}
+        oldest={oldest}
+        inbox={inbox}
+        sources={sources}
+      />
+
+      {/* Table container: Tab Bar KEPT inside the table */}
+      <div className="panel overflow-hidden">
+        {/* Flat Status Tabs kept inside table panel */}
+        <nav className="flex border-b bg-card/60 px-2 overflow-x-auto no-scrollbar" aria-label="Queue status filter tabs">
+          {(isImports
+            ? choices.map(([id, name]) => ({ id, name }))
+            : [{ id: "", name: "All" }, ...choices.map(([id, name]) => ({ id, name }))]
+          ).map((tab) => {
+            const active = isImports ? filter === tab.id : (!filter && tab.id === "") || (filter === tab.id);
+            const tabParams = new URLSearchParams(search);
+            if (tab.id) tabParams.set("filter", tab.id);
+            else tabParams.delete("filter");
+            tabParams.set("offset", "0");
+            const tabHref = scopedPath(`${path}?${tabParams.toString()}`, companyId);
+            return (
+              <Link
+                key={tab.id}
+                href={tabHref}
+                className={cn(
+                  "cursor-pointer border-b-2 px-4 py-2 text-xs font-semibold transition-all focus-visible:outline-offset-[-2px] flex items-center gap-1.5 whitespace-nowrap",
+                  active
+                    ? "border-primary text-primary font-bold"
+                    : "border-transparent text-muted-foreground hover:border-border hover:text-foreground"
+                )}
+              >
+                <span>{tab.name}</span>
+              </Link>
+            );
+          })}
+        </nav>
+
+        {items.length ? (
+          <IntakeTableView
+            items={items}
+            companyId={companyId}
+            inbox={inbox}
+            draftView={draftView}
+            mode={mode}
+          />
+        ) : (
+          <Empty>{offset ? "No cases on this page." : q || filter || source ? "No cases match these filters." : draftView ? "No cases waiting for review or approval." : "No documents in this view yet."}</Empty>
+        )}
+        <ListPagination path={search.size ? `${path}?${search}` : path} offset={offset} count={items.length} hasNext={hasNext} />
+      </div>
+    </div>
+  );
 }
