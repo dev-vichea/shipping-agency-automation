@@ -79,6 +79,73 @@ export function invoiceReference(value?: string | null) {
   return trimmed && /\p{Nd}/u.test(trimmed) ? trimmed : null;
 }
 
+/**
+ * Format numeric field values according to domain conventions:
+ * - Packages (`packages`, `pkgs`, `package`): discrete integer count, never decimal (e.g. 531.0 -> 531).
+ * - Quantity & Weights (`quantity`, `qty`, `gross_weight`, `net_weight`, `measurement`, `cbm`, etc.):
+ *   Whole numbers have no decimals (e.g. 12724.0 -> 12724, 25117.0 -> 25117).
+ *   Fractional numbers keep up to 2 decimal places, cutting floating-point noise (e.g. 1679.8000012 -> 1679.8, .1000012414 -> .10).
+ * - Money / Prices / Amounts (`unit_price`, `price`, `amount`, `total`, `total_amount`, `subtotal`, `approved_value`, `remaining_value`):
+ *   Always 2 decimal places with .00 (e.g. 3.5 -> 3.50, 44534.0 -> 44534.00, 419.95 -> 419.95).
+ * - Floating point noise (e.g. .1000012414) is cut to at most 2 decimal places.
+ */
+export function formatFieldValue(val: string | number | null | undefined, fieldName?: string): string {
+  if (val === null || val === undefined) return "";
+  const str = typeof val === "number" ? String(val) : String(val).trim();
+  if (!str) return "";
+
+  const clean = str.replace(/,/g, "");
+  if (!/^-?(?:\d+(?:\.\d+)?|\.\d+)$/.test(clean)) {
+    return str;
+  }
+
+  const num = Number(clean);
+  if (isNaN(num)) return str;
+
+  const fn = fieldName ? fieldName.toLowerCase().trim() : "";
+
+  // 1. Packages: strictly integer (531.0 -> 531)
+  if (fn === "packages" || fn === "pkgs" || fn === "package" || fn === "total_packages") {
+    return String(Math.round(num));
+  }
+
+  // 2. Money / Currency: always 2 decimal places (3.5 -> 3.50, 44534.0 -> 44534.00)
+  if (
+    fn === "unit_price" ||
+    fn === "price" ||
+    fn === "amount" ||
+    fn === "total" ||
+    fn === "total_amount" ||
+    fn === "subtotal" ||
+    fn === "approved_value" ||
+    fn === "remaining_value" ||
+    fn.includes("price") ||
+    fn.includes("amount")
+  ) {
+    return num.toFixed(2);
+  }
+
+  // 3. Quantity, Weights, Measurements, and generic numeric values:
+  // If whole number, return integer without decimal (12724.0 -> 12724, 25117.0 -> 25117).
+  if (Math.abs(num - Math.round(num)) < 1e-6) {
+    return String(Math.round(num));
+  }
+
+  // If fractional: round to at most 2 decimal places, cutting floating point noise.
+  const rounded = Math.round(num * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 1e-6) {
+    return String(Math.round(rounded));
+  }
+  return String(rounded);
+}
+
+/**
+ * Format a number/decimal string. Alias for formatFieldValue with optional field name.
+ */
+export function formatDecimal(val: string | number | null | undefined, fieldName?: string): string {
+  return formatFieldValue(val, fieldName);
+}
+
 const labels: Record<string, string> = {
   PASS: "Pass",
   WARNING: "Warning",

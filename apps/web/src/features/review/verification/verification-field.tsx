@@ -15,7 +15,7 @@ import {
   COMMON_TRANSPORT_MODES,
 } from "@/features/review/verification/shipping-units";
 import type { Evidence, ExtractedField, ReviewCorrection, ReviewField } from "@/lib/contracts";
-import { documentFieldLabel } from "@/lib/format";
+import { documentFieldLabel, formatFieldValue } from "@/lib/format";
 import { dateFields, numericFields } from "@/features/review/verification/verification-review";
 import { cn } from "@/lib/utils";
 
@@ -66,8 +66,10 @@ export function VerificationField({
   onInspect: () => void;
   onDirtyChange: (key: string, dirty: boolean) => void;
 }) {
+  const numeric = numericFields.has(target.name);
   const safeField = field ?? rawField ?? { status: "missing" as const, value: "", confidence: 1, evidence: [] };
-  const [text, setText] = useState(safeField.value ?? "");
+  const initialText = numeric && safeField.value ? formatFieldValue(safeField.value, target.name) : (safeField.value ?? "");
+  const [text, setText] = useState(initialText);
   const [previous, setPrevious] = useState(safeField.value);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -91,7 +93,7 @@ export function VerificationField({
 
   if (safeField.value !== previous) {
     setPrevious(safeField.value);
-    setText(safeField.value ?? "");
+    setText(numeric && safeField.value ? formatFieldValue(safeField.value, target.name) : (safeField.value ?? ""));
   }
 
   const verified = !compact && !!correction;
@@ -105,7 +107,8 @@ export function VerificationField({
   const handleUndo = async (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    setText(rawField?.value ?? "");
+    const rawVal = rawField?.value ?? "";
+    setText(numeric && rawVal ? formatFieldValue(rawVal, target.name) : rawVal);
     setAlternative(undefined);
     setError("");
     if (onUndo) {
@@ -124,7 +127,6 @@ export function VerificationField({
   }, [dirty, fieldKey, onDirtyChange]);
 
   const label = `${target.role === "invoice" ? "Invoice" : "Packing list"}${target.row ? ` row ${target.row}` : ""} ${documentFieldLabel(target.name)}`;
-  const numeric = numericFields.has(target.name);
   const type = numeric
     ? "number"
     : dateFields.has(target.name) && (!text || /^\d{4}-\d{2}-\d{2}$/.test(text))
@@ -147,7 +149,8 @@ export function VerificationField({
     : "AI-filled";
 
   async function persist(overrideValue?: string) {
-    const val = overrideValue !== undefined ? overrideValue : text;
+    const rawVal = overrideValue !== undefined ? overrideValue : text;
+    const val = numeric ? formatFieldValue(rawVal, target.name) : rawVal;
     if (!val.trim() || disabled) return;
     if (inFlight.current) return;
     const fingerprint = JSON.stringify([val.trim(), dimension, alternative]);
@@ -156,6 +159,9 @@ export function VerificationField({
     lastSubmitted.current = fingerprint;
     setSaving(true);
     setError("");
+    if (numeric && val !== text) {
+      setText(val);
+    }
     try {
       const chosenSource = sourceChoices.find((entry) => entry.field?.value === val.trim())?.field;
       await onSave({
@@ -229,10 +235,11 @@ export function VerificationField({
   }, [sourceChoices, suggestion, target.name, target.row]);
 
   function selectSource(value: string) {
-    setText(value);
+    const formatted = numeric ? formatFieldValue(value, target.name) : value;
+    setText(formatted);
     setError("");
     setAlternative(undefined);
-    if (canAutosave) void persist(value);
+    if (canAutosave) void persist(formatted);
   }
 
   // Compact mode for table cells (simple, clean input, no icons, no overflow, flexible text)
@@ -367,11 +374,25 @@ export function VerificationField({
                 setAlternative(undefined);
               }}
               onBlur={() => {
+                if (text.trim()) {
+                  const formatted = formatFieldValue(text, target.name);
+                  if (formatted !== text) {
+                    setText(formatted);
+                    if (canAutosave) void persist(formatted);
+                    return;
+                  }
+                }
                 if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
+                  if (text.trim()) {
+                    const formatted = formatFieldValue(text, target.name);
+                    setText(formatted);
+                    void persist(formatted);
+                    return;
+                  }
                   void persist();
                 }
               }}
@@ -423,11 +444,25 @@ export function VerificationField({
               }}
               onFocus={onInspect}
               onBlur={() => {
+                if (numeric && text.trim()) {
+                  const formatted = formatFieldValue(text, target.name);
+                  if (formatted !== text) {
+                    setText(formatted);
+                    if (canAutosave) void persist(formatted);
+                    return;
+                  }
+                }
                 if (canAutosave && dirty) void persist();
               }}
               onKeyDown={(event) => {
                 if (event.key === "Enter") {
                   event.preventDefault();
+                  if (numeric && text.trim()) {
+                    const formatted = formatFieldValue(text, target.name);
+                    setText(formatted);
+                    void persist(formatted);
+                    return;
+                  }
                   void persist();
                 }
               }}

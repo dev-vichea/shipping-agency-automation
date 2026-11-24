@@ -25,7 +25,7 @@ import type {
   ReviewWorkflow,
   StaffReview,
 } from "@/lib/contracts";
-import { documentFieldLabel, invoiceReference, location, timestamp } from "@/lib/format";
+import { documentFieldLabel, formatFieldValue, invoiceReference, location, timestamp } from "@/lib/format";
 import {
   calculateAmount,
   decimalTotal,
@@ -820,7 +820,9 @@ export function VerificationWorkspace({
           : null
       )
     );
-    return sum === null ? "Incomplete" : `${sum}${[...dimensions][0] ? ` ${[...dimensions][0]}` : ""}`;
+    if (sum === null) return "Incomplete";
+    const formattedSum = formatFieldValue(sum, key);
+    return `${formattedSum}${[...dimensions][0] ? ` ${[...dimensions][0]}` : ""}`;
   }
 
   const handleSelectCandidate = async (

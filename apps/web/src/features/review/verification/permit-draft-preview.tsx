@@ -125,7 +125,7 @@ const templateOptions = [
 function formatNumber(value: number): string {
   if (value === 0) return "—";
   return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: value % 1 === 0 ? 0 : 2,
+    minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(value);
 }

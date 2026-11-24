@@ -31,6 +31,8 @@ export interface RouteTrackerMapProps {
   className?: string;
   overseasOrigin?: string | null;
   showOverseasLeg?: boolean;
+  mode?: "fleet" | "single";
+  hideControls?: boolean;
 }
 
 export function RouteTrackerMap({
@@ -43,6 +45,8 @@ export function RouteTrackerMap({
   className,
   overseasOrigin,
   showOverseasLeg = false,
+  mode,
+  hideControls = false,
 }: RouteTrackerMapProps) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -50,12 +54,13 @@ export function RouteTrackerMap({
   const [localTripOverride, setLocalTripOverride] = useState<DispatchTrip | null>(null);
   const [updatingTripId, setUpdatingTripId] = useState<string | null>(null);
 
-  // Compute current active trip without triggering synchronous setState in effects
+  // Determine current active trip
   const currentTrip =
-    localTripOverride ||
-    trip ||
-    (selectedTripId && trips ? trips.find((t) => t.id === selectedTripId) : null) ||
-    (trips && trips.length > 0 ? trips[0] : null);
+    mode === "fleet"
+      ? null
+      : localTripOverride ||
+        trip ||
+        (selectedTripId && trips ? trips.find((t) => t.id === selectedTripId) : null);
 
   // Initialize Leaflet map instance once
   useEffect(() => {

@@ -7,7 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { sourceKey } from "@/features/review/review-findings";
 import type { FieldEditor } from "@/features/review/field-editor-types";
 import type { CaseDetail, CdcItemName, Evidence, ExtractedField, Extraction, ReviewAnalysis, ReviewField } from "@/lib/contracts";
-import { documentFieldLabel, intakeField, invoiceReference, location } from "@/lib/format";
+import { documentFieldLabel, formatFieldValue, intakeField, invoiceReference, location } from "@/lib/format";
 import { lastPageOffset, pageSize } from "@/lib/pagination";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -88,22 +88,11 @@ export function intakeStatus(field?: ExtractedField, needsReview = false) {
   return field?.value ? "present" : "missing";
 }
 
-function formatNumberValue(val?: string | null): string {
-  if (!val) return "";
-  const trimmed = val.trim();
-  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-    const num = Number(trimmed);
-    if (!isNaN(num)) {
-      if (trimmed.includes(".") && (trimmed.includes("00000") || trimmed.includes("99999") || trimmed.split(".")[1].length > 4)) {
-        return num.toFixed(2);
-      }
-      return trimmed;
-    }
-  }
-  return val;
+function formatNumberValue(val?: string | null, fieldName?: string): string {
+  return formatFieldValue(val, fieldName);
 }
 
-function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string, searchQuery?: string) {
+function renderFieldValue(field: ExtractedField | undefined, fallbackValue: string, searchQuery?: string, fieldName?: string) {
   if (!field?.value) return highlightMatch(fallbackValue, searchQuery);
   const unitOrCurrency = field.unit || field.currency;
 
@@ -111,7 +100,7 @@ function renderFieldValue(field: ExtractedField | undefined, fallbackValue: stri
     ? field.english.value
     : field.value;
 
-  const displayVal = formatNumberValue(rawDisplayVal);
+  const displayVal = formatNumberValue(rawDisplayVal, fieldName);
 
   if (!unitOrCurrency) return highlightMatch(displayVal, searchQuery);
 
@@ -205,7 +194,7 @@ function GoodsItems({ document, active, inspect, names, candidates, editable, vi
     const text = intakeField(visibleField);
     const evidence = editable ? text.evidence : name?.evidence[0] ?? suggestion?.evidence ?? text.evidence;
     const rawVal = name?.description ?? suggestion?.description ?? (visibleField?.value || text.value);
-    const value = formatNumberValue(rawVal);
+    const value = formatNumberValue(rawVal, key);
     const selected = active(id, evidence);
     const status = name || reviewed ? "present" : intakeStatus(visibleField, !!suggestion);
     const label = name ? "Verified CDC description" : suggestion ? "Suggested CDC description"
@@ -585,7 +574,7 @@ export function IntakeStudioPanel({
                         selected && "font-bold text-primary",
                         "group-hover/field:-translate-x-20"
                       )}>
-                        {renderFieldValue(visibleField, value, searchQuery)}
+                        {renderFieldValue(visibleField, value, searchQuery, key)}
                       </span>
 
                       <div

@@ -7,7 +7,7 @@ import { ListPagination } from "@/components/ui/pagination";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Empty, PageHeading } from "@/components/ui/page-layout";
 import type { ImportReport } from "@/lib/contracts";
-import { timestamp } from "@/lib/format";
+import { formatDecimal, timestamp } from "@/lib/format";
 import { pageSize, parseOffset } from "@/lib/pagination";
 import { companyParam, scopedPath } from "@/lib/scope";
 import { api } from "@/lib/server-api";
@@ -137,7 +137,7 @@ export default async function ReportsPage({ searchParams }: {
                   <TableCell>{row.company}</TableCell>
                   <TableCell>{row.supplier}</TableCell>
                   <TableCell className="text-muted-foreground">{timestamp(row.approved_at)}</TableCell>
-                  <TableCell className="text-right font-mono text-code-tabular">{row.amount} {row.currency}</TableCell>
+                  <TableCell className="text-right font-mono text-code-tabular">{formatDecimal(row.amount, "amount")} {row.currency}</TableCell>
                 </TableRow>
               ))}
             </TableBody>

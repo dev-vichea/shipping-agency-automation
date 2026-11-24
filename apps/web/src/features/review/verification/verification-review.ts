@@ -31,29 +31,29 @@ export function replaceVerificationField(draft: ReviewDraft, edit: ReviewCorrect
   };
 }
 
-/** Compute amount from quantity and unit price, formatted cleanly with up to 2 decimal places. */
+/** Compute amount from quantity and unit price, formatted cleanly with 2 decimal places (.00). */
 export function calculateAmount(qtyStr: string | null | undefined, priceStr: string | null | undefined): string | null {
   if (!qtyStr || !priceStr) return null;
   const qty = parseFloat(qtyStr.replace(/,/g, ""));
   const price = parseFloat(priceStr.replace(/,/g, ""));
   if (isNaN(qty) || isNaN(price)) return null;
   const product = Math.round(qty * price * 100) / 100;
-  const str = product.toFixed(2);
-  if (str.endsWith("0")) {
-    return str.slice(0, -1);
-  }
-  return str;
+  return product.toFixed(2);
 }
 
-/** Fixed decimal addition keeps display totals out of binary floating-point arithmetic. */
+/** Fixed decimal addition keeps display totals out of binary floating-point arithmetic with 2 decimal places (.00). */
 export function decimalTotal(values: (string | null | undefined)[]): string | null {
-  if (!values.length || values.some((value) => !value || !/^\d+(?:\.\d{1,6})?$/.test(value))) return null;
-  const scale = BigInt(1_000_000);
+  if (!values.length || values.some((value) => !value || !/^-?\d+(?:\.\d{1,6})?$/.test(value.replace(/,/g, "")))) return null;
+  const scale = BigInt(100);
   const sum = values.reduce((total, value) => {
-    const [whole, fraction = ""] = value!.split(".");
-    return total + BigInt(whole) * scale + BigInt(fraction.padEnd(6, "0"));
+    const clean = value!.replace(/,/g, "");
+    const num = Math.round(parseFloat(clean) * 100);
+    return total + BigInt(isNaN(num) ? 0 : num);
   }, BigInt(0));
-  return `${sum / scale}${sum % scale ? `.${String(sum % scale).padStart(6, "0").replace(/0+$/, "")}` : ""}`;
+  const absSum = sum < 0 ? -sum : sum;
+  const whole = absSum / scale;
+  const frac = String(absSum % scale).padStart(2, "0");
+  return `${sum < 0 ? "-" : ""}${whole}.${frac}`;
 }
 
 /** Split party company name from multiline address/contact blocks */

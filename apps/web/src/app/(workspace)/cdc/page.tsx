@@ -21,7 +21,7 @@ function formatNumber(val: string | null | undefined): string {
   if (!val) return "—";
   const num = parseFloat(val);
   if (isNaN(num)) return val;
-  return num.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  return num.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function formatMoney(val: string | null | undefined, curr = "USD"): string {
