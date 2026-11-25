@@ -13,6 +13,7 @@ import {
   UserCheck,
   Send,
   ChevronDown,
+  Compass,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/ui/page-layout";
@@ -556,9 +557,13 @@ export function FleetVehiclesView() {
 
         if (activeTrip) {
           return (
-            <span className="font-mono text-xs font-semibold text-primary whitespace-nowrap">
+            <Link
+              href="/fleet/map"
+              className="font-mono text-xs font-semibold text-primary hover:underline whitespace-nowrap"
+              title="Track on Fleet Radar Map"
+            >
               {activeTrip.trip_number}
-            </span>
+            </Link>
           );
         }
 
@@ -577,7 +582,7 @@ export function FleetVehiclesView() {
               container_no: "TGHU1234567",
               seal_no: "ML-KH84920",
               origin: "PAS (Sihanoukville Port)",
-              destination: "Xin Cai Fu Factory, Phnom Penh SEZ",
+              destination: "Xin Cai Fu Factory (Prey Sar, Dangkao, Phnom Penh)",
               milestone: "dispatched",
               eta: "Today, 17:00",
             }}
@@ -778,10 +783,19 @@ export function FleetVehiclesView() {
 
   return (
     <div className="space-y-3">
-      {/* 1. Header with Add Vehicle at Top (Subtitle removed) */}
+      {/* 1. Header with Live Radar Map and Add Vehicle at Top */}
       <PageHeading
         title="Vehicles & Equipment"
-        action={<VehicleDialog onSaved={refresh} />}
+        action={
+          <div className="flex items-center gap-2">
+            <Button asChild size="xs" variant="outline" className="gap-1.5 h-7 px-2.5 text-xs font-medium">
+              <Link href="/fleet/map">
+                <Compass className="h-3.5 w-3.5 text-primary" /> Live Radar Map
+              </Link>
+            </Button>
+            <VehicleDialog onSaved={refresh} />
+          </div>
+        }
       />
 
       {/* 2. Connected Grid Card (No Gap, no border accent) */}

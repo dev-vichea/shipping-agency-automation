@@ -82,11 +82,11 @@ export function invoiceReference(value?: string | null) {
 /**
  * Format numeric field values according to domain conventions:
  * - Packages (`packages`, `pkgs`, `package`): discrete integer count, never decimal (e.g. 531.0 -> 531).
- * - Quantity & Weights (`quantity`, `qty`, `gross_weight`, `net_weight`, `measurement`, `cbm`, etc.):
- *   Whole numbers have no decimals (e.g. 12724.0 -> 12724, 25117.0 -> 25117).
- *   Fractional numbers keep up to 2 decimal places, cutting floating-point noise (e.g. 1679.8000012 -> 1679.8, .1000012414 -> .10).
- * - Money / Prices / Amounts (`unit_price`, `price`, `amount`, `total`, `total_amount`, `subtotal`, `approved_value`, `remaining_value`):
- *   Always 2 decimal places with .00 (e.g. 3.5 -> 3.50, 44534.0 -> 44534.00, 419.95 -> 419.95).
+ * - Price, Amount, Gross Weight, Net Weight: always in decimal with 2 decimal places (.00)
+ *   (e.g. 3.5 -> 3.50, 44534.0 -> 44534.00, 25117.0 -> 25117.00, 24955.0 -> 24955.00).
+ * - Quantity (`quantity`, `qty`):
+ *   Whole numbers have no decimals (e.g. 12724.0 -> 12724, 12046.0 -> 12046).
+ *   Fractional numbers keep up to 2 decimal places, cutting floating-point noise (e.g. 1679.8000012 -> 1679.8).
  * - Floating point noise (e.g. .1000012414) is cut to at most 2 decimal places.
  */
 export function formatFieldValue(val: string | number | null | undefined, fieldName?: string): string {
@@ -104,12 +104,12 @@ export function formatFieldValue(val: string | number | null | undefined, fieldN
 
   const fn = fieldName ? fieldName.toLowerCase().trim() : "";
 
-  // 1. Packages: strictly integer (531.0 -> 531)
+  // 1. Packages: strictly integer, never decimal (531.0 -> 531)
   if (fn === "packages" || fn === "pkgs" || fn === "package" || fn === "total_packages") {
     return String(Math.round(num));
   }
 
-  // 2. Money / Currency: always 2 decimal places (3.5 -> 3.50, 44534.0 -> 44534.00)
+  // 2. Decimal fields: price, amount, gross weight, net weight (always 2 decimal places .00)
   if (
     fn === "unit_price" ||
     fn === "price" ||
@@ -119,14 +119,21 @@ export function formatFieldValue(val: string | number | null | undefined, fieldN
     fn === "subtotal" ||
     fn === "approved_value" ||
     fn === "remaining_value" ||
+    fn === "gross_weight" ||
+    fn === "gross_wt" ||
+    fn === "net_weight" ||
+    fn === "net_wt" ||
     fn.includes("price") ||
-    fn.includes("amount")
+    fn.includes("amount") ||
+    fn.includes("weight") ||
+    fn.includes("gross_w") ||
+    fn.includes("net_w")
   ) {
     return num.toFixed(2);
   }
 
-  // 3. Quantity, Weights, Measurements, and generic numeric values:
-  // If whole number, return integer without decimal (12724.0 -> 12724, 25117.0 -> 25117).
+  // 3. Quantity and other numeric values:
+  // If whole number, return integer without decimal (12724.0 -> 12724, 12046.0 -> 12046).
   if (Math.abs(num - Math.round(num)) < 1e-6) {
     return String(Math.round(num));
   }

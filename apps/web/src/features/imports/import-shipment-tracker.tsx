@@ -9,11 +9,12 @@ import {
   ExternalLink,
   Compass,
   Navigation,
+  Ship,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Section } from "@/components/ui/page-layout";
 import { RouteTrackerMap } from "@/features/fleet/route-tracker-map";
-import { fetchDispatches, updateDispatch, createDispatch } from "@/features/fleet/fleet-api";
+import { fetchFleetTracking, updateDispatch, createDispatch } from "@/features/fleet/fleet-api";
 import type { DispatchTrip } from "@/lib/contracts";
 import { resolveLocation, getMilestoneInfo } from "@/lib/geo-routing";
 import { toast } from "@/lib/toast";
@@ -40,8 +41,8 @@ export function ImportShipmentTracker({
 
   const loadTrip = useCallback(async () => {
     try {
-      const data = await fetchDispatches({ q: invoiceNo });
-      setTrips(data);
+      const data = await fetchFleetTracking({ shipment_ref: invoiceNo });
+      setTrips(data.length > 0 ? data : await fetchFleetTracking({ q: invoiceNo }));
     } catch (err) {
       console.error("Failed to load dispatch trip for import:", err);
     }
@@ -56,10 +57,23 @@ export function ImportShipmentTracker({
 
   // Resolve estimated ports & destinations
   const originPort = useMemo(() => resolveLocation(supplier || "Ningbo Port", "origin"), [supplier]);
-  const destFactory = useMemo(
-    () => resolveLocation(consignee || company || "Phnom Penh SEZ", "destination"),
-    [consignee, company]
-  );
+  const destFactory = useMemo(() => {
+    if (activeTrip?.destination_point) {
+      return {
+        id: activeTrip.destination_point.id,
+        name: activeTrip.destination_point.name,
+        label: activeTrip.destination_point.label,
+        coords: [activeTrip.destination_point.lat, activeTrip.destination_point.lng] as [number, number],
+        category: "factory" as const,
+        country: "Cambodia",
+        mapsUrl: activeTrip.destination_point.maps_url ?? undefined,
+      };
+    }
+    return resolveLocation(
+      activeTrip?.destination || consignee || company || "XIN CAI FU",
+      "destination"
+    );
+  }, [activeTrip, consignee, company]);
 
   // If no trip exists in database yet, create a synthetic proposed trip for visualization
   const displayTrip: DispatchTrip = useMemo(() => {
@@ -68,7 +82,7 @@ export function ImportShipmentTracker({
       id: "predicted-preview",
       trip_number: `PRED-${invoiceNo.slice(-6)}`,
       shipment_ref: invoiceNo,
-      company_name: company || consignee || "Customer Factory",
+      company_name: company || consignee || "XIN CAI FU (CAMBODIA) CO., LTD.",
       direction: "inbound",
       truck_plate: "Pending Assignment",
       driver_name: "Dispatcher Team",
@@ -79,7 +93,7 @@ export function ImportShipmentTracker({
       destination: destFactory.label,
       milestone: "dispatched",
       eta: eta || "Pending Arrival",
-      notes: "Predicted delivery corridor from port of discharge to consignee warehouse.",
+      notes: "Predicted delivery corridor from port of discharge to consignee factory.",
     };
   }, [activeTrip, invoiceNo, company, consignee, destFactory, eta]);
 
@@ -166,17 +180,31 @@ export function ImportShipmentTracker({
               <span className="text-[10px] text-muted-foreground uppercase font-medium block">
                 Discharge Port (Gate-Out)
               </span>
-              <p className="font-semibold text-foreground truncate">Sihanoukville Port (PAS)</p>
+              <p className="font-semibold text-foreground truncate">
+                {activeTrip?.origin || "Sihanoukville Port (PAS)"}
+              </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
             <Building2 className="h-4 w-4 text-rose-600 shrink-0" />
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <span className="text-[10px] text-muted-foreground uppercase font-medium block">
                 Final Delivery Consignee
               </span>
-              <p className="font-semibold text-foreground truncate">{destFactory.label}</p>
+              <div className="flex items-center gap-1.5 min-w-0">
+                <p className="font-semibold text-foreground truncate">{destFactory.label}</p>
+                {destFactory.mapsUrl && (
+                  <a
+                    href={destFactory.mapsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-[10px] text-primary hover:underline shrink-0"
+                  >
+                    Map
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -204,31 +232,52 @@ export function ImportShipmentTracker({
             </Button>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3 text-xs">
-            <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                <Truck className="h-5 w-5" />
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-muted/40 p-3 text-xs">
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                  <Truck className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono font-bold text-foreground">{activeTrip.trip_number}</span>
+                    <span className="font-mono text-sky-700 dark:text-sky-400 font-semibold">
+                      {activeTrip.truck_plate}
+                    </span>
+                    <span className="capitalize px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary font-semibold">
+                      {getMilestoneInfo(activeTrip.milestone).label}
+                    </span>
+                  </div>
+                  <p className="text-muted-foreground text-[11px] mt-0.5">
+                    Driver: <b>{activeTrip.driver_name}</b> ({activeTrip.driver_phone}) · Container:{" "}
+                    <b className="font-mono">{activeTrip.container_no}</b>
+                  </p>
+                </div>
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-mono font-bold text-foreground">{activeTrip.trip_number}</span>
-                  <span className="font-mono text-sky-700 dark:text-sky-400 font-semibold">
-                    {activeTrip.truck_plate}
-                  </span>
-                  <span className="capitalize px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary font-semibold">
-                    {getMilestoneInfo(activeTrip.milestone).label}
+              <div className="text-right">
+                <span className="text-[10px] text-muted-foreground uppercase font-medium">Estimated Arrival</span>
+                <p className="font-mono font-medium text-foreground">{activeTrip.eta || eta || "In Transit"}</p>
+              </div>
+            </div>
+
+            {/* Maritime Vessel Telemetry Banner */}
+            {activeTrip.vessel && (
+              <div className="flex items-center justify-between gap-2 rounded-lg border border-teal-200 bg-teal-50/70 dark:border-teal-900 dark:bg-teal-950/40 px-3 py-2 text-xs">
+                <div className="flex items-center gap-2 font-mono">
+                  <Ship className="h-4 w-4 text-teal-600 shrink-0" />
+                  <span className="font-bold text-teal-950 dark:text-teal-200">{activeTrip.vessel.name}</span>
+                  {activeTrip.vessel.voyage && (
+                    <span className="text-teal-700 dark:text-teal-400">· {activeTrip.vessel.voyage}</span>
+                  )}
+                  <span className="text-teal-600 dark:text-teal-500 font-sans text-[11px]">
+                    ({activeTrip.vessel.shipping_line || "Container Carrier"})
                   </span>
                 </div>
-                <p className="text-muted-foreground text-[11px] mt-0.5">
-                  Driver: <b>{activeTrip.driver_name}</b> ({activeTrip.driver_phone}) · Container:{" "}
-                  <b className="font-mono">{activeTrip.container_no}</b>
-                </p>
+                <div className="text-[11px] font-mono text-teal-800 dark:text-teal-300">
+                  AIS: {activeTrip.vessel.speed_knots} knots · {activeTrip.vessel.status}
+                </div>
               </div>
-            </div>
-            <div className="text-right">
-              <span className="text-[10px] text-muted-foreground uppercase font-medium">Estimated Arrival</span>
-              <p className="font-mono font-medium text-foreground">{activeTrip.eta || eta || "In Transit"}</p>
-            </div>
+            )}
           </div>
         )}
 

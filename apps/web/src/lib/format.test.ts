@@ -28,13 +28,14 @@ test("quantity formatting: integer when whole, up to 2 decimal places when fract
   assert.equal(formatFieldValue("10.1000012414", "quantity"), "10.1");
 });
 
-test("weights and measurement formatting: integer when whole, up to 2 decimal places when fractional", () => {
-  assert.equal(formatFieldValue("25117.0", "gross_weight"), "25117");
-  assert.equal(formatFieldValue("24955.0", "net_weight"), "24955");
-  assert.equal(formatFieldValue("12806.0", "gross_weight"), "12806");
-  assert.equal(formatFieldValue("189.0", "gross_weight"), "189");
-  assert.equal(formatFieldValue("45.50", "gross_weight"), "45.5");
+test("weights and measurement formatting: gross_weight and net_weight always in decimal (.00)", () => {
+  assert.equal(formatFieldValue("25117.0", "gross_weight"), "25117.00");
+  assert.equal(formatFieldValue("24955.0", "net_weight"), "24955.00");
+  assert.equal(formatFieldValue("12806.0", "gross_weight"), "12806.00");
+  assert.equal(formatFieldValue("189.0", "gross_weight"), "189.00");
+  assert.equal(formatFieldValue("45.5", "gross_weight"), "45.50");
   assert.equal(formatFieldValue("45.55", "net_weight"), "45.55");
+  assert.equal(formatFieldValue("25117.1000012414", "gross_weight"), "25117.10");
 });
 
 test("currency / money formatting: always 2 decimal places with .00", () => {

@@ -37,7 +37,7 @@ export function DispatchDialog({
   const [driverPhone, setDriverPhone] = useState(trip?.driver_phone ?? "012 889 912");
   const [origin, setOrigin] = useState(trip?.origin ?? "PAS (Sihanoukville Port)");
   const [destination, setDestination] = useState(
-    trip?.destination ?? "Xin Cai Fu Factory, Phnom Penh SEZ"
+    trip?.destination ?? "Xin Cai Fu Factory (Prey Sar, Dangkao, Phnom Penh)"
   );
   const [milestone, setMilestone] = useState<
     "dispatched" | "gate_out" | "in_transit" | "at_factory" | "empty_returned"
@@ -222,7 +222,7 @@ export function DispatchDialog({
             <Label htmlFor="tdst">Destination (Factory / Warehouse)</Label>
             <Input
               id="tdst"
-              placeholder="e.g. Xin Cai Fu Factory, Phnom Penh SEZ"
+              placeholder="e.g. Xin Cai Fu Factory (Prey Sar, Dangkao, Phnom Penh)"
               value={destination}
               onChange={(e) => setDestination(e.target.value)}
             />

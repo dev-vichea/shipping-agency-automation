@@ -482,6 +482,28 @@ export type Driver = {
   updated_at?: string;
 };
 
+export type LocationPoint = {
+  id: string;
+  name: string;
+  label: string;
+  lat: number;
+  lng: number;
+  category: string;
+  maps_url?: string | null;
+};
+
+export type VesselTelemetry = {
+  name: string;
+  voyage?: string | null;
+  shipping_line?: string | null;
+  origin_port: string;
+  discharge_port: string;
+  status: string;
+  speed_knots: number;
+  progress_pct: number;
+  eta?: string | null;
+};
+
 export type DispatchTrip = {
   id: string;
   trip_number: string;
@@ -501,4 +523,11 @@ export type DispatchTrip = {
   notes?: string | null;
   created_at?: string;
   updated_at?: string;
+  vessel?: VesselTelemetry | null;
+  haulier_type?: "in_house" | "subcontractor";
+  haulier_name?: string | null;
+  supplier?: string | null;
+  consignee?: string | null;
+  origin_point?: LocationPoint | null;
+  destination_point?: LocationPoint | null;
 };

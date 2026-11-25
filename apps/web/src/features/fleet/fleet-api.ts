@@ -64,6 +64,17 @@ export async function fetchDispatches(params?: {
   return apiRequest<DispatchTrip[]>(`/fleet/dispatches${query ? `?${query}` : ""}`);
 }
 
+export async function fetchFleetTracking(params?: {
+  q?: string;
+  shipment_ref?: string;
+}): Promise<DispatchTrip[]> {
+  const search = new URLSearchParams();
+  if (params?.q) search.set("q", params.q);
+  if (params?.shipment_ref) search.set("shipment_ref", params.shipment_ref);
+  const query = search.toString();
+  return apiRequest<DispatchTrip[]>(`/fleet/tracking${query ? `?${query}` : ""}`);
+}
+
 export async function createDispatch(payload: Partial<DispatchTrip>): Promise<DispatchTrip> {
   return apiRequest<DispatchTrip>("/fleet/dispatches", "POST", payload);
 }
