@@ -200,8 +200,8 @@ type PermitDraftPreviewProps = {
   companyName?: string | null;
   reference?: string | null;
   state?: string;
-  sheetTab?: "inv" | "pl";
-  onSheetTabChange?: (tab: "inv" | "pl") => void;
+  sheetTab?: "inv" | "pl" | "bl";
+  onSheetTabChange?: (tab: "inv" | "pl" | "bl") => void;
   template?: PermitTemplate;
   onTemplateChange?: (template: PermitTemplate) => void;
   switchingDisabled?: boolean;
@@ -210,6 +210,7 @@ type PermitDraftPreviewProps = {
   onMatchCountChange?: (count: number) => void;
   lineItems?: ReviewAnalysis["line_items"];
   findings?: Finding[];
+  showStatusBadge?: boolean;
 };
 
 type PermitInvoiceItem = {
@@ -242,6 +243,7 @@ export function PermitDraftPreview({
   onMatchCountChange,
   lineItems,
   findings,
+  showStatusBadge = true,
 }: PermitDraftPreviewProps) {
   const sheetTab = controlledSheetTab;
   const [internalTemplate, setInternalTemplate] = useState<PermitTemplate>("cdc_classic");
@@ -523,16 +525,81 @@ export function PermitDraftPreview({
   const totalPlNw = parseNumeric(plHeader("net_weight")) || packingItems.reduce((acc, curr) => acc + curr.nw, 0);
   const totalPlGw = parseNumeric(plHeader("gross_weight")) || packingItems.reduce((acc, curr) => acc + curr.gw, 0);
 
+  // B/L data & items
+  const sealNo = bill("seal") || header("seal") || "—";
+  const measurement = bill("measurement") || header("measurement") || "—";
+  const freightTerms = bill("freight_terms") || bill("payment_terms") || header("payment_terms") || "FREIGHT PREPAID";
+  const notifyParty = bill("notify_party") || header("notify_party") || consignee || "SAME AS CONSIGNEE";
+  const carrier = bill("carrier") || header("carrier") || "HARBORWAY LOGISTICS & SHIPPING AGENCY";
+
+  const extractedBlItems = (blExt?.items?.length ? blExt.items : (packingExt?.items?.length ? packingExt.items : invoiceExt?.items || [])).map((item, idx) => {
+    const row = item.row;
+    const docId = blExt?.document_id;
+    const description =
+      getFieldValue("draft_bl", "description", row, docId) ||
+      getFieldValue("final_bl", "description", row, docId) ||
+      item.fields.description?.value ||
+      item.fields.cargo_summary?.value ||
+      header("cargo_summary") ||
+      `Item ${idx + 1}`;
+    const pkgs =
+      getFieldValue("draft_bl", "packages", row, docId) ||
+      getFieldValue("final_bl", "packages", row, docId) ||
+      item.fields.packages?.value ||
+      "";
+    const gw =
+      getFieldValue("draft_bl", "gross_weight", row, docId) ||
+      getFieldValue("final_bl", "gross_weight", row, docId) ||
+      item.fields.gross_weight?.value ||
+      "";
+    const meas =
+      getFieldValue("draft_bl", "measurement", row, docId) ||
+      getFieldValue("final_bl", "measurement", row, docId) ||
+      item.fields.measurement?.value ||
+      "";
+    const itemContainer =
+      getFieldValue("draft_bl", "container", row, docId) ||
+      getFieldValue("final_bl", "container", row, docId) ||
+      item.fields.container?.value ||
+      container;
+    const itemSeal =
+      getFieldValue("draft_bl", "seal", row, docId) ||
+      getFieldValue("final_bl", "seal", row, docId) ||
+      item.fields.seal?.value ||
+      sealNo;
+
+    return {
+      container: itemContainer || "—",
+      seal: itemSeal || "—",
+      desc: description.toUpperCase(),
+      pkgs: pkgs || (totalPlPkgs ? String(totalPlPkgs) : "—"),
+      gw: gw || (totalPlGw ? formatNumber(totalPlGw) : "—"),
+      meas: meas || (measurement !== "—" ? measurement : "—"),
+    };
+  });
+
+  const blItems = extractedBlItems.length ? extractedBlItems : [{
+    container: container || "—",
+    seal: sealNo || "—",
+    desc: (header("cargo_summary") || "SAID TO CONTAIN GENERAL CARGO").toUpperCase(),
+    pkgs: totalPlPkgs ? `${totalPlPkgs} PKG` : (header("packages") ? `${header("packages")} PKG` : "—"),
+    gw: totalPlGw ? formatNumber(totalPlGw) : (header("gross_weight") || "—"),
+    meas: measurement !== "—" ? measurement : "—",
+  }];
+
   // Template fill rows to match authentic fixed document height (14 table rows)
   const requiredSlots = 14;
   const invFillCount = Math.max(0, requiredSlots - invoiceItems.length);
   const plFillCount = Math.max(0, requiredSlots - packingItems.length);
+  const blFillCount = Math.max(0, requiredSlots - blItems.length);
 
   // Fill counts for freight agency & commercial billing templates to ensure full-page presence
   const freightInvFillCount = Math.max(0, 11 - invoiceItems.length);
   const freightPlFillCount = Math.max(0, 11 - packingItems.length);
+  const freightBlFillCount = Math.max(0, 11 - blItems.length);
   const billingInvFillCount = Math.max(0, 9 - invoiceItems.length);
   const billingPlFillCount = Math.max(0, 9 - packingItems.length);
+  const billingBlFillCount = Math.max(0, 9 - blItems.length);
 
   const isApproved = state === "approved";
 
@@ -578,7 +645,7 @@ export function PermitDraftPreview({
       });
       checkText(totalInvQty);
       checkText(totalInvAmount);
-    } else {
+    } else if (sheetTab === "pl") {
       packingItems.forEach((i) => {
         checkText(i.pkgs);
         checkText(i.desc);
@@ -591,9 +658,23 @@ export function PermitDraftPreview({
       checkText(totalPlQty);
       checkText(totalPlNw);
       checkText(totalPlGw);
+    } else {
+      blItems.forEach((i) => {
+        checkText(i.container);
+        checkText(i.seal);
+        checkText(i.desc);
+        checkText(i.pkgs);
+        checkText(i.gw);
+        checkText(i.meas);
+      });
+      checkText(totalPlPkgs);
+      checkText(totalPlGw);
+      checkText(measurement);
+      checkText(freightTerms);
     }
 
     onMatchCountChange(count);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     searchQuery,
     sheetTab,
@@ -616,6 +697,9 @@ export function PermitDraftPreview({
     totalPlQty,
     totalPlNw,
     totalPlGw,
+    blExt,
+    freightTerms,
+    measurement,
     onMatchCountChange,
   ]);
 
@@ -644,8 +728,12 @@ export function PermitDraftPreview({
         <div className="flex items-center justify-between gap-2 px-3 py-2">
           <div className="flex min-w-0 items-center gap-2">
             <PdfFileIcon size="sm" />
-            <span className="truncate text-xs font-semibold">{sheetTab === "inv" ? "Invoice" : "Packing List"} · {invoiceNo}</span>
-            <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">{isApproved ? "Approved" : "Draft"}</span>
+            <span className="truncate text-xs font-semibold">
+              {sheetTab === "inv" ? "Invoice" : sheetTab === "pl" ? "Packing List" : "Bill of Lading"} · {sheetTab === "bl" ? (blNo !== "—" ? blNo : invoiceNo) : invoiceNo}
+            </span>
+            {showStatusBadge && (
+              <span className="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700 dark:bg-blue-950/60 dark:text-blue-300">{isApproved ? "Approved" : "Draft"}</span>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             {onSheetTabChange && (
@@ -671,6 +759,17 @@ export function PermitDraftPreview({
                   onClick={() => onSheetTabChange("pl")}
                 >
                   PL
+                </Button>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={sheetTab === "bl" ? "default" : "outline"}
+                  aria-label="BL (Bill of Lading)"
+                  aria-pressed={sheetTab === "bl"}
+                  disabled={switchingDisabled}
+                  onClick={() => onSheetTabChange("bl")}
+                >
+                  BL
                 </Button>
               </div>
             )}
@@ -809,7 +908,7 @@ export function PermitDraftPreview({
               {/* Row 6: Document Title */}
               <div className="text-center py-1">
                 <h2 className="text-[16pt] font-bold uppercase tracking-widest leading-none">
-                  {sheetTab === "inv" ? "INVOICE" : "PACKING LIST"}
+                  {sheetTab === "inv" ? "INVOICE" : sheetTab === "pl" ? "PACKING LIST" : "BILL OF LADING"}
                 </h2>
               </div>
 
@@ -819,20 +918,20 @@ export function PermitDraftPreview({
                   {/* Left Column (Cols A-C) */}
                   <div className="col-span-7 space-y-0.5">
                     <div className="flex">
-                      <span className="w-36 shrink-0">No.:</span>
-                      <span className="font-medium">{hl(invoiceNo)}</span>
+                      <span className="w-36 shrink-0">{sheetTab === "bl" ? "B/L No.:" : "No.:"}</span>
+                      <span className="font-medium">{hl(sheetTab === "bl" && blNo !== "—" ? blNo : invoiceNo)}</span>
                     </div>
                     <div className="flex">
-                      <span className="w-36 shrink-0">Shipping mode:</span>
+                      <span className="w-36 shrink-0">{sheetTab === "bl" ? "Vessel / Voyage:" : "Shipping mode:"}</span>
                       <span>{hl(vessel)}</span>
                     </div>
                     <div className="flex">
-                      <span className="w-36 shrink-0">From:</span>
-                      <span>{hl(route)}</span>
+                      <span className="w-36 shrink-0">{sheetTab === "bl" ? "Port of Loading:" : "From:"}</span>
+                      <span>{hl(sheetTab === "bl" && originCountry !== "—" ? originCountry : route)}</span>
                     </div>
                     <div className="flex">
-                      <span className="w-36 shrink-0">Country of origin:</span>
-                      <span>{hl(originCountry)}</span>
+                      <span className="w-36 shrink-0">{sheetTab === "bl" ? "Port of Discharge:" : "Country of origin:"}</span>
+                      <span>{hl(sheetTab === "bl" ? borderPoint : originCountry)}</span>
                     </div>
                     <div className="flex pt-0.5">
                       <span className="w-36 shrink-0">Consignee:</span>
@@ -843,18 +942,33 @@ export function PermitDraftPreview({
                             {hl(line)}
                           </div>
                         ))}
-                        <div className="pt-0.5">SHIPPING PERSON:</div>
-                        <div>VAT No : {hl(vatNo)}</div>
+                        {sheetTab === "bl" ? (
+                          <div className="pt-1">
+                            <span className="font-semibold text-[10pt]">NOTIFY PARTY: </span>
+                            <span className="text-[10pt]">{hl(notifyParty)}</span>
+                          </div>
+                        ) : (
+                          <>
+                            <div className="pt-0.5">SHIPPING PERSON:</div>
+                            <div>VAT No : {hl(vatNo)}</div>
+                          </>
+                        )}
                       </div>
                     </div>
                   </div>
 
-                  {/* Right Column (Cols D-G): Only DATE like original 12-RE2612048.xlsx */}
+                  {/* Right Column (Cols D-G): DATE / Terms */}
                   <div className="col-span-5 pl-2">
                     <div className="flex justify-end gap-3 text-[11pt]">
-                      <span>DATE:</span>
+                      <span>{sheetTab === "bl" ? "DATE OF ISSUE:" : "DATE:"}</span>
                       <span className="font-normal">{hl(invoiceDate)}</span>
                     </div>
+                    {sheetTab === "bl" && (
+                      <div className="flex justify-end gap-3 text-[10pt] pt-2">
+                        <span>FREIGHT:</span>
+                        <span className="font-bold">{hl(freightTerms)}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -1040,7 +1154,7 @@ export function PermitDraftPreview({
                       </tr>
                     </tbody>
                   </table>
-                ) : (
+                ) : sheetTab === "pl" ? (
                   /* PACKING LIST TABLE */
                   <table className="w-full border-collapse text-[11pt]">
                     <thead>
@@ -1208,27 +1322,152 @@ export function PermitDraftPreview({
                       </tr>
                     </tbody>
                   </table>
+                ) : (
+                  /* BILL OF LADING TABLE */
+                  <table className="w-full border-collapse text-[11pt]">
+                    <thead>
+                      <tr
+                        style={{
+                          borderTop: "3px double #000",
+                          borderBottom: "3px double #000",
+                        }}
+                      >
+                        <th style={{ width: "22%", borderRight: "1px solid #000" }} className="py-1 text-center font-bold">
+                          Container &amp; Seal
+                        </th>
+                        <th style={{ width: "16%", borderRight: "1px solid #000" }} className="py-1 text-center font-bold">
+                          Marks &amp; Nos.
+                        </th>
+                        <th style={{ width: "15%", borderRight: "1px solid #000" }} className="py-1 text-center font-bold">
+                          Packages
+                        </th>
+                        <th style={{ width: "31%", borderRight: "1px solid #000" }} className="py-1 text-center font-bold">
+                          Description of Goods
+                        </th>
+                        <th style={{ width: "16%" }} className="py-1 text-center font-bold">
+                          Gross Weight (KG)
+                        </th>
+                      </tr>
+                      {/* Breathing Row */}
+                      <tr className="leading-tight">
+                        <th style={{ borderRight: "1px solid #000" }} className="py-0.5"></th>
+                        <th style={{ borderRight: "1px solid #000" }} className="py-0.5"></th>
+                        <th style={{ borderRight: "1px solid #000" }} className="py-0.5"></th>
+                        <th style={{ borderRight: "1px solid #000" }} className="py-0.5"></th>
+                        <th className="py-0.5"></th>
+                      </tr>
+                      {/* Classification row */}
+                      <tr className="leading-tight">
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1 text-center text-[10pt] font-mono">
+                          {container}
+                        </td>
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1 text-center text-[10.5pt]">
+                          {approvalShort}
+                        </td>
+                        <td colSpan={3} className="py-1 px-3 text-left text-[11pt] font-bold">
+                          {categoryHeader}
+                        </td>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {blItems.map((item, idx) => (
+                        <tr key={idx} className="leading-relaxed hover:bg-neutral-50/50">
+                          <td style={{ borderRight: "1px solid #000" }} className="py-1 text-center text-[11pt] font-mono">
+                            {hl(item.container !== "—" ? `${item.container} / ${item.seal}` : "—")}
+                          </td>
+                          <td style={{ borderRight: "1px solid #000" }} className="py-1 text-center text-[11pt]">
+                            {approvalShort || "N/M"}
+                          </td>
+                          <td style={{ borderRight: "1px solid #000" }} className="py-1 text-center text-[12pt] font-bold tabular-nums">
+                            {hl(item.pkgs)}
+                          </td>
+                          <td style={{ borderRight: "1px solid #000" }} className="py-1 px-3 text-left text-[12pt]">
+                            {hl(item.desc)}
+                          </td>
+                          <td className="py-1 pr-2 text-right text-[12pt] tabular-nums font-bold">
+                            {hl(item.gw)}
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Template Fill Rows */}
+                      {Array.from({ length: blFillCount }).map((_, i) => (
+                        <tr key={`fill-bl-${i}`} className="h-6">
+                          <td style={{ borderRight: "1px solid #000" }} />
+                          <td style={{ borderRight: "1px solid #000" }} />
+                          <td style={{ borderRight: "1px solid #000" }} />
+                          <td style={{ borderRight: "1px solid #000" }} />
+                          <td />
+                        </tr>
+                      ))}
+                      {/* Totals Row */}
+                      <tr
+                        style={{
+                          borderTop: "1px solid #000",
+                          borderBottom: "3px double #000",
+                        }}
+                        className="font-bold leading-relaxed"
+                      >
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1.5 text-center text-[10pt] font-mono">
+                          CONTAINERS: {container ? "1" : "—"}
+                        </td>
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1.5 pr-2 text-right uppercase">
+                          TOTAL:
+                        </td>
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1.5 text-center text-[12pt] font-bold tabular-nums">
+                          {hl(formatNumber(totalPlPkgs))}
+                        </td>
+                        <td style={{ borderRight: "1px solid #000" }} className="py-1.5 px-3 text-left text-[11pt]">
+                          {measurement !== "—" ? `MEASUREMENT: ${measurement}` : "SAID TO CONTAIN"}
+                        </td>
+                        <td className="py-1.5 pr-2 text-right text-[12pt] tabular-nums font-bold">
+                          {hl(formatNumber(totalPlGw))}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 )}
 
                 {/* Rows 41-48: Footer and Signatory Block Inside Frame */}
                 <div className="pt-6 pb-6 px-6 flex items-end justify-between text-[11pt]">
-                  {/* Left Side: Container / Seal (Row 43 in Excel) */}
-                  <div className="space-y-1">
-                    <div className="font-bold text-[10pt]">Container /Seal :</div>
-                    <div className="text-[11pt] text-neutral-800">{container}</div>
-                  </div>
-
-                  {/* Right Side: Exporter Signatory Block (Rows 43-48 in Excel) */}
-                  <div className="text-right space-y-14">
-                    <div className="text-[13pt] font-normal tracking-wide uppercase">
-                      {supplier}
-                    </div>
-                    <div>
-                      <div className="border-t border-black w-60 ml-auto pt-1 text-[9pt] uppercase tracking-wider text-neutral-700 text-center font-sans">
-                        AUTHORIZED SIGNATURE &amp; STAMP
+                  {sheetTab === "bl" ? (
+                    <>
+                      <div className="space-y-1">
+                        <div className="font-bold text-[10pt]">Freight &amp; Charges:</div>
+                        <div className="text-[11pt] font-semibold text-neutral-800">{freightTerms}</div>
+                        <div className="text-[8.5pt] text-neutral-600">SHIPPED ON BOARD · APPARENT GOOD ORDER AND CONDITION</div>
                       </div>
-                    </div>
-                  </div>
+                      <div className="text-right space-y-12">
+                        <div className="text-[11pt] font-bold tracking-wide uppercase">
+                          FOR AND ON BEHALF OF THE CARRIER: {carrier}
+                        </div>
+                        <div>
+                          <div className="border-t border-black w-64 ml-auto pt-1 text-[9pt] uppercase tracking-wider text-neutral-700 text-center font-sans">
+                            AUTHORIZED SIGNATURE &amp; STAMP
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Left Side: Container / Seal (Row 43 in Excel) */}
+                      <div className="space-y-1">
+                        <div className="font-bold text-[10pt]">Container /Seal :</div>
+                        <div className="text-[11pt] text-neutral-800">{container}</div>
+                      </div>
+
+                      {/* Right Side: Exporter Signatory Block (Rows 43-48 in Excel) */}
+                      <div className="text-right space-y-14">
+                        <div className="text-[13pt] font-normal tracking-wide uppercase">
+                          {supplier}
+                        </div>
+                        <div>
+                          <div className="border-t border-black w-60 ml-auto pt-1 text-[9pt] uppercase tracking-wider text-neutral-700 text-center font-sans">
+                            AUTHORIZED SIGNATURE &amp; STAMP
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
             </>
@@ -1313,7 +1552,7 @@ export function PermitDraftPreview({
               {/* Centered Document Title */}
               <div className="text-center py-2">
                 <h2 className="text-[15pt] font-black uppercase tracking-widest leading-none">
-                  {sheetTab === "inv" ? "INVOICE" : "PACKING LIST"}
+                  {sheetTab === "inv" ? "INVOICE" : sheetTab === "pl" ? "PACKING LIST" : "BILL OF LADING"}
                 </h2>
               </div>
 
@@ -1424,7 +1663,7 @@ export function PermitDraftPreview({
                     </tr>
                   </tbody>
                 </table>
-              ) : (
+              ) : sheetTab === "pl" ? (
                 <table className="w-full border-collapse border border-black text-[9.5pt]">
                   <thead>
                     <tr
@@ -1550,6 +1789,124 @@ export function PermitDraftPreview({
                     </tr>
                   </tbody>
                 </table>
+              ) : (
+                /* FREIGHT AGENCY B/L TABLE */
+                <table className="w-full border-collapse border border-black text-[9.5pt]">
+                  <thead>
+                    <tr
+                      style={{ borderBottom: "3px double #000" }}
+                      className="font-bold text-[9pt] uppercase"
+                    >
+                      <th style={{ borderRight: "1px solid #000" }} className="py-1 px-1 text-center w-12">
+                        S/no.
+                      </th>
+                      <th style={{ borderRight: "1px solid #000" }} className="py-1 px-2 text-center w-36">
+                        CONTAINER / SEAL
+                      </th>
+                      <th style={{ borderRight: "1px solid #000" }} className="py-1 px-3 text-left">
+                        DESCRIPTION OF GOODS
+                      </th>
+                      <th style={{ borderRight: "1px solid #000" }} className="py-1 px-2 text-center w-20">
+                        PACKAGES
+                      </th>
+                      <th style={{ borderRight: "1px solid #000" }} className="py-1 px-2 text-right w-24">
+                        GROSS WEIGHT KG
+                      </th>
+                      <th className="py-1 px-2 text-right w-24">
+                        MEASUREMENT
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {blItems.map((item, idx) => (
+                      <tr key={idx} className="leading-snug">
+                        <td
+                          style={{ borderRight: "1px solid #000" }}
+                          className="py-1.5 text-center font-medium tabular-nums"
+                        >
+                          {idx + 1}
+                        </td>
+                        <td
+                          style={{ borderRight: "1px solid #000" }}
+                          className="py-1.5 px-2 text-center font-mono text-[8.5pt]"
+                        >
+                          {item.container !== "—" ? `${item.container} / ${item.seal}` : "—"}
+                        </td>
+                        <td
+                          style={{ borderRight: "1px solid #000" }}
+                          className="py-1.5 px-3 text-left"
+                        >
+                          {item.desc}
+                        </td>
+                        <td
+                          style={{ borderRight: "1px solid #000" }}
+                          className="py-1.5 text-center font-bold tabular-nums"
+                        >
+                          {item.pkgs}
+                        </td>
+                        <td
+                          style={{ borderRight: "1px solid #000" }}
+                          className="py-1.5 px-2 text-right tabular-nums font-bold"
+                        >
+                          {item.gw}
+                        </td>
+                        <td className="py-1.5 px-2 text-right tabular-nums">
+                          {item.meas}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {/* Continuous vertical grid filler rows */}
+                    {Array.from({ length: freightBlFillCount }).map((_, i) => (
+                      <tr key={`freight-fill-bl-${i}`} className="h-6">
+                        <td style={{ borderRight: "1px solid #000" }} />
+                        <td style={{ borderRight: "1px solid #000" }} />
+                        <td style={{ borderRight: "1px solid #000" }} />
+                        <td style={{ borderRight: "1px solid #000" }} />
+                        <td style={{ borderRight: "1px solid #000" }} />
+                        <td />
+                      </tr>
+                    ))}
+
+                    {/* Grand Total Row with double line */}
+                    <tr
+                      style={{
+                        borderTop: "1px solid #000",
+                        borderBottom: "3px double #000",
+                      }}
+                      className="font-bold leading-relaxed"
+                    >
+                      <td style={{ borderRight: "1px solid #000" }} />
+                      <td
+                        style={{ borderRight: "1px solid #000" }}
+                        className="py-1.5 px-2 text-center font-mono text-[8.5pt] uppercase"
+                      >
+                        TOTAL
+                      </td>
+                      <td
+                        style={{ borderRight: "1px solid #000" }}
+                        className="py-1.5 px-3 text-right uppercase"
+                      >
+                        GRAND TOTAL :
+                      </td>
+                      <td
+                        style={{ borderRight: "1px solid #000" }}
+                        className="py-1.5 text-center tabular-nums font-bold"
+                      >
+                        {formatNumber(totalPlPkgs)}
+                      </td>
+                      <td
+                        style={{ borderRight: "1px solid #000" }}
+                        className="py-1.5 px-2 text-right tabular-nums font-bold"
+                      >
+                        {formatNumber(totalPlGw)}
+                      </td>
+                      <td className="py-1.5 px-2 text-right tabular-nums">
+                        {measurement !== "—" ? measurement : "—"}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
               )}
 
               {/* Total Amount in Words (Authentic Cambodian Freight Style) */}
@@ -1611,7 +1968,7 @@ export function PermitDraftPreview({
 
                 <div className="text-right">
                   <h2 className="text-[20pt] font-black uppercase tracking-wide text-neutral-900 leading-tight">
-                    {sheetTab === "inv" ? "INVOICE" : "PACKING LIST"}
+                    {sheetTab === "inv" ? "INVOICE" : sheetTab === "pl" ? "PACKING LIST" : "BILL OF LADING"}
                   </h2>
                   <div className="border border-black text-[8.5pt] mt-1.5 w-52 ml-auto">
                     <div className="flex border-b border-black">
@@ -1622,9 +1979,11 @@ export function PermitDraftPreview({
                     </div>
                     <div className="flex border-b border-black">
                       <span className="w-20 bg-neutral-100 px-2 py-0.5 font-medium border-r border-black text-left text-neutral-700">
-                        Invoice #:
+                        {sheetTab === "bl" ? "B/L #:" : "Invoice #:"}
                       </span>
-                      <span className="px-2 py-0.5 font-mono font-bold text-left flex-1">{invoiceNo}</span>
+                      <span className="px-2 py-0.5 font-mono font-bold text-left flex-1">
+                        {sheetTab === "bl" && blNo !== "—" ? blNo : invoiceNo}
+                      </span>
                     </div>
                     <div className="flex">
                       <span className="w-20 bg-neutral-100 px-2 py-0.5 font-medium border-r border-black text-left text-neutral-700">
@@ -1706,7 +2065,7 @@ export function PermitDraftPreview({
                     ))}
                   </tbody>
                 </table>
-              ) : (
+              ) : sheetTab === "pl" ? (
                 <table className="w-full border-collapse border border-black text-[9pt]">
                   <thead>
                     <tr className="border-b border-black bg-neutral-100 font-bold uppercase text-[8.5pt]">
@@ -1762,6 +2121,56 @@ export function PermitDraftPreview({
                     ))}
                   </tbody>
                 </table>
+              ) : (
+                /* COMMERCIAL BILLING B/L TABLE */
+                <table className="w-full border-collapse border border-black text-[9pt]">
+                  <thead>
+                    <tr className="border-b border-black bg-neutral-100 font-bold uppercase text-[8.5pt]">
+                      <th className="border-r border-black py-1.5 px-2 text-center w-10">No.</th>
+                      <th className="border-r border-black py-1.5 px-2 text-center w-36">Container / Seal</th>
+                      <th className="border-r border-black py-1.5 px-2 text-left">Description</th>
+                      <th className="border-r border-black py-1.5 px-2 text-center w-20">Packages</th>
+                      <th className="border-r border-black py-1.5 px-2 text-right w-24">Gross Wt (KG)</th>
+                      <th className="py-1.5 px-2 text-right w-24">Measurement</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {blItems.map((item, idx) => (
+                      <tr key={idx} className="border-b border-neutral-300">
+                        <td className="border-r border-black py-1.5 text-center text-neutral-600 font-mono">
+                          {idx + 1}
+                        </td>
+                        <td className="border-r border-black py-1.5 px-2 text-center font-mono text-[8.5pt]">
+                          {item.container !== "—" ? `${item.container} / ${item.seal}` : "—"}
+                        </td>
+                        <td className="border-r border-black py-1.5 px-2 text-left font-medium">
+                          {item.desc}
+                        </td>
+                        <td className="border-r border-black py-1.5 text-center font-bold tabular-nums">
+                          {item.pkgs}
+                        </td>
+                        <td className="border-r border-black py-1.5 px-2 text-right tabular-nums">
+                          {item.gw}
+                        </td>
+                        <td className="py-1.5 px-2 text-right tabular-nums font-medium">
+                          {item.meas}
+                        </td>
+                      </tr>
+                    ))}
+
+                    {/* Filler Rows */}
+                    {Array.from({ length: billingBlFillCount }).map((_, i) => (
+                      <tr key={`billing-fill-bl-${i}`} className="h-6 border-b border-neutral-200">
+                        <td className="border-r border-black" />
+                        <td className="border-r border-black" />
+                        <td className="border-r border-black" />
+                        <td className="border-r border-black" />
+                        <td className="border-r border-black" />
+                        <td />
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               )}
 
               {/* Bottom Summary & Notes (Discovery Research style) */}
@@ -1797,7 +2206,7 @@ export function PermitDraftPreview({
                         </span>
                       </div>
                     </>
-                  ) : (
+                  ) : sheetTab === "pl" ? (
                     <>
                       <div className="flex justify-between px-2.5 py-1 border-b border-neutral-300">
                         <span className="text-neutral-600 font-medium">Total Packages:</span>
@@ -1806,6 +2215,23 @@ export function PermitDraftPreview({
                       <div className="flex justify-between px-2.5 py-1 border-b border-neutral-300">
                         <span className="text-neutral-600 font-medium">Total Net Weight:</span>
                         <span className="font-mono tabular-nums font-bold">{formatNumber(totalPlNw)} KG</span>
+                      </div>
+                      <div className="flex justify-between px-2.5 py-1.5 bg-neutral-100 font-bold border-t-2 border-black">
+                        <span>Total Gross Weight:</span>
+                        <span className="font-mono tabular-nums text-[10pt] font-black">
+                          {formatNumber(totalPlGw)} KG
+                        </span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex justify-between px-2.5 py-1 border-b border-neutral-300">
+                        <span className="text-neutral-600 font-medium">Total Containers:</span>
+                        <span className="font-mono tabular-nums font-bold">{container ? "1" : "—"}</span>
+                      </div>
+                      <div className="flex justify-between px-2.5 py-1 border-b border-neutral-300">
+                        <span className="text-neutral-600 font-medium">Total Packages:</span>
+                        <span className="font-mono tabular-nums font-bold">{formatNumber(totalPlPkgs)}</span>
                       </div>
                       <div className="flex justify-between px-2.5 py-1.5 bg-neutral-100 font-bold border-t-2 border-black">
                         <span>Total Gross Weight:</span>

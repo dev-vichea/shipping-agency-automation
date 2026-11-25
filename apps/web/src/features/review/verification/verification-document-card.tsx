@@ -196,6 +196,8 @@ function VerificationDescriptionWithCdc({
         </div>
         <button
           type="button"
+          id={`verify-cdc-row-${line.row}`}
+          data-verify-cdc-row={line.row}
           aria-label="Review CDC material"
           title="Review CDC material"
           aria-expanded={open}

@@ -1,17 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, useTransition } from "react";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, Info, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { PermitDraftPreview, type PermitTemplate } from "@/features/review/verification/permit-draft-preview";
+import { DocumentCanvas, type DocumentSourceOption } from "@/features/review/document-canvas";
 import { sourceKey } from "@/features/review/review-findings";
 import { VerificationField, type VerificationFieldSave, type VerificationSourceChoice } from "@/features/review/verification/verification-field";
 import { VerificationDocumentCard } from "@/features/review/verification/verification-document-card";
 import { ResizableSplit } from "@/features/review/resizable-split";
 import { useVerificationReview } from "@/features/review/verification/use-verification-review";
 import { reviewKey } from "@/features/review/staff-review";
+import { toast } from "@/lib/toast";
+import { write } from "@/lib/client-api";
+import { scopedPath } from "@/lib/scope";
 import type {
   CaseDetail,
   Evidence,
@@ -181,16 +186,12 @@ function normalizeDocument(document: Extraction | undefined): Extraction | undef
   };
 }
 
-export function VerificationWorkspace({
-  item,
-  analysis,
-  workflow,
-  saved,
-  versions,
-  admin,
-  onSaved,
-  onPending,
-}: {
+export interface VerificationWorkspaceHandle {
+  validateAndApprove: () => Promise<boolean>;
+  setRole: (role: "invoice" | "packing_list") => void;
+}
+
+export interface VerificationWorkspaceProps {
   item: CaseDetail;
   analysis: ReviewAnalysis;
   workflow: ReviewWorkflow;
@@ -199,13 +200,38 @@ export function VerificationWorkspace({
   admin: boolean;
   onSaved: (review: StaffReview) => void;
   onPending: (pending: boolean) => void;
-}) {
+  onActionError?: (error: string) => void;
+  onOpenAudit?: () => void;
+}
+
+export const VerificationWorkspace = forwardRef<VerificationWorkspaceHandle, VerificationWorkspaceProps>(
+  function VerificationWorkspace(
+    {
+      item,
+      analysis,
+      workflow,
+      saved,
+      versions,
+      admin,
+      onSaved,
+      onPending,
+      onActionError,
+      onOpenAudit,
+    },
+    ref
+  ) {
+    const router = useRouter();
+    const [, startRefresh] = useTransition();
   const [role, setRoleState] = useState<"invoice" | "packing_list">(() => {
     if (typeof window !== "undefined") {
       const savedRole = window.sessionStorage.getItem(`harborway:verification:role:${item.id}`);
       if (savedRole === "invoice" || savedRole === "packing_list") return savedRole;
     }
     return "invoice";
+  });
+
+  const [previewSheetTab, setPreviewSheetTab] = useState<"inv" | "pl" | "bl">(() => {
+    return role === "invoice" ? "inv" : "pl";
   });
 
   const setRole = useCallback((nextRole: "invoice" | "packing_list") => {
@@ -258,6 +284,54 @@ export function VerificationWorkspace({
   const document = documents.find((entry) => `${entry.document_id}:${entry.sheet ?? ""}` === chosenDocument) ?? documents[0];
   const invoice = role === "invoice" ? document : analysis.extractions.find((entry) => entry.role === "invoice");
   const packing = role === "packing_list" ? document : analysis.extractions.find((entry) => entry.role === "packing_list");
+  const blExtraction =
+    analysis.extractions.find((entry) => entry.role === "final_bl") ??
+    analysis.extractions.find((entry) => entry.role === "draft_bl");
+  const originalBlDoc = useMemo(() => {
+    const docs = item.documents ?? [];
+    return (
+      docs.find((d) => d.classification === "final_bl") ??
+      docs.find((d) => d.classification === "draft_bl") ??
+      (blExtraction?.document_id ? docs.find((d) => d.id === blExtraction.document_id) : undefined) ??
+      docs.find(
+        (d) =>
+          /b[\/_ -]?l|lading|提单/i.test(d.original_filename) &&
+          (d.mime === "application/pdf" || d.original_filename.toLowerCase().endsWith(".pdf"))
+      ) ??
+      null
+    );
+  }, [item.documents, blExtraction]);
+  const blFile = useMemo(() => {
+    if (!originalBlDoc) return undefined;
+    const isPdf =
+      originalBlDoc.mime === "application/pdf" ||
+      originalBlDoc.original_filename.toLowerCase().endsWith(".pdf");
+    return {
+      id: originalBlDoc.id,
+      name: originalBlDoc.original_filename,
+      fileType: (isPdf ? "PDF" : "Excel") as "PDF" | "Excel",
+      url: `/api/v1/documents/${originalBlDoc.id}/download`,
+      version_number: originalBlDoc.version_number ?? 1,
+      classification: originalBlDoc.classification,
+    };
+  }, [originalBlDoc]);
+  const blOptions = useMemo<DocumentSourceOption[]>(() => {
+    if (!blFile) return [];
+    return [
+      {
+        key: `${blFile.id}:`,
+        id: blFile.id,
+        title: blFile.name,
+        sheet: null,
+        fileType: blFile.fileType,
+        name: blFile.name,
+        url: blFile.url,
+        lines: [],
+        version_number: blFile.version_number,
+        classification: blFile.classification,
+      },
+    ];
+  }, [blFile]);
   const original = item.documents.find((entry) => entry.id === document?.document_id);
   const master = analysis.analyzed_master;
   const disabled =
@@ -267,10 +341,13 @@ export function VerificationWorkspace({
 
   const corrections = new Map(review?.corrections.map((entry) => [reviewKey(entry), entry]));
   const changed = new Map(review?.changes.map((entry) => [reviewKey(entry.edit), entry.after]));
-  const findings = [
-    ...(review?.findings ?? analysis.findings.filter((entry) => entry.group !== "cdc")),
-    ...(review?.cdc_findings ?? analysis.findings.filter((entry) => entry.group === "cdc")),
-  ];
+  const findings = useMemo(
+    () => [
+      ...(review?.findings ?? analysis.findings.filter((entry) => entry.group !== "cdc")),
+      ...(review?.cdc_findings ?? analysis.findings.filter((entry) => entry.group === "cdc")),
+    ],
+    [review?.findings, review?.cdc_findings, analysis.findings]
+  );
 
   const allColumns = document ? lineColumns(document) : [];
   const primaryCandidates = role === "invoice" ? invoicePreferredColumns : packingPreferredColumns;
@@ -742,6 +819,7 @@ export function VerificationWorkspace({
       );
       setPendingLeaveAction(() => () => {
         setRole(next);
+        setPreviewSheetTab(next === "invoice" ? "inv" : "pl");
         setChosenDocument(undefined);
         setActiveField(undefined);
       });
@@ -749,6 +827,7 @@ export function VerificationWorkspace({
       return;
     }
     setRole(next);
+    setPreviewSheetTab(next === "invoice" ? "inv" : "pl");
     setChosenDocument(undefined);
     setActiveField(undefined);
   }
@@ -841,7 +920,7 @@ export function VerificationWorkspace({
         unit: null,
         currency: null,
         note: `Matched CDC material ${candidate.master_row}`,
-        confirmed: false,
+        confirmed: true,
       };
       // Invalidate edits and mappings based on the previous description before
       // writing the mapping the reviewer just selected for the new description.
@@ -866,7 +945,7 @@ export function VerificationWorkspace({
           unit: null,
           currency: null,
           note: "Matched CDC material unit",
-          confirmed: false,
+          confirmed: true,
         };
         next = replaceVerificationField(next, unitCorrection, workflow);
         next = syncInvoiceEditToPackingList(
@@ -890,7 +969,7 @@ export function VerificationWorkspace({
           unit: null,
           currency: candidate.currency ?? "USD",
           note: "Matched CDC material unit price",
-          confirmed: false,
+          confirmed: true,
         }, workflow);
 
         // Auto-calculate amount if quantity is available
@@ -911,7 +990,7 @@ export function VerificationWorkspace({
               unit: null,
               currency: candidate.currency ?? "USD",
               note: `Calculated from CDC unit price (${candidate.unit_price}) and quantity (${qtyVal})`,
-              confirmed: false,
+              confirmed: true,
             }, workflow);
           }
         }
@@ -955,6 +1034,344 @@ export function VerificationWorkspace({
       };
     });
   };
+
+  const validateForApproval = useCallback((): {
+    valid: boolean;
+    error?: string;
+    role?: "invoice" | "packing_list";
+    elementId?: string;
+    isAudit?: boolean;
+  } => {
+    if (!invoice) {
+      return { valid: false, role: "invoice", error: "Commercial Invoice document is required." };
+    }
+
+    // 1. Check Invoice Header fields
+    const requiredHeaderFields: Array<{ key: string; label: string }> = [
+      { key: "supplier", label: "Supplier" },
+      { key: "consignee", label: "Consignee" },
+      { key: "invoice_no", label: "Invoice number" },
+      { key: "invoice_date", label: "Invoice date" },
+      { key: "origin", label: "Origin" },
+      { key: "destination", label: "Destination" },
+    ];
+
+    for (const { key, label } of requiredHeaderFields) {
+      const field = displayed(
+        { document_id: invoice.document_id, role: "invoice", row: null, name: key },
+        invoice.fields[key] ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      );
+      if (!field.value || !field.value.trim()) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-header-${key}`,
+          error: `${label} is required on Commercial Invoice.`,
+        };
+      }
+    }
+
+    // 2. Check Invoice Line Items
+    if (!invoice.items || invoice.items.length === 0) {
+      return { valid: false, role: "invoice", error: "Commercial Invoice requires line items." };
+    }
+
+    const currentMappings = review?.mappings ?? [];
+
+    for (let i = 0; i < invoice.items.length; i++) {
+      const itm = invoice.items[i];
+      const row = itm.row;
+
+      // Description
+      const desc = displayed(
+        { document_id: invoice.document_id, role: "invoice", row, name: "description" },
+        itm.fields.description ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      ).value;
+      if (!desc || !desc.trim()) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-${row}-description`,
+          error: `Invoice row ${i + 1} requires a goods description.`,
+        };
+      }
+
+      // Quantity
+      const qtyStr = displayed(
+        { document_id: invoice.document_id, role: "invoice", row, name: "quantity" },
+        itm.fields.quantity ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      ).value;
+      const qtyNum = qtyStr ? parseFloat(qtyStr) : NaN;
+      if (!qtyStr || isNaN(qtyNum) || qtyNum <= 0) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-${row}-quantity`,
+          error: `Invoice row ${i + 1} requires a positive quantity.`,
+        };
+      }
+
+      // Unit
+      const unit = displayed(
+        { document_id: invoice.document_id, role: "invoice", row, name: "unit" },
+        itm.fields.unit ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      ).value;
+      if (!unit || !unit.trim()) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-${row}-unit`,
+          error: `Invoice row ${i + 1} requires a unit.`,
+        };
+      }
+
+      // Unit Price
+      const priceStr = displayed(
+        { document_id: invoice.document_id, role: "invoice", row, name: "unit_price" },
+        itm.fields.unit_price ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      ).value;
+      const priceNum = priceStr ? parseFloat(priceStr) : NaN;
+      if (!priceStr || isNaN(priceNum) || priceNum <= 0) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-${row}-unit_price`,
+          error: `Invoice row ${i + 1} requires a unit price.`,
+        };
+      }
+
+      // Amount
+      const amountStr = displayed(
+        { document_id: invoice.document_id, role: "invoice", row, name: "amount" },
+        itm.fields.amount ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+      ).value;
+      const amountNum = amountStr ? parseFloat(amountStr) : NaN;
+      if (!amountStr || isNaN(amountNum) || amountNum <= 0) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-invoice-${row}-amount`,
+          error: `Invoice row ${i + 1} requires a line amount.`,
+        };
+      }
+
+      // CDC Mapping
+      const hasMapping = currentMappings.some((m) => m.invoice_row === row && m.master_row);
+      if (!hasMapping) {
+        return {
+          valid: false,
+          role: "invoice",
+          elementId: `verify-cdc-row-${row}`,
+          error: `Invoice row ${i + 1} (${desc}) requires a verified CDC material mapping.`,
+        };
+      }
+    }
+
+    // 3. Check Packing List Line Items
+    if (packing && packing.items) {
+      for (let i = 0; i < packing.items.length; i++) {
+        const itm = packing.items[i];
+        const row = itm.row;
+        const desc = displayed(
+          { document_id: packing.document_id, role: "packing_list", row, name: "description" },
+          itm.fields.description ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+        ).value;
+        if (!desc || !desc.trim()) {
+          return {
+            valid: false,
+            role: "packing_list",
+            elementId: `verify-packing_list-${row}-description`,
+            error: `Packing list row ${i + 1} requires a goods description.`,
+          };
+        }
+        const qtyStr = displayed(
+          { document_id: packing.document_id, role: "packing_list", row, name: "quantity" },
+          itm.fields.quantity ?? { status: "missing", value: "", confidence: 1, evidence: [] }
+        ).value;
+        const qtyNum = qtyStr ? parseFloat(qtyStr) : NaN;
+        if (!qtyStr || isNaN(qtyNum) || qtyNum <= 0) {
+          return {
+            valid: false,
+            role: "packing_list",
+            elementId: `verify-packing_list-${row}-quantity`,
+            error: `Packing list row ${i + 1} requires a quantity.`,
+          };
+        }
+      }
+    }
+
+    return { valid: true };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [invoice, packing, review?.mappings]);
+
+  const moveToWarning = useCallback(
+    (result: {
+      valid: boolean;
+      error?: string;
+      role?: "invoice" | "packing_list";
+      elementId?: string;
+      isAudit?: boolean;
+    }) => {
+      if (result.role && result.role !== role) {
+        changeRole(result.role);
+      }
+      if (result.error) {
+        toast.error(result.error);
+        onActionError?.(result.error);
+      }
+      if (result.isAudit) {
+        onOpenAudit?.();
+        return;
+      }
+      if (result.elementId) {
+        const targetId = result.elementId;
+        setTimeout(() => {
+          if (typeof window === "undefined") return;
+          const el = window.document.getElementById(targetId) || window.document.querySelector(`[data-field-id="${targetId}"]`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+            (el as HTMLElement).focus?.();
+            el.classList.add("ring-2", "ring-destructive", "ring-offset-2", "ring-offset-background", "animate-pulse");
+            setTimeout(() => {
+              el.classList.remove("ring-2", "ring-destructive", "ring-offset-2", "ring-offset-background", "animate-pulse");
+            }, 4000);
+          }
+        }, 150);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [role, onActionError, onOpenAudit]
+  );
+
+  const validateAndApprove = useCallback(async (): Promise<boolean> => {
+    onActionError?.("");
+    const check = validateForApproval();
+    if (!check.valid) {
+      moveToWarning(check);
+      return false;
+    }
+
+    try {
+      const resolvableFindings = findings.filter(
+        (f) =>
+          (f.group === "transport" && f.outcome === "NEEDS_REVIEW") ||
+          (f.group === "invoice_packing" && f.field === "description" && !f.key.includes(".unpaired."))
+      );
+      const autoResolutions = resolvableFindings.map((f) => ({
+        key: f.key,
+        note: "Confirmed after staff review.",
+      }));
+
+      const pklTotalPkgs = packing ? total("packages") || packing.fields.packages?.value : null;
+
+      const savedReview = await save((draft) => {
+        const existingKeys = new Set(draft.resolutions.map((r) => r.key));
+        const mergedResolutions = [
+          ...draft.resolutions,
+          ...autoResolutions.filter((ar) => !existingKeys.has(ar.key)),
+        ];
+
+        let nextCorrections = draft.corrections.map((c) => ({ ...c, confirmed: true }));
+
+        if (invoice && pklTotalPkgs && pklTotalPkgs !== "Mixed units" && pklTotalPkgs !== "Incomplete") {
+          const invPkgsRef = { document_id: invoice.document_id, role: "invoice" as const, row: null, name: "packages" };
+          const invPkgsVal = displayed(invPkgsRef, invoice.fields.packages ?? { status: "missing", value: "", confidence: 1, evidence: [] }).value;
+          if (invPkgsVal !== pklTotalPkgs) {
+            nextCorrections = nextCorrections.filter(
+              (c) => !(c.role === "invoice" && c.row === null && c.name === "packages")
+            );
+            nextCorrections.push({
+              ...invPkgsRef,
+              value: pklTotalPkgs,
+              unit: "PKG",
+              currency: null,
+              confirmed: true,
+              note: "Matches packing list packages count",
+            });
+          }
+        }
+
+        return {
+          ...draft,
+          verify_cdc_mappings: true,
+          corrections: nextCorrections,
+          resolutions: mergedResolutions,
+        };
+      });
+
+      if (savedReview && !savedReview.ready) {
+        const payload = savedReview as unknown as { blockers?: string[] };
+        const blockers = payload.blockers ?? [];
+        if (blockers.length > 0) {
+          const firstBlocker = blockers[0];
+          const rowMatch = firstBlocker.match(/row\s+(\d+)/i);
+          if (rowMatch && invoice) {
+            const rowNum = parseInt(rowMatch[1], 10);
+            moveToWarning({
+              valid: false,
+              role: "invoice",
+              elementId: `verify-invoice-${rowNum}-description`,
+              error: `Cannot approve: ${firstBlocker}`,
+            });
+          } else {
+            moveToWarning({
+              valid: false,
+              error: `Cannot approve: ${firstBlocker}`,
+              isAudit: true,
+            });
+          }
+          return false;
+        }
+      }
+
+      const approved = await write<{ approval_id?: string; import_id?: string }>(
+        `/intakes/${item.id}/approve`,
+        {
+          expected_revision: analysis.revision,
+          review_id: savedReview?.id ?? saved?.id ?? null,
+          notes: "Approved after staff review.",
+        }
+      );
+
+      toast.saved("Shipment approved! Moved to Import records.");
+      startRefresh(() => {
+        const target = approved?.import_id
+          ? scopedPath(`/imports/${approved.import_id}`, item.company_id ?? undefined)
+          : scopedPath("/imports", item.company_id ?? undefined);
+        router.push(target);
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to approve review.";
+      toast.error(msg);
+      onActionError?.(msg);
+      return false;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    onActionError,
+    validateForApproval,
+    moveToWarning,
+    findings,
+    packing,
+    save,
+    invoice,
+    item.id,
+    item.company_id,
+    analysis.revision,
+    saved?.id,
+    router,
+  ]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      validateAndApprove,
+      setRole: changeRole,
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [validateAndApprove]
+  );
 
   return (
     <section aria-label="Verification document editor" className="min-w-0">
@@ -1093,31 +1510,85 @@ export function VerificationWorkspace({
               role="region"
               aria-label="Permit draft print preview"
             >
-              <PermitDraftPreview
-                embedded
-                searchQuery={previewSearch}
-                onMatchCountChange={setPreviewMatchCount}
-                sheetTab={role === "invoice" ? "inv" : "pl"}
-                onSheetTabChange={(tab) => changeRole(tab === "inv" ? "invoice" : "packing_list")}
-                template={template}
-                onTemplateChange={setTemplate}
-                switchingDisabled={pending > 0 || dirtyFields.size > 0}
-                invoiceExt={invoice}
-                packingExt={packing}
-                blExt={
-                  analysis.extractions.find((entry) => entry.role === "final_bl") ??
-                  analysis.extractions.find((entry) => entry.role === "draft_bl")
-                }
-                selectedMaster={analysis.selected_master ?? master}
-                mappings={review?.mappings ?? []}
-                candidates={review?.candidates ?? analysis.candidates}
-                reviewedFields={changed}
-                companyName={item.company}
-                reference={invoice?.fields.invoice_no?.value}
-                state={item.state}
-                lineItems={analysis.line_items}
-                findings={findings}
-              />
+              {previewSheetTab === "bl" && blFile ? (
+                <DocumentCanvas
+                  embedded
+                  showBadges={false}
+                  hideExcerptToggle
+                  file={blFile}
+                  options={blOptions}
+                  currentKey={blOptions[0]?.key}
+                  headerActions={
+                    <div role="group" aria-label="Print document" className="flex gap-1">
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        aria-label="INV (Invoice)"
+                        disabled={pending > 0 || dirtyFields.size > 0}
+                        onClick={() => {
+                          setPreviewSheetTab("inv");
+                          if (role !== "invoice") changeRole("invoice");
+                        }}
+                      >
+                        INV
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        aria-label="PL (Packing List)"
+                        disabled={pending > 0 || dirtyFields.size > 0}
+                        onClick={() => {
+                          setPreviewSheetTab("pl");
+                          if (role !== "packing_list") changeRole("packing_list");
+                        }}
+                      >
+                        PL
+                      </Button>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="default"
+                        aria-label="BL (Bill of Lading)"
+                        aria-pressed
+                      >
+                        BL
+                      </Button>
+                    </div>
+                  }
+                />
+              ) : (
+                <PermitDraftPreview
+                  embedded
+                  searchQuery={previewSearch}
+                  onMatchCountChange={setPreviewMatchCount}
+                  sheetTab={previewSheetTab}
+                  onSheetTabChange={(tab) => {
+                    setPreviewSheetTab(tab);
+                    if (tab === "inv" && role !== "invoice") {
+                      changeRole("invoice");
+                    } else if (tab === "pl" && role !== "packing_list") {
+                      changeRole("packing_list");
+                    }
+                  }}
+                  template={template}
+                  onTemplateChange={setTemplate}
+                  switchingDisabled={pending > 0 || dirtyFields.size > 0}
+                  invoiceExt={invoice}
+                  packingExt={packing}
+                  blExt={blExtraction}
+                  selectedMaster={analysis.selected_master ?? master}
+                  mappings={review?.mappings ?? []}
+                  candidates={review?.candidates ?? analysis.candidates}
+                  reviewedFields={changed}
+                  companyName={item.company}
+                  reference={invoice?.fields.invoice_no?.value}
+                  state={item.state}
+                  lineItems={analysis.line_items}
+                  findings={findings}
+                />
+              )}
             </div>
           </div>
         }
@@ -1198,4 +1669,6 @@ export function VerificationWorkspace({
       </Dialog>
     </section>
   );
-}
+});
+
+VerificationWorkspace.displayName = "VerificationWorkspace";

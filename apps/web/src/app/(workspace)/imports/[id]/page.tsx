@@ -1,16 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { ArrowUpRight, Download } from "lucide-react";
-import { ExcelFileIcon } from "@/components/ui/file-icon";
-import { Button } from "@/components/ui/button";
-import { PermitRelease } from "@/features/imports/permit-release";
-import { ListPagination } from "@/components/ui/pagination";
-import { Empty, PageHeading, Section, Status } from "@/components/ui/page-layout";
-import { Originals } from "@/features/imports/originals";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ImportShipmentTracker } from "@/features/imports/import-shipment-tracker";
-import type { ImportDetail, PermitDraft, ReviewWorkflow } from "@/lib/contracts";
-import { label, timestamp } from "@/lib/format";
+import { ImportDetailView } from "@/features/imports/import-detail-view";
+import type { CaseDetail, ImportDetail, MasterVersion, PermitDraft, ReviewAnalysis, ReviewWorkflow } from "@/lib/contracts";
 import { lastPageOffset, pageSize, parseOffset } from "@/lib/pagination";
 import { companyParam, scopedPath } from "@/lib/scope";
 import { api } from "@/lib/server-api";
@@ -20,79 +10,52 @@ export async function generateMetadata({ params }: { params: Promise<{ id: strin
   return { title: `Import ${id.slice(0, 8)}` };
 }
 
-export default async function ImportPage({ params, searchParams }: {
+export default async function ImportPage({
+  params,
+  searchParams,
+}: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ offset?: string; company_id?: string }>;
+  searchParams: Promise<{ offset?: string; company_id?: string; tab?: string }>;
 }) {
   const [{ id }, query] = await Promise.all([params, searchParams]);
   const record = await api<ImportDetail>(`/imports/${encodeURIComponent(id)}`);
   const offset = Math.min(parseOffset(query.offset), lastPageOffset(record.items.length));
   const items = record.items.slice(offset, offset + pageSize);
-  const [drafts, workflow] = record.state === "approved" ? await Promise.all([
-    api<PermitDraft[]>(`/imports/${encodeURIComponent(id)}/permit-drafts`),
-    api<ReviewWorkflow>(`/intakes/${record.intake_case_id}/review`),
-  ]) : [[], null];
-  const permitPending = workflow?.decisions.find((event) => event.scope === "intake" && event.decision === "approved")?.permit_pending;
-  const fields = [
-    ["Company", record.company], ["Supplier", record.supplier || "—"], ["Consignee", record.consignee || "—"],
-    ["Created", timestamp(record.created_at)], ["ETD", record.etd || label(record.etd_status)], ["ETA", record.eta || label(record.eta_status)],
-  ];
-  return <div className="space-y-gutter lg:space-y-gutter-desktop">
-    <PageHeading title={record.invoice_no} description={record.approved_at ? `Approved ${timestamp(record.approved_at)}` : "Import draft · pending approval"} code action={<Status value={record.state} />} />
-    <div className="grid items-start gap-gutter lg:grid-cols-[minmax(0,1fr)_minmax(18rem,30%)] lg:gap-gutter-desktop">
-      <Section title="Overview" action={<Button asChild size="xs" variant="outline"><Link href={`/review/${record.intake_case_id}`}>Open source intake <ArrowUpRight aria-hidden /></Link></Button>}>
-        <dl className="grid grid-cols-2 gap-px bg-border sm:grid-cols-3">
-          {fields.map(([field, value], index) => <div key={field} className="min-w-0 bg-card px-3 py-2.5">
-            <dt className="panel-label">{field}</dt>
-            <dd className={`mt-1 break-words ${index >= 3 ? "font-mono text-code-tabular" : "text-body-md"}`}>{value}</dd>
-          </div>)}
-        </dl>
-      </Section>
-      <Section title="Original attachments"><Originals documents={record.documents} /></Section>
-    </div>
-    <ImportShipmentTracker
-      invoiceNo={record.invoice_no}
-      company={record.company}
-      supplier={record.supplier}
-      consignee={record.consignee}
-      eta={record.eta}
-      isApproved={record.state === "approved"}
+
+  const [drafts, workflow, caseDetail, analysis, versions] = await Promise.all([
+    record.state === "approved"
+      ? api<PermitDraft[]>(`/imports/${encodeURIComponent(id)}/permit-drafts`).catch(() => [])
+      : Promise.resolve([]),
+    record.intake_case_id
+      ? api<ReviewWorkflow>(`/intakes/${record.intake_case_id}/review`).catch(() => null)
+      : Promise.resolve(null),
+    record.intake_case_id
+      ? api<CaseDetail>(`/intakes/${record.intake_case_id}`).catch(() => null)
+      : Promise.resolve(null),
+    record.intake_case_id
+      ? api<ReviewAnalysis>(`/intakes/${record.intake_case_id}/analysis`).catch(() => null)
+      : Promise.resolve(null),
+    api<MasterVersion[]>("/cdc/versions?limit=100").catch(() => []),
+  ]);
+
+  const permitPending = workflow?.decisions.find(
+    (event) => event.scope === "intake" && event.decision === "approved"
+  )?.permit_pending;
+
+  return (
+    <ImportDetailView
+      record={record}
+      items={items}
+      offset={offset}
+      companyIdParam={query.company_id}
+      initialTab={query.tab === "documents" ? "documents" : "overview"}
+      drafts={drafts}
+      workflow={workflow}
+      permitPending={permitPending}
+      caseDetail={caseDetail}
+      analysis={analysis}
+      versions={versions}
+      paginationPath={scopedPath(`/imports/${record.id}`, companyParam(query.company_id))}
     />
-    {record.state === "approved" && <Section title="Permit drafts">
-      {permitPending && <div className="flex flex-wrap items-center gap-2 border-b border-warning-border bg-warning-fill p-3 text-body-sm text-warning">
-        <Status value="pending" /><p>{permitPending}</p>
-      </div>}
-      {drafts.map((draft) => <div className="space-y-3 border-b p-3 last:border-b-0" key={draft.id}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex min-w-0 items-start gap-2.5">
-            <ExcelFileIcon size="lg" />
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2"><h3 className="text-headline-sm">Permit INV / PL</h3><Status value="unsubmitted" /></div>
-              <p className="font-mono text-code-tabular text-muted-foreground">Revision {draft.revision} · {timestamp(draft.created_at)}{!draft.current && " · Prior revision"}</p>
-            </div>
-          </div>
-          <Button asChild variant="outline" size="sm"><a href={`/api/v1/imports/${record.id}/permit-drafts/${draft.id}/download`}><Download aria-hidden />Download permit draft</a></Button>
-        </div>
-        {draft.current && <PermitRelease importId={record.id} draftId={draft.id} recipient={draft.recipient ?? undefined} />}
-      </div>)}
-      {drafts.length === 0 && !permitPending && <Empty>No permit draft has been generated.</Empty>}
-    </Section>}
-    <Section title="Items">
-      {items.length ? <Table className="min-w-[480px]">
-        <TableHeader><TableRow>
-          <TableHead>Line</TableHead><TableHead>Description</TableHead><TableHead className="text-right">Quantity</TableHead>
-          <TableHead className="text-right">Amount</TableHead><TableHead className="text-right">Status</TableHead>
-        </TableRow></TableHeader>
-        <TableBody>{items.map((item) => <TableRow key={item.id}>
-          <TableCell className="font-mono text-code-tabular text-muted-foreground">{item.line_no}</TableCell>
-          <TableCell className="max-w-80 whitespace-normal">{item.normalized_description ?? item.raw_description}</TableCell>
-          <TableCell className="text-right font-mono text-code-tabular">{item.quantity ? [item.quantity, item.unit].filter(Boolean).join(" ") : "—"}</TableCell>
-          <TableCell className="text-right font-mono text-code-tabular">{item.amount ? [item.amount, item.currency].filter(Boolean).join(" ") : "—"}</TableCell>
-          <TableCell className="text-right"><Status value={item.verification_state} /></TableCell>
-        </TableRow>)}</TableBody>
-      </Table> : <Empty>No line items are saved in this draft. Review extracted lines in the source intake.</Empty>}
-      <ListPagination path={scopedPath(`/imports/${record.id}`, companyParam(query.company_id))} label="Import items" offset={offset}
-        count={items.length} total={record.items.length} />
-    </Section>
-  </div>;
+  );
 }

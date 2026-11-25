@@ -621,3 +621,34 @@ export function getPositionForMilestone(waypoints: LatLng[], milestone: string):
 export function getVesselPosition(seaPath: LatLng[], progressPct = 75): LatLng {
   return getPositionAlongPath(seaPath, progressPct / 100);
 }
+
+/**
+ * Converts latitude to Web Mercator Y (radians) so screen-space angles match Leaflet tiles accurately.
+ */
+function mercatorY(latDeg: number): number {
+  const clamped = Math.max(-85, Math.min(85, latDeg));
+  return Math.log(Math.tan(Math.PI / 4 + (clamped * Math.PI) / 360));
+}
+
+/**
+ * Computes clockwise compass bearing in degrees (0 = North/Up, 90 = East/Right, 180 = South/Down, -90 = West/Left)
+ * along a polyline at the given distance fraction (0.0 to 1.0).
+ */
+export function getPathBearingDegrees(path: LatLng[], fraction: number): number {
+  if (path.length < 2) return 0;
+  const clamped = Math.max(0, Math.min(1, fraction));
+
+  // Sample smoothly over a local window (~4% of path or endpoints) to follow road curve cleanly
+  const delta = 0.025;
+  const fromFrac = clamped >= 1 - delta ? Math.max(0, 1 - delta * 2) : Math.max(0, clamped - delta);
+  const toFrac = clamped <= delta ? Math.min(1, delta * 2) : Math.min(1, clamped + delta);
+
+  const pFrom = getPositionAlongPath(path, fromFrac);
+  const pTo = getPositionAlongPath(path, toFrac);
+
+  const dx = ((pTo[1] - pFrom[1]) * Math.PI) / 180;
+  const dy = mercatorY(pTo[0]) - mercatorY(pFrom[0]);
+
+  if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return 0;
+  return (Math.atan2(dx, dy) * 180) / Math.PI;
+}

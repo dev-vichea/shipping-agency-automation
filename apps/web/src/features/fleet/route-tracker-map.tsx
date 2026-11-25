@@ -19,9 +19,17 @@ import {
   getPositionForMilestone,
   getVesselPosition,
   getMilestoneInfo,
+  getPathBearingDegrees,
   MILESTONE_SEQUENCE,
   type GeoLocation,
 } from "@/lib/geo-routing";
+import {
+  buildTruckPointerHtml,
+  buildVesselPointerHtml,
+  buildFactoryPointerHtml,
+  buildPortPointerHtml,
+  buildBorderGatePointerHtml,
+} from "./map-markers";
 import { cn } from "@/lib/utils";
 
 export interface RouteTrackerMapProps {
@@ -172,18 +180,34 @@ export function RouteTrackerMap({
       layerGroup.clearLayers();
       const allBounds: L.LatLngExpression[] = [];
 
-      function createHtmlIcon(html: string, size: [number, number] = [36, 36], anchor?: [number, number]) {
+      function createPointerIcon(html: string, popupOffsetY = -44) {
         return L.divIcon({
           className: "bg-transparent border-0",
           html,
-          iconSize: size,
-          iconAnchor: anchor || [size[0] / 2, size[1] / 2],
-          popupAnchor: [0, -size[1] / 2],
+          iconSize: [0, 0],
+          iconAnchor: [0, 0],
+          popupAnchor: [0, popupOffsetY],
         });
       }
 
-      const portMarkerSvg = `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><line x1="12" y1="22" x2="12" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></svg>`;
-      const factoryMarkerSvg = `<svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M3 21h18M6 21V7l6-4v7l6-4v15"/></svg>`;
+      function drawHighwayRibbon(roadLatLngs: L.LatLngExpression[], focused: boolean) {
+        if (!layerGroup) return;
+        L.polyline(roadLatLngs, {
+          color: "#38bdf8",
+          weight: focused ? 7 : 5,
+          opacity: focused ? 0.35 : 0.25,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(layerGroup);
+
+        L.polyline(roadLatLngs, {
+          color: "#0284c7",
+          weight: focused ? 4.5 : 3,
+          opacity: focused ? 0.95 : 0.85,
+          lineCap: "round",
+          lineJoin: "round",
+        }).addTo(layerGroup);
+      }
 
       // -------------------------------------------------------------
       // 1. SINGLE TRIP INSPECTION MODE
@@ -228,14 +252,18 @@ export function RouteTrackerMap({
 
           allBounds.push(...seaLatLngs);
 
-          const overseasIcon = createHtmlIcon(
-            `<div class="flex items-center justify-center w-8 h-8 rounded-full bg-teal-700 text-white shadow-lg border-2 border-white ring-2 ring-teal-400">
-               <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 21a9 9 0 0 0 9-9c0-4.97-4.03-9-9-9s-9 4.03-9 9a9 9 0 0 0 9 9Z"/><path stroke-linecap="round" stroke-linejoin="round" d="M3.6 9h16.8M3.6 15h16.8"/></svg>
-             </div>`,
-            [32, 32],
-            [16, 16]
+          const overseasIcon = createPointerIcon(
+            buildPortPointerHtml({
+              label: overseasHub.city || overseasHub.name,
+              variant: "overseas",
+              compact: true,
+            }),
+            -56
           );
-          L.marker([overseasHub.coords[0], overseasHub.coords[1]], { icon: overseasIcon })
+          L.marker([overseasHub.coords[0], overseasHub.coords[1]], {
+            icon: overseasIcon,
+            zIndexOffset: 900,
+          })
             .bindPopup(
               `<div class="p-2 text-xs space-y-1">
                  <div class="flex items-center gap-1.5 font-bold text-teal-800">
@@ -250,31 +278,19 @@ export function RouteTrackerMap({
 
           const vesselProgress = currentTrip.vessel?.progress_pct ?? 72;
           const vesselPos = getVesselPosition(seaPoints, vesselProgress);
+          const vesselBearingDeg = getPathBearingDegrees(seaPoints, vesselProgress / 100);
           const vesselName = currentTrip.vessel?.name || "WAN HAI 510";
           const voyageNo = currentTrip.vessel?.voyage || "V.2611S";
           const shippingLine = currentTrip.vessel?.shipping_line || "Carrier AIS";
           const vesselSpeed = currentTrip.vessel?.speed_knots ?? 16.4;
 
-          const vesselIcon = createHtmlIcon(
-            `<div class="relative flex flex-col items-center cursor-pointer group">
-               <div class="px-2 py-0.5 mb-1 rounded bg-slate-900/90 text-white text-[10px] font-mono font-semibold tracking-wider whitespace-nowrap shadow-md border border-teal-400/50">
-                 ${escapeHtml(vesselName)} · ${escapeHtml(voyageNo)}
-               </div>
-               <div class="relative flex items-center justify-center w-11 h-11">
-                 <span class="absolute w-full h-full rounded-full bg-teal-400 opacity-60 animate-ping"></span>
-                 <div class="relative flex items-center justify-center w-10 h-10 rounded-full bg-teal-900 text-teal-100 shadow-xl border-2 border-teal-300 ring-2 ring-teal-500/50">
-                   <svg class="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                     <path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/>
-                     <path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.94 5.34 2.81 7.76"/>
-                     <path d="M19 13V7a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2v6"/>
-                     <path d="M12 10V4"/>
-                     <path d="M12 2v2"/>
-                   </svg>
-                 </div>
-               </div>
-             </div>`,
-            [140, 68],
-            [70, 54]
+          const vesselIcon = createPointerIcon(
+            buildVesselPointerHtml({
+              name: vesselName,
+              voyage: voyageNo,
+              bearingDeg: vesselBearingDeg,
+            }),
+            -48
           );
 
           const vesselMarker = L.marker([vesselPos[0], vesselPos[1]], {
@@ -321,37 +337,28 @@ export function RouteTrackerMap({
 
         const roadLatLngs: L.LatLngExpression[] = roadPoints.map((p) => [p[0], p[1]]);
         allBounds.push(...roadLatLngs);
+        drawHighwayRibbon(roadLatLngs, true);
 
-        L.polyline(roadLatLngs, {
-          color: "#38bdf8",
-          weight: 7,
-          opacity: 0.35,
-        }).addTo(layerGroup);
-
-        L.polyline(roadLatLngs, {
-          color: "#0284c7",
-          weight: 4.5,
-          opacity: 0.95,
-        }).addTo(layerGroup);
-
-        // Origin Endpoint Pin (Port for inbound, Factory for outbound)
+        // Origin Endpoint Pin (Port / Border / Pickup Factory)
         const originIsFactory = originHub.category === "factory" || isOutbound;
-        const originPinIcon = createHtmlIcon(
-          `<div class="flex items-center justify-center w-8 h-8 rounded-full ${
-            originIsFactory ? "bg-rose-600 ring-rose-300" : "bg-blue-600 ring-blue-300"
-          } text-white shadow-lg border-2 border-white ring-2">
-             ${originIsFactory ? factoryMarkerSvg : portMarkerSvg}
-           </div>`,
-          [32, 32],
-          [16, 16]
-        );
-        L.marker([originHub.coords[0], originHub.coords[1]], { icon: originPinIcon })
+        const originIsBorder = originHub.id.includes("border");
+        const originPinHtml = originIsBorder
+          ? buildBorderGatePointerHtml({ label: originHub.name })
+          : originIsFactory
+          ? buildFactoryPointerHtml({ label: originHub.name })
+          : buildPortPointerHtml({ label: originHub.name, variant: "cambodia" });
+
+        const originPinIcon = createPointerIcon(originPinHtml, -42);
+        L.marker([originHub.coords[0], originHub.coords[1]], {
+          icon: originPinIcon,
+          zIndexOffset: 900,
+        })
           .bindPopup(
             `<div class="p-2 text-xs space-y-1">
                <span class="text-[10px] ${
-                 originIsFactory ? "text-rose-600" : "text-blue-600"
+                 originIsFactory ? "text-rose-600" : originIsBorder ? "text-indigo-600" : "text-blue-600"
                } font-semibold uppercase tracking-wider block">
-                 ${originIsFactory ? "Pickup Factory / Warehouse" : "Port of Discharge / Terminal"}
+                 ${originIsFactory ? "Pickup Factory / Warehouse" : originIsBorder ? "Border Checkpoint" : "Port of Discharge / Terminal"}
                </span>
                <p class="font-bold text-slate-900">${escapeHtml(originHub.name)}</p>
                <p class="text-slate-600">${escapeHtml(originHub.label)}</p>
@@ -366,21 +373,15 @@ export function RouteTrackerMap({
 
         // Destination Endpoint Pin (Factory for inbound, Port for outbound)
         const destIsPort = destHub.category === "port" || isOutbound;
-        const destIcon = createHtmlIcon(
-          `<div class="flex flex-col items-center">
-             <div class="px-2 py-0.5 mb-1 rounded bg-white/95 text-slate-900 text-[10px] font-semibold whitespace-nowrap shadow border border-rose-200">
-               ${escapeHtml(destIsPort ? destHub.name : currentTrip.company_name)}
-             </div>
-             <div class="flex items-center justify-center w-8 h-8 rounded-full ${
-               destIsPort ? "bg-blue-600 ring-blue-300" : "bg-rose-600 ring-rose-300"
-             } text-white shadow-lg border-2 border-white ring-2">
-               ${destIsPort ? portMarkerSvg : factoryMarkerSvg}
-             </div>
-           </div>`,
-          [160, 62],
-          [80, 46]
-        );
-        L.marker([destHub.coords[0], destHub.coords[1]], { icon: destIcon })
+        const destPinHtml = destIsPort
+          ? buildPortPointerHtml({ label: destHub.name, variant: "cambodia" })
+          : buildFactoryPointerHtml({ label: currentTrip.company_name });
+
+        const destIcon = createPointerIcon(destPinHtml, -42);
+        L.marker([destHub.coords[0], destHub.coords[1]], {
+          icon: destIcon,
+          zIndexOffset: 950,
+        })
           .bindPopup(
             `<div class="p-2 text-xs space-y-1">
                <span class="text-[10px] ${
@@ -400,44 +401,24 @@ export function RouteTrackerMap({
           )
           .addTo(layerGroup);
 
-        // 1C. TRUCK MARKER (Driving precisely on the snapped road)
-        const truckPos = getPositionForMilestone(roadPoints, currentTrip.milestone);
+        // 1C. TOP-DOWN TRUCK MODEL (Driving directly on the snapped road lanes)
         const milestoneInfo = getMilestoneInfo(currentTrip.milestone);
+        const truckPos = getPositionForMilestone(roadPoints, currentTrip.milestone);
+        const truckBearingDeg = getPathBearingDegrees(roadPoints, milestoneInfo.percentage / 100);
 
         const is3PL =
           currentTrip.haulier_type === "subcontractor" ||
           currentTrip.truck_plate.includes("Kandal") ||
           currentTrip.driver_name.includes("Bun Sopheak");
 
-        const truckColor =
-          currentTrip.milestone === "in_transit"
-            ? is3PL
-              ? "bg-amber-600 ring-amber-300"
-              : "bg-sky-600 ring-sky-300"
-            : currentTrip.milestone === "at_factory"
-            ? "bg-emerald-600 ring-emerald-300"
-            : "bg-slate-700 ring-slate-300";
-
-        const truckIcon = createHtmlIcon(
-          `<div class="relative flex flex-col items-center cursor-pointer group">
-             <div class="px-2 py-0.5 mb-1 rounded bg-slate-900/90 text-white text-[10px] font-mono font-semibold tracking-wider whitespace-nowrap shadow-md border border-sky-400/50">
-               ${escapeHtml(currentTrip.truck_plate)}
-             </div>
-             <div class="relative flex items-center justify-center w-11 h-11">
-               <span class="absolute w-full h-full rounded-full ${truckColor} opacity-60 animate-ping"></span>
-               <div class="relative flex items-center justify-center w-10 h-10 rounded-full ${truckColor} text-white shadow-xl border-2 border-white ring-2">
-                 <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                   <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>
-                   <path d="M15 18H9"/>
-                   <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 17.52 8H14"/>
-                   <circle cx="17" cy="18.5" r="2.5"/>
-                   <circle cx="7" cy="18.5" r="2.5"/>
-                 </svg>
-               </div>
-             </div>
-           </div>`,
-          [120, 68],
-          [60, 54]
+        const truckIcon = createPointerIcon(
+          buildTruckPointerHtml({
+            plate: currentTrip.truck_plate,
+            is3PL,
+            milestone: currentTrip.milestone,
+            bearingDeg: truckBearingDeg,
+          }),
+          -44
         );
 
         const truckMarker = L.marker([truckPos[0], truckPos[1]], {
@@ -493,21 +474,11 @@ export function RouteTrackerMap({
 
         baseHubs.forEach((hub) => {
           const isFactory = hub.category === "factory";
-          const hubIcon = createHtmlIcon(
-            `<div class="flex flex-col items-center">
-               <div class="px-1.5 py-0.5 mb-0.5 rounded bg-white/95 text-slate-800 text-[9px] font-semibold whitespace-nowrap shadow border ${
-                 isFactory ? "border-rose-200" : "border-blue-200"
-               }">
-                 ${escapeHtml(hub.name)}
-               </div>
-               <div class="flex items-center justify-center w-7 h-7 rounded-full ${
-                 isFactory ? "bg-rose-600 ring-rose-300" : "bg-blue-600 ring-blue-300"
-               } text-white shadow-md border-2 border-white ring-1">
-                 ${isFactory ? factoryMarkerSvg : portMarkerSvg}
-               </div>
-             </div>`,
-            [150, 54],
-            [75, 40]
+          const hubIcon = createPointerIcon(
+            isFactory
+              ? buildFactoryPointerHtml({ label: hub.name, compact: true })
+              : buildPortPointerHtml({ label: hub.name, variant: "cambodia", compact: true }),
+            -38
           );
           L.marker([hub.coords[0], hub.coords[1]], { icon: hubIcon, zIndexOffset: 900 })
             .bindPopup(
@@ -535,49 +506,25 @@ export function RouteTrackerMap({
 
             const roadLatLngs: L.LatLngExpression[] = roadPoints.map((p) => [p[0], p[1]]);
             allBounds.push(...roadLatLngs);
+            drawHighwayRibbon(roadLatLngs, false);
 
-            L.polyline(roadLatLngs, {
-              color: "#38bdf8",
-              weight: 5,
-              opacity: 0.25,
-            }).addTo(layerGroup);
-
-            L.polyline(roadLatLngs, {
-              color: "#0284c7",
-              weight: 3,
-              opacity: 0.8,
-            }).addTo(layerGroup);
-
+            const mInfo = getMilestoneInfo(t.milestone);
             const pos = getPositionForMilestone(roadPoints, t.milestone);
+            const bearingDeg = getPathBearingDegrees(roadPoints, mInfo.percentage / 100);
             const is3PL =
               t.haulier_type === "subcontractor" ||
               t.truck_plate.includes("Kandal") ||
               t.driver_name.includes("Bun Sopheak");
 
-            const pinColor =
-              t.milestone === "in_transit"
-                ? is3PL
-                  ? "bg-amber-600 ring-amber-300"
-                  : "bg-sky-600 ring-sky-300"
-                : t.milestone === "at_factory"
-                ? "bg-emerald-600 ring-emerald-300"
-                : "bg-slate-700 ring-slate-300";
-
-            const pinIcon = createHtmlIcon(
-              `<div class="relative flex flex-col items-center cursor-pointer group hover:scale-110 transition-transform">
-                 <div class="px-1.5 py-0.2 rounded bg-slate-900/90 text-white text-[9px] font-mono font-bold tracking-wider shadow whitespace-nowrap mb-0.5">
-                   ${escapeHtml(t.truck_plate)}
-                 </div>
-                 <div class="relative flex items-center justify-center w-8 h-8 rounded-full ${pinColor} text-white shadow-lg border-2 border-white ring-2">
-                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-                     <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2"/>
-                     <circle cx="17" cy="18.5" r="2.5"/>
-                     <circle cx="7" cy="18.5" r="2.5"/>
-                   </svg>
-                 </div>
-               </div>`,
-              [96, 50],
-              [48, 42]
+            const pinIcon = createPointerIcon(
+              buildTruckPointerHtml({
+                plate: t.truck_plate,
+                is3PL,
+                milestone: t.milestone,
+                bearingDeg,
+                compact: true,
+              }),
+              -38
             );
 
             L.marker([pos[0], pos[1]], { icon: pinIcon, zIndexOffset: 1200 })
@@ -589,7 +536,7 @@ export function RouteTrackerMap({
                 `<b>${escapeHtml(t.trip_number)}</b> · ${escapeHtml(t.truck_plate)} (${escapeHtml(t.milestone.replace("_", " "))})`,
                 {
                   direction: "top",
-                  offset: [0, -20],
+                  offset: [0, -38],
                 }
               )
               .addTo(layerGroup);

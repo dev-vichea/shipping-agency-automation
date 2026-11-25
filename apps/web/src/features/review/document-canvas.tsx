@@ -11,7 +11,7 @@ import {
   X,
 } from "lucide-react";
 import { FileTypeIcon } from "@/components/ui/file-icon";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { DocumentCanvasControls, DocumentCanvasSurface, documentCanvasPaper } from "@/features/review/document-canvas-surface";
 import type { FieldEditor } from "@/features/review/field-editor-types";
@@ -89,6 +89,10 @@ export function DocumentCanvas({
   editor,
   className,
   lockedSheet = false,
+  embedded = false,
+  showBadges = true,
+  hideExcerptToggle = false,
+  headerActions,
 }: {
   file?: {
     id: string;
@@ -108,6 +112,10 @@ export function DocumentCanvas({
   onDismissField?: () => void;
   className?: string;
   lockedSheet?: boolean;
+  embedded?: boolean;
+  showBadges?: boolean;
+  hideExcerptToggle?: boolean;
+  headerActions?: ReactNode;
 }) {
   const [zoom, setZoom] = useState(100);
   const [rotation, setRotation] = useState(0);
@@ -263,10 +271,12 @@ export function DocumentCanvas({
   const canvas = (
     <div
       className={cn(
-        "relative flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xs dark:border-slate-800 dark:bg-slate-950",
+        "relative flex flex-col overflow-hidden bg-white dark:bg-slate-950",
         isExpanded
           ? "fixed inset-0 z-[100] h-screen w-screen rounded-none border-none bg-background shadow-none"
-          : "h-[min(82vh,880px)] w-full",
+          : embedded
+          ? "h-full min-h-0 w-full rounded-none border-0 shadow-none"
+          : "h-[min(82vh,880px)] w-full rounded-lg border border-slate-200 shadow-xs dark:border-slate-800",
         className
       )}
     >
@@ -283,12 +293,12 @@ export function DocumentCanvas({
           <span className="truncate text-xs font-semibold text-foreground">
             {file?.name ?? currentOption?.title ?? "Document"}
           </span>
-          {file?.fileType && (
+          {showBadges && file?.fileType && (
             <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono font-medium text-muted-foreground uppercase">
               {file.fileType}
             </span>
           )}
-          {file?.version_number != null && (
+          {showBadges && file?.version_number != null && (
             <span
               className={cn(
                 "rounded px-1.5 py-0.5 text-[10px] font-mono font-semibold",
@@ -304,15 +314,18 @@ export function DocumentCanvas({
 
         {/* View Mode & Actions */}
         <div className="flex shrink-0 items-center gap-1.5">
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            className="h-7 border-slate-200 bg-white text-xs dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
-            onClick={() => setViewMode(showExcerpt ? "document" : "excerpt")}
-          >
-            {showExcerpt ? "Document Canvas" : "Raw Excerpt"}
-          </Button>
+          {headerActions}
+          {!hideExcerptToggle && (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="h-7 border-slate-200 bg-white text-xs dark:border-slate-700 dark:bg-slate-800 cursor-pointer"
+              onClick={() => setViewMode(showExcerpt ? "document" : "excerpt")}
+            >
+              {showExcerpt ? "Document Canvas" : "Raw Excerpt"}
+            </Button>
+          )}
 
           {file && (
             <Button

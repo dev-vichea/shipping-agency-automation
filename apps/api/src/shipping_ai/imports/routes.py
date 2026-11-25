@@ -5,7 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.dialects.postgresql import insert
 
 from shipping_ai.core.access import (
@@ -179,12 +179,16 @@ def list_imports(
     if state:
         filters.append(ImportRecord.state == state)
     if q.strip():
+        term = q.strip()
         filters.append(
             or_(
-                ImportRecord.invoice_no.icontains(q.strip(), autoescape=True),
-                Company.name.icontains(q.strip(), autoescape=True),
+                ImportRecord.invoice_no.icontains(term, autoescape=True),
+                ImportRecord.supplier.icontains(term, autoescape=True),
+                ImportRecord.consignee.icontains(term, autoescape=True),
+                Company.name.icontains(term, autoescape=True),
             )
         )
+    sort_col = func.coalesce(ImportRecord.approved_at, ImportRecord.created_at)
     return [
         view(record, name)
         for record, name in db.execute(
@@ -193,7 +197,7 @@ def list_imports(
             .join(IntakeCase, ImportRecord.intake_case_id == IntakeCase.id)
             .where(*filters)
             .order_by(
-                ImportRecord.created_at.asc() if oldest_first else ImportRecord.created_at.desc(),
+                sort_col.asc() if oldest_first else sort_col.desc(),
                 ImportRecord.id,
             )
             .offset(offset)
